@@ -50,25 +50,22 @@ Explicitly **not** trying to be:
 
 ## 5. Hardware BOM
 
-Target prototype cost: ~500 NOK BOM. Target Kickstarter MSRP: ~1500-2000 NOK.
+Target prototype cost: ~700 NOK BOM. Target Kickstarter MSRP: ~1000-1500 NOK.
 
 | Component | Choice | Approx cost (NOK) | Rationale |
 |---|---|---|---|
-| SBC | Raspberry Pi 4 Model B (2GB) | ~600 | Headroom for v2 voice features; Pi Zero 2 W insufficient for local Whisper STT |
-| Audio | HiFiBerry MiniAmp (3W stereo, I2S) | ~200 | Standard Pi audio HAT, well-supported |
-| Speaker | 3W full-range, 4Ω | ~50 | Driven by MiniAmp |
-| Battery | PiSugar 3 (5000mAh) or equivalent | ~250 | 5-10h playback target |
+| SBC | Raspberry Pi Zero 2 W | ~150 | Runs librespot + Music Assistant + RFID daemon comfortably; small form factor; low idle power for long battery life |
+| Audio amp + DAC | MAX98357A I2S module (3W mono, Class-D) | ~50 | Indie favorite, well-supported on Pi via I2S; mono is adequate for kids' content |
+| Speaker | 3W full-range, 4Ω | ~50 | Driven by MAX98357A |
+| Battery + management | PiSugar 3 (5000mAh) or DIY LiPo + TP4056 + boost converter | ~150-250 | 8-12h playback target with Pi Zero 2 W's lower idle draw |
 | RFID | PN532 (I2C) | ~50 | Native NDEF support, reads both Mifare Classic and NTAG |
-| Microphone (v2-ready) | INMP441 I2S MEMS | ~30 | Reserved for push-to-talk voice in v2; ship with port even if not enabled |
-| Push-to-talk button (v2-ready) | Tactile GPIO button | ~10 | Hardware ready, software optional |
-| Control buttons | 3× tactile GPIO (next/pause/volume) | ~30 | Independent of RFID |
-| microSD slot | Built-in to Pi | 0 | Used for OS + local file storage |
-| Enclosure | 3D-printed PLA, child-safe corners | ~50 | Replaceable; offer multiple designs |
-| Misc (wiring, screws, USB-C charging port) | | ~80 | |
-| **Total** | | **~1350 NOK** | |
+| Control buttons | 3× tactile GPIO (next/pause, vol up, vol down) | ~30 | Independent of RFID; optional power button on PiSugar |
+| microSD card | 16GB Class 10 | ~60 | OS + local files + cached metadata |
+| Enclosure | 3D-printed PLA/PETG, child-safe corners | ~50 | Replaceable; offer multiple designs |
+| Misc (wiring, USB-C charging port, 5× NTAG215 starter cards) | | ~80 | |
+| **Total** | | **~670-770 NOK** | |
 
-Hardware reserves we're building in but not activating in MVP:
-- Microphone + PTT button → enables voice control in v2 without hardware revision
+**Voice (v2) is explicitly excluded from MVP hardware.** Pi Zero 2 W is borderline for local Whisper STT and would need cloud STT or a hardware upgrade to support voice. Pre-paying ~450 NOK per unit for Pi 4 "headroom" for a feature we've deferred is the wrong call. Lean approach: ship MVP without voice hardware, validate with real users, then deliberately design v2 hardware if voice ships.
 
 ## 6. Software Stack
 
@@ -95,8 +92,8 @@ Hardware reserves we're building in but not activating in MVP:
 
 ### Must have
 - [ ] First-boot Wi-Fi provisioning via captive portal (AP mode)
-- [ ] Hosted onboarding web page at tapbox.example.com explains setup and offers web-flasher
-- [ ] PWA web flasher (esptool.js equivalent for Pi: pre-built SD card images downloadable)
+- [ ] Pre-flashed microSD ships with device — no user flashing required (massive UX win)
+- [ ] Hosted onboarding web page at tapbox.example.com walks user through first power-on
 - [ ] RFID/NFC card reading (Mifare Classic UID + NTAG NDEF)
 - [ ] Card → Spotify playlist/track/album/podcast mapping
 - [ ] Card → local mp3 file mapping (microSD)
@@ -189,10 +186,10 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 ### Technical
 - **Spotify offline mode:** Not possible with librespot. Tonies users will miss this. Mitigation: microSD slot for local files, BT A2DP for offline use. Accept the limitation in positioning.
 - **Captive portal UX on iOS vs Android:** Subtle differences in how captive portals are triggered and dismissed. Needs real-device testing across iOS 16+/17+/18+ and Android 11+/12+/13+/14+/15+.
-- **Battery life realism:** 5-10h target is optimistic for Pi 4. May need to lock CPU governor or move to CM4 for better idle. Measure early.
-- **Boot time:** Pi 4 cold boot ~25-30s. Acceptable for "fixed appliance" usage; may need optimization (custom init, removed services) to feel snappy.
-- **Audio quality at 3W:** Adequate for kids' content but won't impress audiophiles. Don't oversell.
-- **Kid-voice STT (for v2):** Whisper on Pi 4 is borderline. May force a Pi 5 upgrade for v2.
+- **Battery life realism:** 8-12h target on Pi Zero 2 W with 5000mAh is achievable but assumes idle CPU governor and audio off when not playing. Validate with real measurements before committing in marketing.
+- **Boot time:** Pi Zero 2 W cold boot ~25-35s on default Pi OS. May need optimization (custom init, removed services, faster SD card) to feel snappy on power-on. Likely fine for "always-on, deep-sleep" usage pattern.
+- **Audio quality at 3W mono:** Adequate for kids' content but won't impress audiophiles. Don't oversell.
+- **Kid-voice STT (for v2):** Local Whisper not viable on Pi Zero 2 W. v2 voice will likely require either cloud STT (no hardware change) or a hardware revision to Pi 4/CM4. Decide later based on real user feedback.
 
 ### Open product questions
 - **Card programming UX:** Write NDEF to NTAG (preferred) vs. UID mapping (works with Mifare Classic too). Support both? Default to NDEF?
