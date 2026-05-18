@@ -50,7 +50,7 @@ Explicitly **not** trying to be:
 
 ## 5. Hardware BOM
 
-Target prototype cost: ~870 NOK BOM. Target Kickstarter MSRP: ~1100-1500 NOK.
+Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 
 | Component | Choice | Approx cost (NOK) | Rationale |
 |---|---|---|---|
@@ -58,13 +58,14 @@ Target prototype cost: ~870 NOK BOM. Target Kickstarter MSRP: ~1100-1500 NOK.
 | Audio amp + DAC | [Pimoroni Audio Amp SHIM](https://shop.pimoroni.com/products/audio-amp-shim-3w-mono-amp) (MAX98357A I2S DAC + Class-D amp, 3W mono, 5V) | ~110 | Slim SHIM form factor (fits between Pi and other HATs); well-supported by Pimoroni; sourced from a reliable EU/UK retailer rather than Aliexpress. 3W is well-matched to the 4W driver under realistic volume-capped usage; amp headroom matters less than driver size for perceived quality. |
 | Main driver | Dayton Audio CE Series 70mm 4Ω full-range (CE70P-4 or similar) | ~120 | Real fullrange driver, full midrange + decent treble. Mono in this form factor is better than weak stereo. |
 | Passive radiator | Tang Band 2" passive radiator (or Dayton equivalent) | ~60 | Extends low-end response without amp power cost; critical for "not tinny" feel |
-| Battery + management | PiSugar 3 1200mAh (with optional larger LiPo swap, pending JST verification) OR Adafruit PowerBoost 1000C + 5000mAh LiPo | ~250-500 | 8-10h playback target on 5000mAh. See section 10 for open questions. |
+| Battery charger + boost | Adafruit PowerBoost 1000C (TP4056 charger + 5V boost, 1A continuous / 2.5A peak, USB-C input, LBO pin for graceful shutdown signal) | ~200 | Plug-and-play, no soldering of charge/boost circuitry; well within our combined Pi + SHIM peak draw (~1.3A) |
+| Battery | Adafruit 6600mAh LiPo with built-in protection PCB + JST-PH connector | ~300 | Direct plug into PowerBoost. ~8h streaming playtime baseline; ~14h with v1.1 power optimizations; ~28h with cached-local-WiFi-off playback (matches Yoto for cached content). |
 | RFID | PN532 (I2C) | ~50 | Native NDEF support, reads both Mifare Classic and NTAG |
-| Control buttons | 3× tactile GPIO (next/pause, vol up, vol down) | ~30 | Independent of RFID; optional power button on PiSugar |
+| Control buttons | 3× tactile GPIO (next/pause, vol up, vol down) + optional GPIO power button wired to PowerBoost EN pin | ~30 | Power button cleanly cuts boost output without hard-yanking Pi |
 | microSD card | 16GB Class 10 | ~60 | OS + local files + cached metadata |
 | Enclosure | 3D-printed PLA/PETG, child-safe corners; designed around driver + passive radiator volume | ~80 | Larger than initial spec (~10×10×8 cm minimum) to give the 70mm driver room to breathe |
 | Misc (wiring, USB-C charging port, 5× NTAG215 starter cards) | | ~80 | |
-| **Total** | | **~990-1240 NOK** | |
+| **Total** | | **~1180 NOK** | |
 
 **Voice (v2) is explicitly excluded from MVP hardware.** Pi Zero 2 W is borderline for local Whisper STT and would need cloud STT or a hardware upgrade to support voice. Pre-paying ~450 NOK per unit for Pi 4 "headroom" for a feature we've deferred is the wrong call. Lean approach: ship MVP without voice hardware, validate with real users, then deliberately design v2 hardware if voice ships.
 
@@ -189,7 +190,7 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 ### Technical
 - **No offline mode for streaming services:** librespot, Tidal, and other DRM-protected services cannot cache content. Tonies users will miss the "works anywhere offline" magic. Mitigations: (1) microSD slot for local audio, (2) drag-and-drop upload via parent web app so non-technical parents can move kid's favorite content offline, (3) auto-cache podcast episodes when on WiFi, (4) explicit positioning: "Home-first; bring your own MP3s for offline use." Don't claim feature parity with Tonies on offline.
 - **Captive portal UX on iOS vs Android:** Subtle differences in how captive portals are triggered and dismissed. Needs real-device testing across iOS 16+/17+/18+ and Android 11+/12+/13+/14+/15+.
-- **Battery life realism:** 8-12h target on Pi Zero 2 W with 5000mAh is achievable but assumes idle CPU governor and audio off when not playing. Validate with real measurements before committing in marketing.
+- **Battery life realism:** With Adafruit 6600mAh LiPo: ~8h streaming baseline, ~14h with MVP power optimizations (CPU governor, WiFi power save, disabled HDMI/BT/LED, fewer cores), ~28h with v1.1 cached-local-playback + WiFi off. The cached-mode number matches Yoto-tier for that use case. Validate with real measurements before committing in marketing — assumptions about volume levels and idle behavior are load-bearing.
 - **Boot time:** Pi Zero 2 W cold boot ~25-35s on default Pi OS. May need optimization (custom init, removed services, faster SD card) to feel snappy on power-on. Likely fine for "always-on, deep-sleep" usage pattern.
 - **Audio quality target:** Aiming for "clearly better than Tonies/Yoto" via 70mm Dayton driver + Tang Band passive radiator + MAX98357A 3W Class-D amp (via Pimoroni Audio Amp SHIM). Driver size and passive radiator do most of the heavy lifting — ~85% of perceived quality difference vs Tonies comes from the 70mm driver and the radiator, not amp headroom. 3W is well-matched to the 4W driver under volume-capped usage (which is mandatory for hearing safety anyway). NOT trying to match Sonos One (different product class; plug-in stereo with separate woofer + tweeter). Validate by side-by-side listening test against Tonies before locking enclosure design — if test fails, the next upgrade lever is enclosure tuning (vent/port design) or stepping up to TAS5805M with bridged mono (~10W headroom).
 - **Kid-voice STT (for v2):** Local Whisper not viable on Pi Zero 2 W. v2 voice will likely require either cloud STT (no hardware change) or a hardware revision to Pi 4/CM4. Decide later based on real user feedback.
