@@ -55,8 +55,7 @@ Target prototype cost: ~900 NOK BOM. Target Kickstarter MSRP: ~1200-1700 NOK.
 | Component | Choice | Approx cost (NOK) | Rationale |
 |---|---|---|---|
 | SBC | Raspberry Pi Zero 2 W | ~150 | Runs librespot + Music Assistant + RFID daemon comfortably; small form factor; low idle power for long battery life |
-| Audio amp | TPA3110D2 Class-D module (used in mono mode, ~15W headroom into 4Ω) | ~100 | Plenty of headroom over our average draw; widely available; cheap on Aliexpress. Could also be TPA3118 (true mono variant). |
-| Audio DAC | PCM5102 I2S DAC (or any I2S-to-line-out module) | ~50 | Separates DAC from amp so we can choose amp independently |
+| Audio amp + DAC | TAS5805M I2S amplifier module (TI, integrated DAC + Class-D amp, runs natively at 5V) | ~150 | Runs on the Pi's 5V rail (no boost needed, unlike TPA3110/3118 which need 8V+). At 5V supply: ~6W per channel into 4Ω, ~10W bridged mono. I2S input means no separate DAC needed. Sourced from Aliexpress / WaveShare / TI eval boards. |
 | Main driver | Dayton Audio CE Series 70mm 4Ω full-range (CE70P-4 or similar) | ~120 | Real fullrange driver, full midrange + decent treble. Mono in this form factor is better than weak stereo. |
 | Passive radiator | Tang Band 2" passive radiator (or Dayton equivalent) | ~60 | Extends low-end response without amp power cost; critical for "not tinny" feel |
 | Battery + management | PiSugar 3 1200mAh (with optional larger LiPo swap, pending JST verification) OR Adafruit PowerBoost 1000C + 5000mAh LiPo | ~250-500 | 8-10h playback target on 5000mAh. See section 10 for open questions. |
@@ -190,7 +189,8 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 - **Captive portal UX on iOS vs Android:** Subtle differences in how captive portals are triggered and dismissed. Needs real-device testing across iOS 16+/17+/18+ and Android 11+/12+/13+/14+/15+.
 - **Battery life realism:** 8-12h target on Pi Zero 2 W with 5000mAh is achievable but assumes idle CPU governor and audio off when not playing. Validate with real measurements before committing in marketing.
 - **Boot time:** Pi Zero 2 W cold boot ~25-35s on default Pi OS. May need optimization (custom init, removed services, faster SD card) to feel snappy on power-on. Likely fine for "always-on, deep-sleep" usage pattern.
-- **Audio quality target:** Aiming for JBL Go 3 / Bose SoundLink Micro tier (better than Tonies/Yoto) via 70mm Dayton driver + passive radiator + 15W-headroom Class-D amp running in mono. NOT trying to match Sonos One (different product class; plug-in stereo with separate woofer + tweeter). Validate by side-by-side listening test against Tonies before locking enclosure design.
+- **Audio quality target:** Aiming for JBL Go 3 / Bose SoundLink Micro tier (better than Tonies/Yoto) via 70mm Dayton driver + passive radiator + TAS5805M Class-D amp (~10W bridged mono at 5V supply, ~2.5× the driver's 4W rating — plenty of headroom). NOT trying to match Sonos One (different product class; plug-in stereo with separate woofer + tweeter). Validate by side-by-side listening test against Tonies before locking enclosure design.
+- **TAS5805M sourcing risk:** Less common in DIY ecosystem than MAX98357A. Verify availability from Aliexpress / WaveShare before bulk-ordering boards. Fallback: MAX98357A (3W mono) is adequate for kids' content even if less premium.
 - **Kid-voice STT (for v2):** Local Whisper not viable on Pi Zero 2 W. v2 voice will likely require either cloud STT (no hardware change) or a hardware revision to Pi 4/CM4. Decide later based on real user feedback.
 
 ### Open product questions
