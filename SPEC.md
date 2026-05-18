@@ -98,7 +98,9 @@ Target prototype cost: ~900 NOK BOM. Target Kickstarter MSRP: ~1200-1700 NOK.
 - [ ] RFID/NFC card reading (Mifare Classic UID + NTAG NDEF)
 - [ ] Card → Spotify playlist/track/album/podcast mapping
 - [ ] Card → local mp3 file mapping (microSD)
-- [ ] Bluetooth A2DP sink mode (toggle in web UI; pair via long-press)
+- [ ] **Parent app: drag-and-drop upload of local audio files** (mp3, m4a, wav, opus) via web UI — files stored on microSD, mapped to next-tapped card. Critical for offline use case (cabin/car/grandma without WiFi) — see section 10.
+- [ ] **Bluetooth A2DP source mode (output to BT headphones / external speakers):** Pair via web UI, route audio output to BT device. Critical for quiet listening (bedtime, shared spaces) and the v2 "tapbox Lite" architecture preview.
+- [ ] Bluetooth A2DP sink mode (toggle in web UI; pair via long-press) — phone streams TO tapbox (escape hatch for unsupported services like Apple Music)
 - [ ] Polished admin web UI: list cards, add/edit/delete mappings, see currently-playing
 - [ ] Card programming: paste Spotify URL → write NDEF to next-tapped NTAG card OR save UID mapping
 - [ ] Physical controls: next, pause/play, volume up/down
@@ -185,7 +187,7 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 - **UN38.3 battery certification** for shipping: ~50k NOK. Required to ship Li-Po internationally.
 
 ### Technical
-- **Spotify offline mode:** Not possible with librespot. Tonies users will miss this. Mitigation: microSD slot for local files, BT A2DP for offline use. Accept the limitation in positioning.
+- **No offline mode for streaming services:** librespot, Tidal, and other DRM-protected services cannot cache content. Tonies users will miss the "works anywhere offline" magic. Mitigations: (1) microSD slot for local audio, (2) drag-and-drop upload via parent web app so non-technical parents can move kid's favorite content offline, (3) auto-cache podcast episodes when on WiFi, (4) explicit positioning: "Home-first; bring your own MP3s for offline use." Don't claim feature parity with Tonies on offline.
 - **Captive portal UX on iOS vs Android:** Subtle differences in how captive portals are triggered and dismissed. Needs real-device testing across iOS 16+/17+/18+ and Android 11+/12+/13+/14+/15+.
 - **Battery life realism:** 8-12h target on Pi Zero 2 W with 5000mAh is achievable but assumes idle CPU governor and audio off when not playing. Validate with real measurements before committing in marketing.
 - **Boot time:** Pi Zero 2 W cold boot ~25-35s on default Pi OS. May need optimization (custom init, removed services, faster SD card) to feel snappy on power-on. Likely fine for "always-on, deep-sleep" usage pattern.
