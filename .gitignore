@@ -1,0 +1,28 @@
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.next/
+.cache/
+
+# Secrets / local config
+.env
+.env.local
+*.local.yaml
+
+# Build artifacts
+*.img
+*.iso
