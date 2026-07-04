@@ -220,7 +220,8 @@ def main():
         nrkpy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nrk.py")
         if os.path.exists(nrkpy):
             subprocess.Popen([sys.executable, nrkpy, "sync", m.group(1), "50", kind],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             preexec_fn=lambda: os.nice(19))  # never compete with audio
             log(f"background sync started for '{m.group(1)}' ({kind})")
 
     # Wait for mpv's IPC socket, then seek to the resume position
