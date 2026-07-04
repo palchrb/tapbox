@@ -17,22 +17,24 @@ re-scanned every few seconds (hot-plug).
 import json
 import os
 import socket
+import sys
 import time
 import urllib.request
-from select import select
 
-from evdev import InputDevice, ecodes, list_devices
+# evdev is only needed for the daemon (device watching); the one-shot CLI
+# (used by the PiSugar tap shells) imports lazily so it runs on plain python3.
 
 API = "http://127.0.0.1:3678"
 MPV_SOCK = os.environ.get("TAPBOX_MPV_SOCK", "/run/tapbox-mpv.sock")
 
+# Standard Linux input-event-codes (raw ints so no evdev import at load)
 ACTIONS = {
-    ecodes.KEY_PLAYCD: "playpause",
-    ecodes.KEY_PAUSECD: "playpause",
-    ecodes.KEY_PLAYPAUSE: "playpause",
-    ecodes.KEY_STOPCD: "playpause",
-    ecodes.KEY_NEXTSONG: "next",
-    ecodes.KEY_PREVIOUSSONG: "prev",
+    200: "playpause",  # KEY_PLAYCD
+    201: "playpause",  # KEY_PAUSECD
+    164: "playpause",  # KEY_PLAYPAUSE
+    166: "playpause",  # KEY_STOPCD
+    163: "next",       # KEY_NEXTSONG
+    165: "prev",       # KEY_PREVIOUSSONG
 }
 MPV_CMDS = {
     "playpause": ["cycle", "pause"],
@@ -82,6 +84,7 @@ def handle(action):
 
 def rescan(devs):
     """Open new media-key devices, drop vanished ones."""
+    from evdev import InputDevice, ecodes, list_devices
     for path in list_devices():
         if path in devs:
             continue
@@ -106,6 +109,8 @@ def rescan(devs):
 
 
 def main():
+    from evdev import ecodes
+    from select import select
     devs = {}
     last_scan = 0.0
     log("started — waiting for media-key devices (AVRCP, keyboards, ...)")
@@ -128,4 +133,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # One-shot CLI (used by the PiSugar tap shells): `buttons.py next`
+    if len(sys.argv) > 1:
+        action = sys.argv[1]
+        if action not in ("playpause", "next", "prev"):
+            print("usage: buttons.py [playpause|next|prev]", file=sys.stderr)
+            sys.exit(1)
+        handle(action)
+    else:
+        main()

@@ -13,6 +13,9 @@
 #   sudo tapbox-power idle-on [min]  power off after [min] (default 30) with
 #                                    no playback; PiSugar button wakes it
 #   sudo tapbox-power idle-off  disable auto-shutdown
+#   sudo tapbox-power taps-on   PiSugar button: short=play/pause, double=next,
+#                               long=previous (via pisugar-server tap shells)
+#   sudo tapbox-power taps-off  restore default PiSugar button behaviour
 #
 # Bluetooth is deliberately left alone — it drives the speaker.
 # If Spotify playback stutters in save mode, set WIFI_POWERSAVE=0 below:
@@ -198,6 +201,31 @@ EOF
     systemctl daemon-reload
     echo "Auto-shutdown disabled."
     ;;
+  taps-on|taps-off)
+    cfg=/etc/pisugar-server/config.json
+    [[ -f $cfg ]] || { echo "pisugar-server config not found at $cfg" >&2; exit 1; }
+    on=true; [[ $1 == taps-off ]] && on=false
+    python3 - "$cfg" "$on" <<'PY'
+import json, sys
+cfg, on = sys.argv[1], sys.argv[2] == "true"
+c = json.load(open(cfg))
+btn = "python3 /usr/local/bin/tapbox-buttons"
+c["single_tap_enable"] = on
+c["double_tap_enable"] = on
+c["long_tap_enable"]   = on
+if on:
+    c["single_tap_shell"] = f"{btn} playpause"
+    c["double_tap_shell"] = f"{btn} next"
+    c["long_tap_shell"]   = f"{btn} prev"
+json.dump(c, open(cfg, "w"), indent=2)
+PY
+    systemctl restart pisugar-server
+    if [[ $1 == taps-on ]]; then
+      echo "PiSugar button: short=play/pause, double=next, long=previous."
+    else
+      echo "PiSugar button tap actions disabled."
+    fi
+    ;;
   _logloop)  # internal: run by tapbox-batlog.service
     [[ -f $LOG_FILE ]] || echo "time,volt,amp,percent,plugged" > "$LOG_FILE"
     while true; do
@@ -206,7 +234,7 @@ EOF
     done
     ;;
   *)
-    sed -n '4,19p' "$0"
+    sed -n '4,22p' "$0"
     exit 1
     ;;
 esac
