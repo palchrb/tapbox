@@ -209,9 +209,9 @@ raspi-config nonint do_i2c 0 2>/dev/null || true
 if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
   python3 -m venv /opt/tapbox/venv
 fi
-if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532' 2>/dev/null; then
+if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev' 2>/dev/null; then
   echo "    installing python libs (this can take a few minutes on a Zero)..."
-  /opt/tapbox/venv/bin/pip install --quiet --upgrade adafruit-circuitpython-pn532
+  /opt/tapbox/venv/bin/pip install --quiet --upgrade adafruit-circuitpython-pn532 evdev
 else
   echo "    python libs already installed — skipping pip"
 fi
@@ -222,6 +222,22 @@ install_if_changed 644 "$SCRIPT_DIR/nrk.py"    /usr/local/bin/nrk.py        && R
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
+
+BTN_CHANGED=0
+install_if_changed 755 "$SCRIPT_DIR/buttons.py" /usr/local/bin/tapbox-buttons && BTN_CHANGED=1
+write_if_changed /etc/systemd/system/tapbox-buttons.service <<'EOF' && BTN_CHANGED=1
+[Unit]
+Description=TapBox media button daemon (AVRCP etc.)
+After=bluetooth.service
+
+[Service]
+ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-buttons
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 write_if_changed /etc/systemd/system/tapbox-rfid.service <<'EOF' && RFID_CHANGED=1
 [Unit]
@@ -239,10 +255,12 @@ EOF
 
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 systemctl daemon-reload
-systemctl enable --now go-librespot.service tapbox-bt-reconnect.service tapbox-rfid.service
+systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
+  tapbox-rfid.service tapbox-buttons.service
 [[ $GO_CHANGED    -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
+[[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
 
 # --- 7. API + login ----------------------------------------------------------
 

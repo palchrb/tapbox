@@ -194,7 +194,14 @@ def main():
         start_pos = float(st["pos"])
         log(f"resuming episode {i + 1} at {int(start_pos)}s")
 
-    sock = f"/tmp/tapbox-mpv-{os.getpid()}.sock"
+    # Fixed socket path so the button daemon (tapbox-buttons) can find us
+    sock_dir = "/run" if os.access("/run", os.W_OK) else "/tmp"
+    sock = os.environ.get("TAPBOX_MPV_SOCK",
+                          os.path.join(sock_dir, "tapbox-mpv.sock"))
+    try:
+        os.remove(sock)
+    except OSError:
+        pass
     proc = subprocess.Popen(
         ["mpv", "--no-video", "--really-quiet",
          f"--audio-device={ALSA_DEVICE}", f"--input-ipc-server={sock}"] + urls)
