@@ -92,15 +92,29 @@ connect_headset() {
   bt_up
 
   if ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Paired: yes"; then
-    echo "==> Pairing with $mac (make sure it is in pairing mode)..."
-    if ! bluetoothctl pair "$mac"; then
-      # Typically auth failed 0x05: the device holds a stale key from an
-      # earlier half-pairing. Clear our side and pair fresh.
-      echo "==> Pairing failed — clearing stale bond and retrying once..."
-      bluetoothctl remove "$mac" >/dev/null 2>&1 || true
-      sleep 2
-      bluetoothctl --timeout 10 scan on >/dev/null 2>&1 || true
-      bluetoothctl pair "$mac"
+    # Unknown/unpaired device: BlueZ must discover it before pairing works.
+    echo "==> $mac is not paired — scanning for it (pairing mode helps)..."
+    bluetoothctl --timeout 12 scan on >/dev/null 2>&1 || true
+    local pair_out
+    if ! pair_out="$(bluetoothctl pair "$mac" 2>&1)"; then
+      echo "$pair_out"
+      if grep -qi "AuthenticationFailed\|AuthenticationCanceled" <<<"$pair_out"; then
+        # Auth failure = the device holds a stale key. ONLY here is it
+        # right to clear our bond and pair fresh.
+        echo "==> Stale key on the device — clearing bond and retrying once..."
+        bluetoothctl remove "$mac" >/dev/null 2>&1 || true
+        sleep 2
+        bluetoothctl --timeout 10 scan on >/dev/null 2>&1 || true
+        bluetoothctl pair "$mac"
+      elif grep -qi "not available" <<<"$pair_out"; then
+        echo "Device not seen during scan. Is it powered on, close to the Pi," >&2
+        echo "and in pairing mode? Then retry: sudo $0 connect" >&2
+        exit 1
+      else
+        exit 1
+      fi
+    else
+      echo "$pair_out"
     fi
     bluetoothctl trust "$mac"
   fi
