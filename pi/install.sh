@@ -95,7 +95,7 @@ Wants=network-online.target
 
 [Service]
 User=$RUN_USER
-ExecStart=/usr/local/bin/go-librespot -config_dir $CONF_DIR
+ExecStart=/usr/local/bin/go-librespot --config_dir $CONF_DIR
 Restart=always
 RestartSec=5
 

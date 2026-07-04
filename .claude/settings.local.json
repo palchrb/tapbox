@@ -10,7 +10,11 @@
       "Bash(chmod +x /workspace/tapbox/pi/*.sh)",
       "Bash(bash -n /workspace/tapbox/pi/install.sh)",
       "Bash(bash -n /workspace/tapbox/pi/play.sh)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/cmd/daemon/main.go)",
+      "Bash(curl -s https://api.github.com/repos/devgianlu/go-librespot/contents/cmd/daemon)",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/daemon/config.go)",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/cmd/daemon/cli_config.go)"
     ]
   }
 }
