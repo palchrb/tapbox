@@ -66,6 +66,7 @@ mkdir -p "$CONF_DIR"
 cat > "$CONF_DIR/config.yml" <<EOF
 device_name: "$DEVICE_NAME"
 device_type: speaker
+bitrate: 160  # 96 | 160 | 320 (kbps, Ogg Vorbis)
 audio_backend: alsa
 audio_device: tapbox_bt
 server:
