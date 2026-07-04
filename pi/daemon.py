@@ -135,6 +135,30 @@ class Orchestrator:
                 log(f"remembered last play: [{self.source}] {self.target}")
         except (OSError, ValueError):
             pass
+        self.child_started = 0.0
+        threading.Thread(target=self._arbiter, daemon=True).start()
+
+    def _arbiter(self):
+        """The box stays Spotify Connect-discoverable while mpv plays; if the
+        user picks it from the phone mid-podcast, both would fight over the
+        BT output. Watch for that takeover and yield mpv gracefully (its
+        bookmark is saved, so the card resumes later)."""
+        while True:
+            time.sleep(4)
+            with self.lock:
+                alive = self._mpv_alive()
+                age = time.monotonic() - self.child_started
+            # grace period: player.py pauses spotify right after starting,
+            # don't mistake that brief overlap for a takeover
+            if not alive or age < 10:
+                continue
+            if spotify_playing():
+                with self.lock:
+                    if self._mpv_alive():
+                        log("spotify took over (phone) — yielding mpv")
+                        self._stop_child()
+                        self.source = "spotify"
+                        self._persist()
 
     def _persist(self):
         os.makedirs(STATE_DIR, exist_ok=True)
@@ -162,6 +186,7 @@ class Orchestrator:
             args.append("--fresh")
         args.append(target)
         self.child = subprocess.Popen(args)
+        self.child_started = time.monotonic()
 
     def play(self, target, fresh=False):
         with self.lock:
