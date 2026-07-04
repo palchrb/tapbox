@@ -353,6 +353,19 @@ def expand_entries(target):
     always just play whatever comes back.
     """
     passthrough = [{"url": target, "title": None, "id": None}]
+    if os.path.isdir(target):
+        # Local folder (e.g. a DRM-free audiobook): sorted playlist of audio
+        # files, each keyed on its filename so resume survives moves/renames
+        # of the parent folder.
+        exts = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav")
+        files = sorted(f for f in os.listdir(target)
+                       if f.lower().endswith(exts))
+        if files:
+            _log(f"folder with {len(files)} audio files: {target}")
+            return [{"url": os.path.join(target, f),
+                     "title": os.path.splitext(f)[0], "id": f}
+                    for f in files]
+        return passthrough
     try:
         m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/([A-Za-z0-9_-]+)/?$",
                      target, re.I)
