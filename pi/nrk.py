@@ -8,7 +8,7 @@ parts (x-sonos-http URIs, DIDL metadata). The strategy is the same:
   stream URL via the psapi playback manifest.
 - radio.nrk.no/podkast/<slug>/<episodeId>: resolve the episode's mp3 via
   the psapi playback manifest (RSS enclosure match as fallback).
-- radio.nrk.no/podkast/<slug>: play the whole catalog, oldest episode
+- radio.nrk.no/podkast/<slug>: play the whole catalog, newest episode
   first. NOTE: the official RSS at podkast.nrk.no is often truncated to
   the last few episodes, so the full episode list is fetched from the
   psapi radio catalog (the same source nrk-pod-feeds uses) and each
@@ -201,11 +201,11 @@ def _podcast(slug, episode_id=None):
 
     # Whole podcast: the official RSS is often truncated, so use the full
     # psapi catalog (cached). Cached episodes play from disk.
-    episodes = _podcast_catalog(slug)
+    episodes = list(reversed(_podcast_catalog(slug)))  # newest first
     if episodes:
         urls = [_local_or_remote(slug, ep) for ep in episodes]
         n_local = sum(1 for u in urls if u.startswith("/"))
-        _log(f"{slug}: queueing {len(urls)} episodes, oldest first "
+        _log(f"{slug}: queueing {len(urls)} episodes, newest first "
              f"({n_local} from local cache, {len(urls) - n_local} streamed):")
         for i, (ep, u) in enumerate(zip(episodes, urls), 1):
             mark = "  [cached]" if u.startswith("/") else ""
