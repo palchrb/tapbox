@@ -278,8 +278,11 @@ PYEOF
       >> /var/log/tapbox-sync.log 2>&1 &
     echo "==> Background sync started (newest 50 episodes -> /var/lib/tapbox/cache)"
   fi
-  echo "==> Playing ${#urls[@]} stream(s) via mpv (Ctrl+C to stop)"
-  mpv --no-video --really-quiet --audio-device=alsa/tapbox_bt "${urls[@]}"
+  local playerpy
+  playerpy="$(dirname "$(readlink -f "$0")")/player.py"
+  [[ -f $playerpy ]] || playerpy=/usr/local/bin/tapbox-player
+  echo "==> Playing ${#urls[@]} stream(s) via mpv (Ctrl+C to stop; position is remembered)"
+  python3 "$playerpy" "$link" "${urls[@]}"
 }
 
 show_status() {

@@ -77,7 +77,9 @@ def stop_mpv():
     if mpv_proc and mpv_proc.poll() is None:
         mpv_proc.terminate()
         try:
-            mpv_proc.wait(timeout=3)
+            # player.py forwards SIGTERM to mpv and exits after its poll
+            # cycle — give it time so mpv is never left orphaned playing
+            mpv_proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             mpv_proc.kill()
     mpv_proc = None
@@ -104,9 +106,10 @@ def play(target):
         api("/player/pause", {})
     except OSError:
         pass  # spotify daemon not up or nothing playing — fine
-    mpv_proc = subprocess.Popen(
-        ["mpv", "--no-video", "--really-quiet",
-         f"--audio-device={ALSA_DEVICE}"] + urls)
+    player = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.py")
+    if not os.path.exists(player):
+        player = "/usr/local/bin/tapbox-player"
+    mpv_proc = subprocess.Popen([sys.executable, player, target] + urls)
     # Cache the newest episodes in the background for offline playback
     try:
         import nrk
