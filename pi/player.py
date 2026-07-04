@@ -230,6 +230,10 @@ def main():
         pass
     proc = subprocess.Popen(
         ["mpv", "--no-video", "--really-quiet",
+         # A2DP/SBC to the speaker runs at 44100 Hz; low-bitrate audiobooks
+         # come in at 16000 Hz which the BT link can't deliver (silence).
+         # Resample everything to 44100 stereo so any source rate plays.
+         "--audio-samplerate=44100", "--audio-channels=stereo",
          f"--audio-device={ALSA_DEVICE}", f"--input-ipc-server={sock}"] + urls)
     signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
 
