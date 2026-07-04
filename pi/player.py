@@ -97,11 +97,25 @@ def ipc(sock_path, *command):
         s.settimeout(2)
         s.connect(sock_path)
         s.sendall(json.dumps({"command": list(command)}).encode() + b"\n")
-        return json.loads(s.recv(65536).split(b"\n")[0])
+        # mpv interleaves async events with command replies; find the line
+        # that actually answers our command (has an "error" field).
+        for line in s.recv(65536).split(b"\n"):
+            if not line.strip():
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if "error" in msg:
+                return msg
+    return {}
 
 
 def ipc_get(sock_path, prop):
-    resp = ipc(sock_path, "get_property", prop)
+    try:
+        resp = ipc(sock_path, "get_property", prop)
+    except (OSError, ValueError):
+        return None
     return resp.get("data") if resp.get("error") == "success" else None
 
 
@@ -276,4 +290,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        log("stopped")
+        sys.exit(0)
