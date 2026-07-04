@@ -28,13 +28,15 @@ fi
 RUN_USER="${SUDO_USER:-pi}"
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 CONF_DIR="$RUN_HOME/.config/go-librespot"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> [1/6] Installing packages (BlueZ, bluez-alsa, ALSA, curl, jq)..."
+echo "==> [1/8] Installing packages (BlueZ, bluez-alsa, ALSA, mpv, python, ...)..."
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
+  bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq \
+  mpv yt-dlp python3-venv python3-dev i2c-tools
 
-echo "==> [2/6] Downloading go-librespot (latest release)..."
+echo "==> [2/8] Downloading go-librespot (latest release)..."
 case "$(uname -m)" in
   aarch64)        ASSET="go-librespot_linux_arm64.tar.gz" ;;
   armv6l|armv7l)  ASSET="go-librespot_linux_armv6_rpi.tar.gz" ;;
@@ -49,7 +51,7 @@ tar -xzf "$TMP/gl.tar.gz" -C "$TMP"
 install -m 755 "$(find "$TMP" -type f -name go-librespot | head -n1)" /usr/local/bin/go-librespot
 echo "    installed $(/usr/local/bin/go-librespot --version 2>/dev/null || echo /usr/local/bin/go-librespot)"
 
-echo "==> [3/6] Writing ALSA + go-librespot config..."
+echo "==> [3/8] Writing ALSA + go-librespot config..."
 # Placeholder ALSA device: play.sh rewrites this with your headset's MAC.
 # Until then audio goes to a null sink, so login/playback tests don't crash.
 if [[ ! -e /etc/asound.conf ]] || ! grep -q "bluealsa" /etc/asound.conf; then
@@ -81,7 +83,7 @@ credentials:
 EOF
 chown -R "$RUN_USER:" "$CONF_DIR"
 
-echo "==> [4/6] Enabling services (bluetooth, bluealsa, go-librespot)..."
+echo "==> [4/8] Enabling services (bluetooth, bluealsa, go-librespot)..."
 usermod -aG audio,bluetooth "$RUN_USER" || true
 rfkill unblock bluetooth 2>/dev/null || true
 systemctl enable --now bluetooth.service
@@ -143,18 +145,50 @@ systemctl daemon-reload
 systemctl enable --now go-librespot.service
 systemctl enable --now tapbox-bt-reconnect.service
 
-echo "==> [5/6] Waiting for the API to come up..."
+echo "==> [5/8] RFID reader support (PN532 over I2C)..."
+raspi-config nonint do_i2c 0 2>/dev/null || true
+if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
+  python3 -m venv /opt/tapbox/venv
+fi
+echo "    installing python libs (this can take a few minutes on a Zero)..."
+/opt/tapbox/venv/bin/pip install --quiet --upgrade adafruit-circuitpython-pn532
+
+install -m 755 "$SCRIPT_DIR/rfid.py"  /usr/local/bin/tapbox-rfid
+install -m 644 "$SCRIPT_DIR/nrk.py"   /usr/local/bin/nrk.py
+install -m 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card
+install -m 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power
+
+cat > /etc/systemd/system/tapbox-rfid.service <<EOF
+[Unit]
+Description=TapBox RFID daemon
+After=go-librespot.service
+
+[Service]
+ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-rfid
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now tapbox-rfid.service
+echo "    (daemon retries every 60s until a PN532 is wired up — that's fine)"
+
+echo "==> [6/8] Power tools installed: sudo tapbox-power save|perf|status|boot-on"
+
+echo "==> [7/8] Waiting for the API to come up..."
 for _ in $(seq 1 20); do
   curl -sf "http://127.0.0.1:$API_PORT/status" >/dev/null && break
   sleep 1
 done
 
 if grep -q '"username"' "$CONF_DIR/state.json" 2>/dev/null; then
-  echo "==> [6/6] Already logged in to Spotify — done!"
+  echo "==> [8/8] Already logged in to Spotify — done!"
   exit 0
 fi
 
-echo "==> [6/6] Spotify login"
+echo "==> [8/8] Spotify login"
 echo
 echo "    1. Open the Spotify app on your phone (same Wi-Fi as the Pi)"
 echo "    2. Play any song, tap the devices icon (speaker/screen symbol)"
