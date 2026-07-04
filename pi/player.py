@@ -268,12 +268,19 @@ def main():
 
     # Poll position and persist it until mpv exits; log track changes
     last_title = None
+    last_beat = 0.0
     while proc.poll() is None:
         try:
             path = ipc_get(sock, "path")
             pos = ipc_get(sock, "playback-time")
             if path and isinstance(pos, (int, float)):
                 save_state(key, path, pos, ids.get(path))
+                # heartbeat so a quiet-but-playing stream isn't mistaken
+                # for frozen (mpv runs silent); every ~30s
+                now_m = time.monotonic()
+                if now_m - last_beat > 30:
+                    last_beat = now_m
+                    log(f"...playing, {int(pos)}s")
             # Prefer the catalog title (NRK mp3s lack ID3, so mpv's
             # media-title falls back to an unhelpful filename)
             title = (titles.get(path) if path else None) or ipc_get(sock, "media-title")
