@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s https://api.github.com/repos/devgianlu/go-librespot/releases/latest)",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/config_schema.json)",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/README.md)",
+      "Bash(curl -s https://api.github.com/repos/devgianlu/go-librespot/contents/)",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/API.md)",
+      "Bash(curl -s https://raw.githubusercontent.com/devgianlu/go-librespot/master/api-spec.yml)",
+      "Bash(chmod +x /workspace/tapbox/pi/*.sh)",
+      "Bash(bash -n /workspace/tapbox/pi/install.sh)",
+      "Bash(bash -n /workspace/tapbox/pi/play.sh)",
+      "WebSearch"
+    ]
+  }
+}
