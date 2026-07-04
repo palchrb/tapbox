@@ -24,9 +24,11 @@ import time
 
 CARDS_FILE = "/etc/tapbox/cards.json"
 PENDING_FILE = "/etc/tapbox/pending-map"
-READ_TIMEOUT_S = 0.15  # how long each poll waits for a card
-POLL_SLEEP_S = 0.4     # idle time between polls (power)
-DEBOUNCE_S = 3.0       # ignore same card while it rests on the reader
+READ_TIMEOUT_S = 0.15   # how long each poll waits for a card
+POLL_SLEEP_S = 0.4      # pause between polls while the box is in use
+IDLE_AFTER_S = 180      # no taps for this long -> slow polling
+IDLE_POLL_SLEEP_S = 1.0 # pause between polls when idle (max tap latency)
+DEBOUNCE_S = 3.0        # ignore same card while it rests on the reader
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("tapbox-rfid")
@@ -108,12 +110,24 @@ def main():
         time.sleep(60)
         sys.exit(1)  # systemd restarts us
 
-    log.info("PN532 ready (firmware %d.%d), polling for cards", ver, rev)
+    # Power: the RF field burns the power, so between polls the PN532 is
+    # put in its power-down state (~uA; the adafruit driver wakes it on the
+    # next command), and polling slows down after a few tap-less minutes.
+    # Next step when wired: PN532 IRQ pin -> GPIO for interrupt wake.
+    can_power_down = hasattr(pn532, "power_down")
+    log.info("PN532 ready (firmware %d.%d), polling for cards%s",
+             ver, rev, " (power-down between polls)" if can_power_down else "")
     last_uid, last_seen = None, 0.0
+    last_tap = time.monotonic()
     errors = 0
     while True:
         try:
             uid = pn532.read_passive_target(timeout=READ_TIMEOUT_S)
+            if can_power_down:
+                try:
+                    pn532.power_down()
+                except Exception:
+                    can_power_down = False  # not supported by this firmware
             errors = 0
         except Exception as e:
             errors += 1
@@ -133,7 +147,9 @@ def main():
                 except Exception as e:
                     log.error("tap handling failed: %s", e)
             last_uid, last_seen = uid_hex, now
-        time.sleep(POLL_SLEEP_S)
+            last_tap = now
+        idle = now - last_tap > IDLE_AFTER_S
+        time.sleep(IDLE_POLL_SLEEP_S if idle else POLL_SLEEP_S)
 
 
 if __name__ == "__main__":
