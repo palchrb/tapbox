@@ -1,0 +1,24 @@
+# PiSugar 3 — conservative battery curve for TapBox
+#
+# The stock curve in pisugar-server is optimistic in the 3.6–3.7V band
+# (it reports ~50-65% for charge levels that are realistically 15-30%),
+# which makes the percentage hover around half and then collapse to
+# near-zero in minutes. This curve is based on typical 1S LiPo tables
+# and errs on the pessimistic side — "20%" still means you have real
+# time left to find the charger.
+#
+# HOW TO APPLY
+# 1. Edit the config:      sudo nano /etc/pisugar-server/config.json
+# 2. Add the line below inside the top-level { ... } object (remember a
+#    comma after the previous entry). Do NOT paste the # comment lines.
+# 3. Restart the server:   sudo systemctl restart pisugar-server
+# 4. Verify:               sudo tapbox-power status
+#    (the percentage will read LOWER than before on the same charge —
+#    that is the point.)
+#
+# The server validates the curve: voltages and percentages must both be
+# strictly increasing/decreasing together, so keep it monotonic if you
+# tweak it. Replace with a calibrated curve once a full discharge log
+# (sudo tapbox-power log-on) has been collected.
+
+"battery_curve": [[4.10, 100.0], [4.00, 84.0], [3.90, 65.0], [3.80, 46.0], [3.70, 26.0], [3.60, 11.0], [3.50, 4.0], [3.40, 1.0], [3.20, 0.0]]
