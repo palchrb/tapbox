@@ -164,11 +164,14 @@ def main():
         play_spotify(target)  # resume is Spotify's own job — session remembers
         return
 
+    titles = {}
     if not urls:  # expand the link ourselves — pure-python entrypoint
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
             import nrk
-            urls = nrk.expand(target)
+            pairs = nrk.expand_titled(target)
+            urls = [u for u, _ in pairs]
+            titles = {u: t for u, t in pairs if t}
         except Exception as e:
             log(f"expansion failed ({e!r}) — playing the raw link")
             urls = [target]
@@ -230,7 +233,9 @@ def main():
             pos = ipc_get(sock, "playback-time")
             if path and isinstance(pos, (int, float)):
                 save_state(key, path, pos)
-            title = ipc_get(sock, "media-title")
+            # Prefer the catalog title (NRK mp3s lack ID3, so mpv's
+            # media-title falls back to an unhelpful filename)
+            title = (titles.get(path) if path else None) or ipc_get(sock, "media-title")
             if title and title != last_title:
                 last_title = title
                 log(f"now playing: {title}")

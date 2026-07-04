@@ -64,11 +64,17 @@ def _get_json(url):
 
 
 def _feed_enclosures(feed_bytes):
+    """[(url, title)] for every enclosure in an RSS feed."""
+    pairs = []
     root = ET.fromstring(feed_bytes)
-    return [item.find("enclosure").attrib["url"]
-            for item in root.findall("./channel/item")
-            if item.find("enclosure") is not None
-            and "url" in item.find("enclosure").attrib]
+    for item in root.findall("./channel/item"):
+        enc = item.find("enclosure")
+        if enc is None or "url" not in enc.attrib:
+            continue
+        t = item.find("title")
+        title = t.text.strip() if t is not None and t.text else None
+        pairs.append((enc.attrib["url"], title))
+    return pairs
 
 
 def _manifest_url(episode_id, kind="podcast"):
@@ -189,35 +195,44 @@ def _local_or_remote(slug, ep):
     return local if os.path.exists(local) else ep["url"]
 
 
+def _catalog_title(slug, episode_id, kind="podcast"):
+    try:
+        return next((ep.get("title") for ep in _catalog(slug, kind)
+                     if ep["id"] == episode_id), None)
+    except Exception:
+        return None
+
+
 def _podcast(slug, episode_id=None):
     if episode_id:
+        title = _catalog_title(slug, episode_id)
         local = _episode_file(slug, episode_id)
         if os.path.exists(local):
-            return [local]
+            return [(local, title)]
         url = _manifest_url(episode_id, "podcast")
         if url:
-            return [url]
+            return [(url, title)]
         # fallback: match the episode id in the official RSS
         root = ET.fromstring(_get(f"https://podkast.nrk.no/program/{slug}.rss"))
         for item in root.findall("./channel/item"):
             if episode_id in ET.tostring(item, encoding="unicode"):
                 enc = item.find("enclosure")
                 if enc is not None and "url" in enc.attrib:
-                    return [enc.attrib["url"]]
+                    return [(enc.attrib["url"], title)]
         return []
 
     # Whole podcast: the official RSS is often truncated, so use the full
     # psapi catalog (cached). Cached episodes play from disk.
-    urls = _queue(slug, "podcast", newest_first=True)
-    if urls:
-        return urls
+    pairs = _queue(slug, "podcast", newest_first=True)
+    if pairs:
+        return pairs
     _log(f"{slug}: psapi gave nothing — falling back to official RSS "
          "(often truncated to the last few episodes!)")
     return _feed_enclosures(_get(f"https://podkast.nrk.no/program/{slug}.rss"))
 
 
 def _queue(slug, kind, newest_first):
-    """Build the playback queue for a whole podcast/series, with logging."""
+    """[(url, title)] queue for a whole podcast/series, with logging."""
     episodes = _catalog(slug, kind)
     if not episodes:
         return []
@@ -234,7 +249,7 @@ def _queue(slug, kind, newest_first):
     for i, (ep, u) in enumerate(zip(episodes, urls), 1):
         mark = "  [cached]" if u.startswith("/") else ""
         _log(f"  {i:3d}. {ep.get('title') or ep['id']}{mark}")
-    return urls
+    return [(u, ep.get("title")) for ep, u in zip(episodes, urls)]
 
 
 def podcast_slug(target):
@@ -296,40 +311,45 @@ def _series(first_program_id):
 
 
 def expand(target):
-    """Turn an NRK/feed link into a list of stream URLs for mpv.
+    """Stream URLs for a link — [target] when it's not NRK/RSS."""
+    return [u for u, _ in expand_titled(target)]
 
-    Returns [target] unchanged when the link is not NRK/RSS or lookup fails,
-    so the caller can always just play whatever comes back.
+
+def expand_titled(target):
+    """Turn an NRK/feed link into [(stream_url, title_or_None)] for mpv.
+
+    Returns [(target, None)] unchanged when the link is not NRK/RSS or
+    lookup fails, so the caller can always just play whatever comes back.
     """
     try:
         m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/([A-Za-z0-9_-]+)/?$",
                      target, re.I)
         if m:
-            return _podcast(m.group(1), m.group(2)) or [target]
+            return _podcast(m.group(1), m.group(2)) or [(target, None)]
         m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/?$", target, re.I)
         if m:
-            return _podcast(m.group(1)) or [target]
+            return _podcast(m.group(1)) or [(target, None)]
         m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
         if m:
             # Bare series link: whole series via the psapi catalog, episode 1
             # first (radio series are serial stories — chronological order)
-            return _queue(m.group(1), "series", newest_first=False) or [target]
+            return _queue(m.group(1), "series", newest_first=False) or [(target, None)]
         m = re.match(r"https?://radio\.nrk\.no/serie/[^/]+/([A-Za-z0-9_-]+)/?$",
                      target, re.I)
         if m:
-            return _series(m.group(1)) or [target]
+            return [(u, None) for u in _series(m.group(1))] or [(target, None)]
     except (OSError, ET.ParseError):
-        return [target]  # lookup failed — let mpv+yt-dlp have a go at the raw link
+        return [(target, None)]  # lookup failed — let mpv+yt-dlp try the raw link
     if target.startswith(("http://", "https://")):
         try:
             if target.lower().split("?")[0].endswith((".rss", ".xml")) or _sniffs_like_feed(target):
-                urls = _feed_enclosures(_get(target))
-                if urls:
-                    _log(f"RSS feed with {len(urls)} episodes: {target}")
-                    return urls
+                pairs = _feed_enclosures(_get(target))
+                if pairs:
+                    _log(f"RSS feed with {len(pairs)} episodes: {target}")
+                    return pairs
         except (OSError, ET.ParseError) as e:
             _log(f"feed parse failed ({e!r}) — passing link to mpv: {target}")
-    return [target]
+    return [(target, None)]
 
 
 def _sniffs_like_feed(url):
