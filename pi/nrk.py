@@ -374,6 +374,21 @@ def expand_entries(target):
         m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/?$", target, re.I)
         if m:
             return _podcast(m.group(1)) or passthrough
+        m = re.match(r"https?://radio\.nrk\.no/direkte/([a-z0-9_-]+)/?$", target, re.I)
+        if m:
+            # Live radio channel: resolve the HLS stream from the psapi
+            # channel manifest. Continuous — no resume, no cache.
+            chan = m.group(1)
+            try:
+                d = _get_json(f"{PSAPI}/playback/manifest/channel/{chan}")
+                assets = (d.get("playable") or {}).get("assets") or []
+                if assets and assets[0].get("url"):
+                    _log(f"live radio: {chan}")
+                    return [{"url": assets[0]["url"], "title": f"NRK {chan}",
+                             "id": None}]
+            except (OSError, ValueError):
+                pass
+            return passthrough
         m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
         if m:
             # Bare series link: whole series via the psapi catalog, episode 1
