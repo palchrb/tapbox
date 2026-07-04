@@ -76,11 +76,12 @@ def load_state(key):
         return None
 
 
-def save_state(key, url, pos):
+def save_state(key, url, pos, episode_id=None):
     os.makedirs(STATE_DIR, exist_ok=True)
     tmp = state_path(key) + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"url": url, "pos": pos, "updated": time.time()}, f)
+        json.dump({"url": url, "pos": pos, "id": episode_id,
+                   "updated": time.time()}, f)
     os.replace(tmp, state_path(key))
 
 
@@ -164,14 +165,15 @@ def main():
         play_spotify(target)  # resume is Spotify's own job — session remembers
         return
 
-    titles = {}
+    titles, ids = {}, {}
     if not urls:  # expand the link ourselves — pure-python entrypoint
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
             import nrk
-            pairs = nrk.expand_titled(target)
-            urls = [u for u, _ in pairs]
-            titles = {u: t for u, t in pairs if t}
+            entries = nrk.expand_entries(target)
+            urls = [e["url"] for e in entries]
+            titles = {e["url"]: e["title"] for e in entries if e.get("title")}
+            ids = {e["url"]: e["id"] for e in entries if e.get("id")}
         except Exception as e:
             log(f"expansion failed ({e!r}) — playing the raw link")
             urls = [target]
@@ -185,14 +187,24 @@ def main():
     except OSError:
         pass
 
-    # Resume: rotate the queue to the remembered episode
+    # Resume: rotate the queue to the remembered episode. Match on the
+    # stable episode id first — the same episode can be a stream URL one
+    # run and a cached local file the next, so URLs alone are not reliable.
     start_pos = 0.0
     st = load_state(key)
-    if st and st.get("url") in urls and st.get("pos", 0) > RESUME_MIN_S:
-        i = urls.index(st["url"])
-        urls = urls[i:] + urls[:i]
-        start_pos = float(st["pos"])
-        log(f"resuming episode {i + 1} at {int(start_pos)}s")
+    if st and st.get("pos", 0) > RESUME_MIN_S:
+        idx = None
+        if st.get("id"):
+            url_by_id = {eid: u for u, eid in ids.items()}
+            if st["id"] in url_by_id:
+                idx = urls.index(url_by_id[st["id"]])
+        if idx is None and st.get("url") in urls:
+            idx = urls.index(st["url"])
+        if idx is not None:
+            urls = urls[idx:] + urls[:idx]
+            start_pos = float(st["pos"])
+            name = titles.get(urls[0]) or f"episode {idx + 1}"
+            log(f"resuming '{name}' at {int(start_pos)}s")
 
     # Fixed socket path so the button daemon (tapbox-buttons) can find us
     sock_dir = "/run" if os.access("/run", os.W_OK) else "/tmp"
@@ -247,7 +259,7 @@ def main():
             path = ipc_get(sock, "path")
             pos = ipc_get(sock, "playback-time")
             if path and isinstance(pos, (int, float)):
-                save_state(key, path, pos)
+                save_state(key, path, pos, ids.get(path))
             # Prefer the catalog title (NRK mp3s lack ID3, so mpv's
             # media-title falls back to an unhelpful filename)
             title = (titles.get(path) if path else None) or ipc_get(sock, "media-title")
