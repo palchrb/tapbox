@@ -82,6 +82,7 @@ chown -R "$RUN_USER:" "$CONF_DIR"
 
 echo "==> [4/6] Enabling services (bluetooth, bluealsa, go-librespot)..."
 usermod -aG audio,bluetooth "$RUN_USER" || true
+rfkill unblock bluetooth 2>/dev/null || true
 systemctl enable --now bluetooth.service
 # Debian bookworm ships the daemon as bluealsa.service; newer releases as bluealsad.service
 systemctl enable --now bluealsa.service 2>/dev/null \

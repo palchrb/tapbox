@@ -41,12 +41,19 @@ EOF
 
 strip_ansi() { sed -E $'s/\x1B\\[[0-9;]*[A-Za-z]//g'; }
 
+# Radio can be rfkill-blocked (persists across reboots on a fresh install),
+# which makes every scan come up empty. Unblock before powering on.
+bt_up() {
+  rfkill unblock bluetooth 2>/dev/null || true
+  bluetoothctl power on >/dev/null
+}
+
 # Scan for SCAN_SECS and print one line per device actually seen during the
 # scan: "MAC<TAB>NAME<TAB>yes|no" (third field: looks like an audio device).
 # Note: RSSI/UUID info is unreliable for unpaired devices, so "no" just means
 # "could not confirm audio", not "definitely not audio".
 discover() {
-  bluetoothctl power on >/dev/null
+  bt_up
   echo "Scanning ${SCAN_SECS}s — put the speaker/headset in pairing mode now..." >&2
   local out macs mac name info audio
   out="$(bluetoothctl --timeout "$SCAN_SECS" scan on 2>/dev/null | strip_ansi || true)"
@@ -72,7 +79,7 @@ print_devices() {  # pretty-print discover() output
 
 connect_headset() {
   local mac="$1"
-  bluetoothctl power on >/dev/null
+  bt_up
 
   if ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Paired: yes"; then
     echo "==> Pairing with $mac (make sure it is in pairing mode)..."
