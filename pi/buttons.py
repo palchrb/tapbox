@@ -61,11 +61,34 @@ def mpv_command(cmd):
         return resp.get("error") == "success"
 
 
-def spotify_command(action):
+def spotify_post(path):
     req = urllib.request.Request(
-        API + SPOTIFY_PATHS[action], data=b"{}",
-        headers={"Content-Type": "application/json"})
+        API + path, data=b"{}", headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req, timeout=5).read()
+
+
+def spotify_status():
+    try:
+        with urllib.request.urlopen(API + "/status", timeout=5) as r:
+            return json.loads(r.read())
+    except (OSError, ValueError):
+        return {}
+
+
+def spotify_command(action):
+    if action != "prev":
+        spotify_post(SPOTIFY_PATHS[action])
+        return
+    # "prev" in Spotify rewinds the current track first and only jumps to the
+    # previous track on a second press. Since the button is one gesture, do
+    # the second press ourselves when the first only rewound.
+    before = spotify_status().get("track", {}).get("uri")
+    spotify_post("/player/prev")
+    time.sleep(0.4)
+    after = spotify_status()
+    same = after.get("track", {}).get("uri") == before
+    if same and (after.get("position") or 0) < 2000:
+        spotify_post("/player/prev")  # it only rewound — go to the real prev
 
 
 def handle(action):
