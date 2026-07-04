@@ -7,6 +7,7 @@
 #   sudo ./play.sh connect                # auto-find device in pairing mode, pair + connect
 #   sudo ./play.sh connect "jbl"          # same, but match device name (if several found)
 #   sudo ./play.sh <spotify-link>         # play (auto-connects remembered/nearby device)
+#   sudo ./play.sh --fresh <link>         # ignore remembered position, start from the top
 #   sudo ./play.sh AA:BB:CC:DD:EE:FF <spotify-link>   # explicit MAC still works
 #   sudo ./play.sh scan                   # list everything seen during a scan
 #   sudo ./play.sh test                   # play a test sound through the headset (no Spotify)
@@ -30,6 +31,12 @@ SCAN_SECS=20
 if [[ $EUID -ne 0 ]]; then
   echo "Run with sudo: sudo $0 $*" >&2
   exit 1
+fi
+
+FRESH_ARG=""
+if [[ ${1:-} == "--fresh" ]]; then
+  FRESH_ARG="--fresh"
+  shift
 fi
 
 usage() {
@@ -282,7 +289,8 @@ PYEOF
   playerpy="$(dirname "$(readlink -f "$0")")/player.py"
   [[ -f $playerpy ]] || playerpy=/usr/local/bin/tapbox-player
   echo "==> Playing ${#urls[@]} stream(s) via mpv (Ctrl+C to stop; position is remembered)"
-  python3 "$playerpy" "$link" "${urls[@]}"
+  # shellcheck disable=SC2086
+  python3 "$playerpy" $FRESH_ARG "$link" "${urls[@]}"
 }
 
 show_status() {

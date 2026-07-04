@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """TapBox mpv wrapper with resume.
 
-Usage: player.py <target> <url> [url...]
+Usage: player.py [--fresh] <target> [url...]
+
+With only <target> given, the URL list is expanded automatically via
+nrk.py (Spotify links are NOT handled here — those go to go-librespot).
+So this is the pure-python way to play anything:
+
+    sudo python3 player.py "https://radio.nrk.no/podkast/<slug>"
+    sudo python3 player.py --fresh "<link>"     # ignore remembered position
 
 Runs mpv over the given queue and remembers where playback stopped
 (episode + position, polled every 3s over mpv's IPC socket). The next
@@ -82,11 +89,27 @@ def ipc_get(sock_path, prop):
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("usage: player.py <target> <url> [url...]", file=sys.stderr)
+    args = sys.argv[1:]
+    fresh = False
+    if args and args[0] == "--fresh":
+        fresh = True
+        args = args[1:]
+    if not args:
+        print("usage: player.py [--fresh] <target> [url...]", file=sys.stderr)
         sys.exit(1)
-    target, urls = sys.argv[1], sys.argv[2:]
+    target, urls = args[0], args[1:]
+    if not urls:  # expand the link ourselves — pure-python entrypoint
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            import nrk
+            urls = nrk.expand(target)
+        except Exception as e:
+            log(f"expansion failed ({e!r}) — playing the raw link")
+            urls = [target]
     key = state_key(target)
+    if fresh:
+        clear_state(key)
+        log("starting fresh — cleared remembered position")
 
     # Resume: rotate the queue to the remembered episode
     start_pos = 0.0
