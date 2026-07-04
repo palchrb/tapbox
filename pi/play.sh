@@ -242,64 +242,6 @@ wait_for_api() {
   exit 1
 }
 
-link_to_uri() {
-  local link="$1"
-  if [[ $link == *spotify.link/* ]]; then  # short links redirect to open.spotify.com
-    link="$(curl -sL -o /dev/null -w '%{url_effective}' "$link")"
-  fi
-  if [[ $link =~ ^spotify:(track|album|playlist|artist|episode|show):[A-Za-z0-9]+$ ]]; then
-    echo "$link"
-  elif [[ $link =~ open\.spotify\.com/(intl-[a-z-]+/)?(track|album|playlist|artist|episode|show)/([A-Za-z0-9]+) ]]; then
-    echo "spotify:${BASH_REMATCH[2]}:${BASH_REMATCH[3]}"
-  else
-    echo "Could not parse Spotify link: $link" >&2
-    exit 1
-  fi
-}
-
-play_mpv() {
-  local link="$1"
-  # Expand NRK/RSS links to stream URLs via nrk.py (repo copy first, then installed)
-  mapfile -t urls < <(python3 - "$link" <<PYEOF
-import sys
-# Repo copy must win over the installed copy — insert(0, ...) last = first
-sys.path.insert(0, "/usr/local/bin")
-sys.path.insert(0, "$(dirname "$(readlink -f "$0")")")
-try:
-    import nrk
-    print(f"using {nrk.__file__}", file=sys.stderr)
-    urls = nrk.expand(sys.argv[1])
-except Exception as e:
-    print(f"nrk expansion failed: {e}", file=sys.stderr)
-    urls = [sys.argv[1]]
-print("\n".join(urls))
-PYEOF
-  )
-  curl -sf -X POST "$API/player/pause" >/dev/null 2>&1 || true
-  # Podcast link? Cache the newest episodes in the background for offline use.
-  if [[ $link =~ radio\.nrk\.no/podkast/([a-zA-Z0-9_-]+) ]]; then
-    local nrkpy
-    nrkpy="$(dirname "$(readlink -f "$0")")/nrk.py"
-    [[ -f $nrkpy ]] || nrkpy=/usr/local/bin/nrk.py
-    nohup python3 "$nrkpy" sync "${BASH_REMATCH[1]}" \
-      >> /var/log/tapbox-sync.log 2>&1 &
-    echo "==> Background sync started (newest 50 episodes -> /var/lib/tapbox/cache)"
-  fi
-  local playerpy
-  playerpy="$(dirname "$(readlink -f "$0")")/player.py"
-  [[ -f $playerpy ]] || playerpy=/usr/local/bin/tapbox-player
-  echo "==> Playing ${#urls[@]} stream(s) via mpv (Ctrl+C to stop; position is remembered)"
-  # shellcheck disable=SC2086
-  python3 "$playerpy" $FRESH_ARG "$link" "${urls[@]}"
-}
-
-show_status() {
-  sleep 2
-  curl -sf "$API/status" | jq -r \
-    'if .track then "Now playing: \(.track.name) — \(.track.artist_names // [] | join(", "))" else "No track loaded yet — check journalctl -u go-librespot" end' \
-    2>/dev/null || true
-}
-
 [[ $# -ge 1 ]] || usage
 
 case "$1" in
@@ -334,17 +276,14 @@ fi
 
 [[ -n ${LINK:-} ]] || { echo "Device connected. Add a link to play something."; exit 0; }
 
+# All link routing lives in player.py: Spotify -> go-librespot, rest -> mpv
 if [[ $LINK =~ ^spotify: || $LINK == *open.spotify.com* || $LINK == *spotify.link/* ]]; then
   wait_for_api
   if ! grep -q '"username"' "$(getent passwd "${SUDO_USER:-pi}" | cut -d: -f6)/.config/go-librespot/state.json" 2>/dev/null; then
     echo "WARNING: not logged in to Spotify yet — run install.sh and pick the device in the Spotify app." >&2
   fi
-  URI="$(link_to_uri "$LINK")"
-  echo "==> Playing $URI"
-  curl -sf -X POST "$API/player/play" \
-    -H 'Content-Type: application/json' \
-    -d "{\"uri\": \"$URI\"}"
-  show_status
-else
-  play_mpv "$LINK"
 fi
+PLAYERPY="$(dirname "$(readlink -f "$0")")/player.py"
+[[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/tapbox-player
+# shellcheck disable=SC2086
+python3 "$PLAYERPY" $FRESH_ARG "$LINK"

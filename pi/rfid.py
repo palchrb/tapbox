@@ -2,12 +2,9 @@
 """TapBox RFID daemon — tap a card, play its mapped content.
 
 Reads a PN532 NFC module over I2C. Card UIDs map to targets in
-/etc/tapbox/cards.json. A target is either:
-  - a Spotify link/URI (track/album/playlist/artist/episode/show)
-      -> played via go-librespot's HTTP API
-  - anything else: a URL (NRK program pages etc. resolved by mpv+yt-dlp,
-    or a direct stream) or a local file path
-      -> played via mpv straight to the bluetooth headset
+/etc/tapbox/cards.json. All link routing lives in player.py (Spotify ->
+go-librespot API; NRK/RSS/streams/files -> nrk.py expansion + mpv with
+resume); this daemon just hands the target over.
 
 Mapping a card ("learn mode"): card.sh writes the target to
 /etc/tapbox/pending-map; the next tapped card is bound to it and plays.
@@ -21,16 +18,12 @@ IRQ pin to a GPIO and sleeping until a card wakes us.
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
-import urllib.request
 
-API = "http://127.0.0.1:3678"
 CARDS_FILE = "/etc/tapbox/cards.json"
 PENDING_FILE = "/etc/tapbox/pending-map"
-ALSA_DEVICE = "alsa/tapbox_bt"  # same output go-librespot uses
 READ_TIMEOUT_S = 0.15  # how long each poll waits for a card
 POLL_SLEEP_S = 0.4     # idle time between polls (power)
 DEBOUNCE_S = 3.0       # ignore same card while it rests on the reader
@@ -38,38 +31,7 @@ DEBOUNCE_S = 3.0       # ignore same card while it rests on the reader
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("tapbox-rfid")
 
-SPOTIFY_URI_RE = re.compile(
-    r"^spotify:(track|album|playlist|artist|episode|show):[A-Za-z0-9]+$")
-SPOTIFY_LINK_RE = re.compile(
-    r"open\.spotify\.com/(?:intl-[a-z-]+/)?"
-    r"(track|album|playlist|artist|episode|show)/([A-Za-z0-9]+)")
-
 mpv_proc = None
-
-
-def api(path, payload=None, timeout=10):
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        API + path, data=data, method="POST" if data else "GET",
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
-
-
-def to_spotify_uri(target):
-    if SPOTIFY_URI_RE.match(target):
-        return target
-    if "spotify.link/" in target:  # short links redirect to open.spotify.com
-        try:
-            with urllib.request.urlopen(target, timeout=10) as resp:
-                target = resp.url
-        except OSError as e:
-            log.warning("could not resolve short link %s: %s", target, e)
-            return None
-    m = SPOTIFY_LINK_RE.search(target)
-    if m:
-        return f"spotify:{m.group(1)}:{m.group(2)}"
-    return None
 
 
 def stop_mpv():
@@ -87,39 +49,14 @@ def stop_mpv():
 
 def play(target):
     global mpv_proc
-    uri = to_spotify_uri(target)
     stop_mpv()
-    if uri:
-        log.info("playing via spotify: %s", uri)
-        api("/player/play", {"uri": uri})
-        return
-    log.info("playing via mpv: %s", target)
-    try:
-        import nrk
-        urls = nrk.expand(target)
-        if urls != [target]:
-            log.info("expanded to %d stream(s)", len(urls))
-    except Exception as e:
-        log.warning("nrk expansion failed (%s), passing link straight to mpv", e)
-        urls = [target]
-    try:
-        api("/player/pause", {})
-    except OSError:
-        pass  # spotify daemon not up or nothing playing — fine
     player = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.py")
     if not os.path.exists(player):
         player = "/usr/local/bin/tapbox-player"
-    mpv_proc = subprocess.Popen([sys.executable, player, target] + urls)
-    # Cache the newest episodes in the background for offline playback
-    try:
-        import nrk
-        slug = nrk.podcast_slug(target)
-        if slug:
-            subprocess.Popen(
-                [sys.executable, nrk.__file__, "sync", slug],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception as e:
-        log.warning("could not start podcast sync: %s", e)
+    log.info("playing: %s", target)
+    # player.py routes: Spotify -> go-librespot API (exits right away),
+    # everything else -> mpv with resume (runs until stopped/finished)
+    mpv_proc = subprocess.Popen([sys.executable, player, target])
 
 
 def load_cards():

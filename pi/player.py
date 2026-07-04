@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""TapBox mpv wrapper with resume.
+"""TapBox player — THE entrypoint for playing any link.
 
 Usage: player.py [--fresh] <target> [url...]
 
-With only <target> given, the URL list is expanded automatically via
-nrk.py (Spotify links are NOT handled here — those go to go-librespot).
+Routing:
+  - Spotify links/URIs (track/album/playlist/artist/episode/show, incl.
+    spotify.link short links) -> go-librespot's HTTP API
+  - everything else (NRK podcast/serie, RSS feeds, streams, local files)
+    -> expanded via nrk.py and played with mpv, with resume: position is
+    polled over mpv's IPC socket and the next run of the same target
+    continues where it stopped. A background episode sync is kicked off
+    for NRK podcasts.
+
 So this is the pure-python way to play anything:
 
+    sudo python3 player.py "https://open.spotify.com/track/..."
     sudo python3 player.py "https://radio.nrk.no/podkast/<slug>"
     sudo python3 player.py --fresh "<link>"     # ignore remembered position
 
@@ -30,11 +38,19 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
 ALSA_DEVICE = "alsa/tapbox_bt"
+API = "http://127.0.0.1:3678"
 RESUME_MIN_S = 20   # don't bother resuming the first seconds
 POLL_S = 3
+
+SPOTIFY_URI_RE = re.compile(
+    r"^spotify:(track|album|playlist|artist|episode|show):[A-Za-z0-9]+$")
+SPOTIFY_LINK_RE = re.compile(
+    r"open\.spotify\.com/(?:intl-[a-z-]+/)?"
+    r"(track|album|playlist|artist|episode|show)/([A-Za-z0-9]+)")
 
 
 def log(msg):
@@ -88,6 +104,51 @@ def ipc_get(sock_path, prop):
     return resp.get("data") if resp.get("error") == "success" else None
 
 
+def api(path, payload=None, timeout=10):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        API + path, data=data, method="POST" if data else "GET",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def is_spotify(target):
+    return (target.startswith("spotify:") or "open.spotify.com" in target
+            or "spotify.link/" in target)
+
+
+def to_spotify_uri(target):
+    if SPOTIFY_URI_RE.match(target):
+        return target
+    if "spotify.link/" in target:  # short links redirect to open.spotify.com
+        with urllib.request.urlopen(target, timeout=10) as r:
+            target = r.url
+    m = SPOTIFY_LINK_RE.search(target)
+    return f"spotify:{m.group(1)}:{m.group(2)}" if m else None
+
+
+def play_spotify(target):
+    uri = to_spotify_uri(target)
+    if not uri:
+        log(f"could not parse spotify link: {target}")
+        sys.exit(1)
+    try:
+        api("/player/play", {"uri": uri})
+    except OSError as e:
+        log(f"go-librespot API unreachable ({e}) — check: journalctl -u go-librespot")
+        sys.exit(1)
+    log(f"spotify: playing {uri}")
+    time.sleep(2)
+    try:
+        track = (json.loads(api("/status")) or {}).get("track") or {}
+        if track.get("name"):
+            artists = ", ".join(track.get("artist_names") or [])
+            log(f"now playing: {track['name']} — {artists}")
+    except (OSError, ValueError):
+        pass
+
+
 def main():
     args = sys.argv[1:]
     fresh = False
@@ -98,6 +159,11 @@ def main():
         print("usage: player.py [--fresh] <target> [url...]", file=sys.stderr)
         sys.exit(1)
     target, urls = args[0], args[1:]
+
+    if is_spotify(target):
+        play_spotify(target)  # resume is Spotify's own job — session remembers
+        return
+
     if not urls:  # expand the link ourselves — pure-python entrypoint
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
@@ -110,6 +176,11 @@ def main():
     if fresh:
         clear_state(key)
         log("starting fresh — cleared remembered position")
+
+    try:
+        api("/player/pause", {})  # don't talk over Spotify
+    except OSError:
+        pass
 
     # Resume: rotate the queue to the remembered episode
     start_pos = 0.0
@@ -125,6 +196,15 @@ def main():
         ["mpv", "--no-video", "--really-quiet",
          f"--audio-device={ALSA_DEVICE}", f"--input-ipc-server={sock}"] + urls)
     signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
+
+    # NRK podcast? Cache the newest episodes in the background for offline use
+    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
+    if m:
+        nrkpy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nrk.py")
+        if os.path.exists(nrkpy):
+            subprocess.Popen([sys.executable, nrkpy, "sync", m.group(1)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log(f"background sync started for '{m.group(1)}'")
 
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):
