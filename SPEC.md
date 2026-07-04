@@ -1,7 +1,7 @@
 # tapbox — MVP Specification
 
-**Version:** 0.1 (draft)
-**Last updated:** 2026-05-18
+**Version:** 0.8 (draft)
+**Last updated:** 2026-07-04
 **Status:** Design phase, pre-implementation
 
 ---
@@ -75,7 +75,7 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 |---|---|---|---|
 | OS | Raspberry Pi OS Lite (Bookworm or current Legacy Lite) | Debian mix | Standard Pi OS |
 | Music orchestration | [Music Assistant](https://music-assistant.io/) | Apache 2.0 | Handles Spotify, Tidal, podcasts, local files in one abstraction |
-| Spotify backend | librespot (via Music Assistant) | MIT | Reverse-engineered Spotify Connect — see risks |
+| Spotify backend | librespot (via Music Assistant) | MIT | Reverse-engineered Spotify Connect — see risks. Hardware-validated 2026-07-04 with go-librespot test rig (`pi/`): zeroconf login + BT A2DP output + play-by-share-link all work end-to-end on the Zero 2 W |
 | Audio playback | mpv (driven by Music Assistant) | GPL-2.0 | Used as binary, no linking issues |
 | RFID daemon | Custom Python (~200 LOC) | Apache 2.0 | Reads PN532, looks up mapping, calls MA API |
 | Web UI | Custom (React or Svelte + Vite + Tailwind, TBD) | Apache 2.0 | Onboarding + admin |
@@ -166,8 +166,12 @@ The polish target. We want this to take **<10 minutes** from unboxing to "kid ta
 
 7. Phone reconnects to home Wi-Fi. Page advances: "Setting up music services."
 
-8. OAuth flow: "Connect Spotify" → standard Spotify OAuth (PKCE, no client secret on device)
-   - Optional: "Connect Tidal" / "Skip"
+8. "Connect Spotify" — via Spotify Connect zeroconf (LOCKED design choice, hardware-validated):
+   "Open Spotify on your phone, tap the devices icon, pick 'tapbox'."
+   Credentials transfer automatically and are persisted on the device — no password
+   entry, no OAuth screen, no developer-app registration. Works because phone and
+   device are on the same Wi-Fi (guaranteed by steps 6-7). Requires Spotify Premium.
+   - Optional: "Connect Tidal" (standard OAuth) / "Skip"
 
 9. "Speaker test" — plays a 3-second chime. Volume calibration slider.
 
