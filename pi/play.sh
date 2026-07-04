@@ -15,6 +15,10 @@
 # <spotify-link> can be a share link (https://open.spotify.com/track/...),
 # a short link (https://spotify.link/...), or a spotify:track:... URI.
 # Track, album, playlist and artist links all work.
+#
+# Non-Spotify links play via mpv (foreground — Ctrl+C stops): NRK podcast
+# episodes/feeds (radio.nrk.no/podkast/...), NRK series (radio.nrk.no/serie/...),
+# RSS feed URLs, direct stream URLs, or local file paths.
 
 set -euo pipefail
 
@@ -232,6 +236,27 @@ link_to_uri() {
   fi
 }
 
+play_mpv() {
+  local link="$1"
+  # Expand NRK/RSS links to stream URLs via nrk.py (repo copy first, then installed)
+  mapfile -t urls < <(python3 - "$link" <<PYEOF
+import sys
+sys.path.insert(0, "$(dirname "$(readlink -f "$0")")")
+sys.path.insert(0, "/usr/local/bin")
+try:
+    import nrk
+    urls = nrk.expand(sys.argv[1])
+except Exception as e:
+    print(f"nrk expansion failed: {e}", file=sys.stderr)
+    urls = [sys.argv[1]]
+print("\n".join(urls))
+PYEOF
+  )
+  curl -sf -X POST "$API/player/pause" >/dev/null 2>&1 || true
+  echo "==> Playing ${#urls[@]} stream(s) via mpv (Ctrl+C to stop)"
+  mpv --no-video --really-quiet --audio-device=alsa/tapbox_bt "${urls[@]}"
+}
+
 show_status() {
   sleep 2
   curl -sf "$API/status" | jq -r \
@@ -271,17 +296,19 @@ else
   ensure_headset
 fi
 
-[[ -n ${LINK:-} ]] || { echo "Device connected. Add a Spotify link to play something."; exit 0; }
+[[ -n ${LINK:-} ]] || { echo "Device connected. Add a link to play something."; exit 0; }
 
-wait_for_api
-
-if ! grep -q '"username"' "$(getent passwd "${SUDO_USER:-pi}" | cut -d: -f6)/.config/go-librespot/state.json" 2>/dev/null; then
-  echo "WARNING: not logged in to Spotify yet — run install.sh and pick the device in the Spotify app." >&2
+if [[ $LINK =~ ^spotify: || $LINK == *open.spotify.com* || $LINK == *spotify.link/* ]]; then
+  wait_for_api
+  if ! grep -q '"username"' "$(getent passwd "${SUDO_USER:-pi}" | cut -d: -f6)/.config/go-librespot/state.json" 2>/dev/null; then
+    echo "WARNING: not logged in to Spotify yet — run install.sh and pick the device in the Spotify app." >&2
+  fi
+  URI="$(link_to_uri "$LINK")"
+  echo "==> Playing $URI"
+  curl -sf -X POST "$API/player/play" \
+    -H 'Content-Type: application/json' \
+    -d "{\"uri\": \"$URI\"}"
+  show_status
+else
+  play_mpv "$LINK"
 fi
-
-URI="$(link_to_uri "$LINK")"
-echo "==> Playing $URI"
-curl -sf -X POST "$API/player/play" \
-  -H 'Content-Type: application/json' \
-  -d "{\"uri\": \"$URI\"}"
-show_status

@@ -84,17 +84,20 @@ def expand(target):
     Returns [target] unchanged when the link is not NRK/RSS or lookup fails,
     so the caller can always just play whatever comes back.
     """
-    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/([A-Za-z0-9_-]+)/?$",
-                 target, re.I)
-    if m:
-        return _podcast(m.group(1), m.group(2)) or [target]
-    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/?$", target, re.I)
-    if m:
-        return _podcast(m.group(1)) or [target]
-    m = re.match(r"https?://radio\.nrk\.no/serie/[^/]+/([A-Za-z0-9_-]+)/?$",
-                 target, re.I)
-    if m:
-        return _series(m.group(1)) or [target]
+    try:
+        m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/([A-Za-z0-9_-]+)/?$",
+                     target, re.I)
+        if m:
+            return _podcast(m.group(1), m.group(2)) or [target]
+        m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)/?$", target, re.I)
+        if m:
+            return _podcast(m.group(1)) or [target]
+        m = re.match(r"https?://radio\.nrk\.no/serie/[^/]+/([A-Za-z0-9_-]+)/?$",
+                     target, re.I)
+        if m:
+            return _series(m.group(1)) or [target]
+    except (OSError, ET.ParseError):
+        return [target]  # lookup failed — let mpv+yt-dlp have a go at the raw link
     if target.lower().split("?")[0].endswith((".rss", ".xml")):
         try:
             return _feed_enclosures(_get(target)) or [target]
