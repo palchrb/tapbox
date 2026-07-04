@@ -68,6 +68,10 @@ status_report() {
 case "${1:-}" in
   save)
     set_cores 0
+    if [[ ! -e /sys/devices/system/cpu/cpu2/online ]]; then
+      echo "note: this kernel has no CPU hotplug — cores stay online (idle cores"
+      echo "      sleep deeply anyway; add maxcpus=2 to cmdline.txt if you must)"
+    fi
     set_governor powersave
     set_leds none 0
     vcgencmd display_power 0 >/dev/null 2>&1 || true
