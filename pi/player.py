@@ -222,13 +222,18 @@ def main():
         except OSError:
             log("could not seek to resume position — playing from start")
 
-    # Poll position and persist it until mpv exits
+    # Poll position and persist it until mpv exits; log track changes
+    last_title = None
     while proc.poll() is None:
         try:
             path = ipc_get(sock, "path")
             pos = ipc_get(sock, "playback-time")
             if path and isinstance(pos, (int, float)):
                 save_state(key, path, pos)
+            title = ipc_get(sock, "media-title")
+            if title and title != last_title:
+                last_title = title
+                log(f"now playing: {title}")
         except OSError:
             pass
         time.sleep(POLL_S)
