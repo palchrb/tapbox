@@ -7,6 +7,9 @@
 #   sudo tapbox-power status    show current state (+ PiSugar battery if present)
 #   sudo tapbox-power boot-on   apply 'save' automatically at every boot
 #   sudo tapbox-power boot-off  stop applying at boot
+#   sudo tapbox-power log-on    log battery voltage/current/percent to CSV
+#                               every 60s (for calibrating the battery curve)
+#   sudo tapbox-power log-off   stop logging (the CSV file is kept)
 #
 # Bluetooth is deliberately left alone — it drives the speaker.
 # If Spotify playback stutters in save mode, set WIFI_POWERSAVE=0 below:
@@ -21,6 +24,7 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 SELF="$(readlink -f "$0")"
+LOG_FILE=/var/log/tapbox-battery.csv
 
 write() {  # write <value> to <file>; skip silently if file is missing
   if [[ -e $2 ]]; then
@@ -136,8 +140,38 @@ EOF
     systemctl daemon-reload
     echo "Boot-time power save disabled."
     ;;
+  log-on)
+    cat > /etc/systemd/system/tapbox-batlog.service <<EOF
+[Unit]
+Description=TapBox battery logger
+
+[Service]
+ExecStart=$SELF _logloop
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now tapbox-batlog.service
+    echo "Logging to $LOG_FILE every 60s. Stop with: sudo $0 log-off"
+    ;;
+  log-off)
+    systemctl disable --now tapbox-batlog.service 2>/dev/null || true
+    rm -f /etc/systemd/system/tapbox-batlog.service
+    systemctl daemon-reload
+    echo "Battery logging stopped — data kept in $LOG_FILE"
+    ;;
+  _logloop)  # internal: run by tapbox-batlog.service
+    [[ -f $LOG_FILE ]] || echo "time,volt,amp,percent,plugged" > "$LOG_FILE"
+    while true; do
+      echo "$(date +'%F %T'),$(pisugar_get battery_v),$(pisugar_get battery_i),$(pisugar_get battery),$(pisugar_get battery_power_plugged)" >> "$LOG_FILE"
+      sleep 60
+    done
+    ;;
   *)
-    sed -n '4,13p' "$0"
+    sed -n '4,16p' "$0"
     exit 1
     ;;
 esac
