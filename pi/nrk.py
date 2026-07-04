@@ -294,12 +294,29 @@ def expand(target):
             return _series(m.group(1)) or [target]
     except (OSError, ET.ParseError):
         return [target]  # lookup failed — let mpv+yt-dlp have a go at the raw link
-    if target.lower().split("?")[0].endswith((".rss", ".xml")):
+    if target.startswith(("http://", "https://")):
         try:
-            return _feed_enclosures(_get(target)) or [target]
-        except (OSError, ET.ParseError):
-            return [target]
+            if target.lower().split("?")[0].endswith((".rss", ".xml")) or _sniffs_like_feed(target):
+                urls = _feed_enclosures(_get(target))
+                if urls:
+                    _log(f"RSS feed with {len(urls)} episodes: {target}")
+                    return urls
+        except (OSError, ET.ParseError) as e:
+            _log(f"feed parse failed ({e!r}) — passing link to mpv: {target}")
     return [target]
+
+
+def _sniffs_like_feed(url):
+    """Peek at the first bytes: does this URL serve RSS/XML? Works for feed
+    URLs without .rss/.xml extensions (acast, anchor, WordPress /feed/...)."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "tapbox/0.1"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            head = r.read(2048)
+        s = head.lstrip()[:300].lower()
+        return s.startswith(b"<?xml") or b"<rss" in s
+    except OSError:
+        return False
 
 
 if __name__ == "__main__":
