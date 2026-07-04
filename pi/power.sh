@@ -82,8 +82,10 @@ status_report() {
     [[ -n ${bv:-} ]]  && echo "PiSugar volt:  ${bv} V  (4.1=full, 3.58=half-ish, <3.5=charge now)"
     if [[ ${plugged:-} == true ]]; then
       echo "PiSugar amp:   on charger — battery draw not measurable now"
-    elif [[ -n ${bi:-} ]]; then
+    elif [[ -n ${bi:-} ]] && awk -v x="$bi" 'BEGIN{exit !(x > 0.001)}'; then
       echo "PiSugar amp:   ${bi} A draw"
+    else
+      echo "PiSugar amp:   n/a — PiSugar 3 has no battery current sensor"
     fi
   fi
   return 0
