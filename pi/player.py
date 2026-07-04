@@ -277,14 +277,18 @@ def main():
         try:
             path = ipc_get(sock, "path")
             pos = ipc_get(sock, "playback-time")
+            # A live stream (radio) has no finite duration — don't bookmark
+            # it (its "position" is the live-edge timestamp, not progress).
+            live = ipc_get(sock, "duration") in (None, 0)
             if path and isinstance(pos, (int, float)):
-                save_state(key, path, pos, ids.get(path))
+                if not live:
+                    save_state(key, path, pos, ids.get(path))
                 # heartbeat so a quiet-but-playing stream isn't mistaken
                 # for frozen (mpv runs silent); every ~30s
                 now_m = time.monotonic()
                 if now_m - last_beat > 30:
                     last_beat = now_m
-                    log(f"...playing, {int(pos)}s")
+                    log("...playing (live)" if live else f"...playing, {int(pos)}s")
             # Prefer the catalog title (NRK mp3s lack ID3, so mpv's
             # media-title falls back to an unhelpful filename)
             title = (titles.get(path) if path else None) or ipc_get(sock, "media-title")
