@@ -98,14 +98,26 @@ connect_headset() {
   local mac="$1"
   bt_up
 
-  if ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Paired: yes"; then
+  # bluetoothctl info can intermittently return nothing (D-Bus hiccup) —
+  # retry before concluding the device is unpaired.
+  local info=""
+  for _ in 1 2 3; do
+    info="$(bluetoothctl info "$mac" 2>/dev/null || true)"
+    [[ -n $info ]] && break
+    sleep 1
+  done
+
+  if ! grep -q "Paired: yes" <<<"$info"; then
     # Unknown/unpaired device: BlueZ must discover it before pairing works.
     echo "==> $mac is not paired — scanning for it (pairing mode helps)..."
     bluetoothctl --timeout 12 scan on >/dev/null 2>&1 || true
     local pair_out
     if ! pair_out="$(bluetoothctl pair "$mac" 2>&1)"; then
       echo "$pair_out"
-      if grep -qi "AuthenticationFailed\|AuthenticationCanceled" <<<"$pair_out"; then
+      if grep -qi "AlreadyExists" <<<"$pair_out"; then
+        # The bond exists after all (the info check lied) — just continue.
+        echo "==> Already paired — continuing."
+      elif grep -qi "AuthenticationFailed\|AuthenticationCanceled" <<<"$pair_out"; then
         # Auth failure = the device holds a stale key. ONLY here is it
         # right to clear our bond and pair fresh.
         echo "==> Stale key on the device — clearing bond and retrying once..."
