@@ -22,59 +22,72 @@ if [[ $EUID -ne 0 ]]; then
 fi
 SELF="$(readlink -f "$0")"
 
-leds() {  # <trigger> <brightness>
-  local led
-  for led in /sys/class/leds/ACT /sys/class/leds/led0; do
-    [[ -d $led ]] || continue
-    echo "$1" > "$led/trigger" 2>/dev/null || true
-    echo "$2" > "$led/brightness" 2>/dev/null || true
+write() {  # write <value> to <file>; skip silently if file is missing
+  if [[ -e $2 ]]; then
+    echo "$1" > "$2" 2>/dev/null || echo "warn: could not write $1 to $2" >&2
+  fi
+}
+
+set_cores() {  # 0 = offline cpu2+cpu3, 1 = online
+  local c
+  for c in 2 3; do
+    write "$1" "/sys/devices/system/cpu/cpu$c/online"
   done
 }
 
-governor() {
+set_governor() {
   local g
   for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-    echo "$1" > "$g" 2>/dev/null || true
+    write "$1" "$g"
   done
 }
 
-cores() {  # 0 = offline cpu2+cpu3, 1 = online
-  local c
-  for c in /sys/devices/system/cpu/cpu[23]/online; do
-    [[ -f $c ]] && { echo "$1" > "$c" 2>/dev/null || true; }
+set_leds() {  # <trigger> <brightness>
+  local led
+  for led in /sys/class/leds/ACT /sys/class/leds/led0; do
+    write "$1" "$led/trigger"
+    write "$2" "$led/brightness"
   done
+}
+
+status_report() {
+  echo "online CPUs:   $(cat /sys/devices/system/cpu/online)"
+  echo "governor:      $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+  echo "arm clock:     $(vcgencmd measure_clock arm 2>/dev/null | cut -d= -f2 || echo n/a) Hz"
+  echo "temp:          $(vcgencmd measure_temp 2>/dev/null | cut -d= -f2 || echo n/a)"
+  echo "throttled:     $(vcgencmd get_throttled 2>/dev/null | cut -d= -f2 || echo n/a)"
+  echo "wifi pwr save: $(iw dev wlan0 get power_save 2>/dev/null | awk '{print $NF}' || echo n/a)"
+  if command -v nc >/dev/null; then
+    local bat
+    bat="$( (echo 'get battery'; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null | awk '{print $2}' )" || true
+    [[ -n ${bat:-} ]] && echo "PiSugar batt:  ${bat}%"
+  fi
+  return 0
 }
 
 case "${1:-}" in
   save)
-    cores 0
-    governor powersave
-    leds none 0
+    set_cores 0
+    set_governor powersave
+    set_leds none 0
     vcgencmd display_power 0 >/dev/null 2>&1 || true
     if [[ $WIFI_POWERSAVE -eq 1 ]]; then
       iw dev wlan0 set power_save on 2>/dev/null || true
     fi
-    echo "Power save ON: 2 cores offline, powersave governor, LED+HDMI off."
+    echo "Power save ON — resulting state:"
+    status_report
     ;;
   perf)
-    cores 1
-    governor ondemand
-    leds mmc0 1
+    set_cores 1
+    set_governor ondemand
+    set_leds mmc0 1
     vcgencmd display_power 1 >/dev/null 2>&1 || true
     iw dev wlan0 set power_save off 2>/dev/null || true
-    echo "Back to defaults: all cores, ondemand governor, LED+HDMI on."
+    echo "Back to defaults — resulting state:"
+    status_report
     ;;
   status)
-    echo "online CPUs:   $(cat /sys/devices/system/cpu/online)"
-    echo "governor:      $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
-    echo "arm clock:     $(vcgencmd measure_clock arm 2>/dev/null | cut -d= -f2 || echo n/a) Hz"
-    echo "temp:          $(vcgencmd measure_temp 2>/dev/null | cut -d= -f2 || echo n/a)"
-    echo "throttled:     $(vcgencmd get_throttled 2>/dev/null | cut -d= -f2 || echo n/a)"
-    echo "wifi pwr save: $(iw dev wlan0 get power_save 2>/dev/null | awk '{print $NF}' || echo n/a)"
-    if command -v nc >/dev/null; then
-      bat="$( (echo 'get battery'; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null | awk '{print $2}' )"
-      [[ -n ${bat:-} ]] && echo "PiSugar batt:  ${bat}%"
-    fi
+    status_report
     ;;
   boot-on)
     cat > /etc/systemd/system/tapbox-power.service <<EOF
