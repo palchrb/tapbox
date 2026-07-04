@@ -99,7 +99,7 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 - [ ] Card → Spotify playlist/track/album/podcast mapping
 - [ ] Card → local mp3 file mapping (microSD)
 - [ ] **Parent app: drag-and-drop upload of local audio files** (mp3, m4a, wav, opus) via web UI — files stored on microSD, mapped to next-tapped card. Critical for offline use case (cabin/car/grandma without WiFi) — see section 10.
-- [ ] **Bluetooth A2DP source mode (output to BT headphones / external speakers):** Pair via web UI, route audio output to BT device. Critical for quiet listening (bedtime, shared spaces) and the v2 "tapbox Lite" architecture preview.
+- [ ] **Bluetooth A2DP source mode (output to BT headphones / external speakers):** Primary flow is a physical pairing button: long-press starts a ~20s scan and auto-pairs the strongest nearby audio device (A2DP UUID/icon filter, RSSI sort) — pattern hardware-validated in `pi/play.sh connect`. Web UI device picker is the fallback when several candidates are in range. Bond persists (requires pairable on — see pi/ scripts for the BlueZ gotchas), device auto-reconnects on power-on. Critical for quiet listening (bedtime, shared spaces) and the v2 "tapbox Lite" architecture preview.
 - [ ] Bluetooth A2DP sink mode (toggle in web UI; pair via long-press) — phone streams TO tapbox (escape hatch for unsupported services like Apple Music)
 - [ ] Polished admin web UI: list cards, add/edit/delete mappings, see currently-playing
 - [ ] Card programming: paste Spotify URL → write NDEF to next-tapped NTAG card OR save UID mapping
