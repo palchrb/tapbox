@@ -241,10 +241,12 @@ play_mpv() {
   # Expand NRK/RSS links to stream URLs via nrk.py (repo copy first, then installed)
   mapfile -t urls < <(python3 - "$link" <<PYEOF
 import sys
-sys.path.insert(0, "$(dirname "$(readlink -f "$0")")")
+# Repo copy must win over the installed copy — insert(0, ...) last = first
 sys.path.insert(0, "/usr/local/bin")
+sys.path.insert(0, "$(dirname "$(readlink -f "$0")")")
 try:
     import nrk
+    print(f"using {nrk.__file__}", file=sys.stderr)
     urls = nrk.expand(sys.argv[1])
 except Exception as e:
     print(f"nrk expansion failed: {e}", file=sys.stderr)
