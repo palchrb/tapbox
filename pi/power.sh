@@ -50,6 +50,10 @@ set_leds() {  # <trigger> <brightness>
   done
 }
 
+pisugar_get() {  # query pisugar-server, e.g. pisugar_get battery_v
+  (echo "get $1"; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null | awk '{print $2}'
+}
+
 status_report() {
   echo "online CPUs:   $(cat /sys/devices/system/cpu/online)"
   echo "governor:      $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
@@ -58,9 +62,13 @@ status_report() {
   echo "throttled:     $(vcgencmd get_throttled 2>/dev/null | cut -d= -f2 || echo n/a)"
   echo "wifi pwr save: $(iw dev wlan0 get power_save 2>/dev/null | awk '{print $NF}' || echo n/a)"
   if command -v nc >/dev/null; then
-    local bat
-    bat="$( (echo 'get battery'; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null | awk '{print $2}' )" || true
-    [[ -n ${bat:-} ]] && echo "PiSugar batt:  ${bat}%"
+    local bat bv bi
+    bat="$(pisugar_get battery)" || true
+    bv="$(pisugar_get battery_v)" || true
+    bi="$(pisugar_get battery_i)" || true
+    [[ -n ${bat:-} ]] && echo "PiSugar batt:  ${bat}%  (estimate — voltage is the truth)"
+    [[ -n ${bv:-} ]]  && echo "PiSugar volt:  ${bv} V  (4.1=full, 3.58=half-ish, <3.5=charge now)"
+    [[ -n ${bi:-} ]]  && echo "PiSugar amp:   ${bi} A draw"
   fi
   return 0
 }
