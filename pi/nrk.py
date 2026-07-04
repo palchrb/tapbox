@@ -36,6 +36,7 @@ Unknown URLs pass through untouched (mpv + yt-dlp handles them).
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -112,8 +113,10 @@ def _psapi_episodes(slug, kind="podcast"):
     return stubs[:MAX_EPISODES]
 
 
-def _episode_file(slug, episode_id):
-    return os.path.join(CACHE_DIR, slug, f"{episode_id}.mp3")
+def _episode_file(slug, episode_id, kind="podcast"):
+    # podcasts are plain mp3 downloads; series are HLS captured to m4a
+    ext = "mp3" if kind == "podcast" else "m4a"
+    return os.path.join(CACHE_DIR, slug, f"{episode_id}.{ext}")
 
 
 def _new_episodes(slug, known_ids, kind="podcast"):
@@ -190,8 +193,8 @@ def _catalog(slug, kind="podcast"):
     return []
 
 
-def _local_or_remote(slug, ep):
-    local = _episode_file(slug, ep["id"])
+def _local_or_remote(slug, ep, kind="podcast"):
+    local = _episode_file(slug, ep["id"], kind)
     return local if os.path.exists(local) else ep["url"]
 
 
@@ -238,10 +241,7 @@ def _queue(slug, kind, newest_first):
         return []
     if newest_first:
         episodes = list(reversed(episodes))
-    if kind == "podcast":  # only podcasts have downloadable episode files
-        urls = [_local_or_remote(slug, ep) for ep in episodes]
-    else:
-        urls = [ep["url"] for ep in episodes]
+    urls = [_local_or_remote(slug, ep, kind) for ep in episodes]
     n_local = sum(1 for u in urls if u.startswith("/"))
     order = "newest first" if newest_first else "oldest first"
     _log(f"{slug}: queueing {len(urls)} episodes, {order} "
@@ -258,30 +258,41 @@ def podcast_slug(target):
     return m.group(1) if m else None
 
 
-def sync(slug, count=SYNC_COUNT):
+def sync(slug, count=SYNC_COUNT, kind="podcast"):
     """Download the newest <count> episodes to the cache, newest first.
-    Already-cached episodes are skipped, so this is cheap to re-run."""
-    episodes = _catalog(slug, "podcast")  # oldest first
+    Podcasts are straight mp3 downloads; series episodes (HLS) are captured
+    to m4a with ffmpeg. Already-cached episodes are skipped."""
+    episodes = _catalog(slug, kind)  # oldest first
     wanted = episodes[-count:]
-    have = sum(1 for ep in wanted if os.path.exists(_episode_file(slug, ep["id"])))
-    _log(f"{slug}: sync — {len(wanted)} newest wanted, {have} already cached, "
-         f"{len(wanted) - have} to download")
+    have = sum(1 for ep in wanted
+               if os.path.exists(_episode_file(slug, ep["id"], kind)))
+    _log(f"{slug}: sync ({kind}) — {len(wanted)} newest wanted, {have} already "
+         f"cached, {len(wanted) - have} to download")
     os.makedirs(os.path.join(CACHE_DIR, slug), exist_ok=True)
     for ep in reversed(wanted):  # newest first
-        dest = _episode_file(slug, ep["id"])
+        dest = _episode_file(slug, ep["id"], kind)
         if os.path.exists(dest):
             continue
         tmp = dest + ".part"
         try:
-            with urllib.request.urlopen(ep["url"], timeout=120) as r, open(tmp, "wb") as f:
-                while True:
-                    chunk = r.read(1 << 16)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+            if kind == "podcast":
+                with urllib.request.urlopen(ep["url"], timeout=120) as r, \
+                        open(tmp, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 16)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+            else:  # HLS -> single m4a file, no re-encode
+                result = subprocess.run(
+                    ["ffmpeg", "-nostdin", "-loglevel", "error", "-y",
+                     "-i", ep["url"], "-c", "copy", "-f", "mp4", tmp],
+                    timeout=900)
+                if result.returncode != 0:
+                    raise OSError(f"ffmpeg exited {result.returncode}")
             os.replace(tmp, dest)
             print(f"cached {slug}/{ep['id']}", flush=True)
-        except OSError as e:
+        except (OSError, subprocess.TimeoutExpired) as e:
             print(f"failed {slug}/{ep['id']}: {e}", flush=True)
             try:
                 os.remove(tmp)
@@ -368,7 +379,9 @@ def _sniffs_like_feed(url):
 if __name__ == "__main__":
     import sys
     if len(sys.argv) >= 3 and sys.argv[1] == "sync":
-        sync(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else SYNC_COUNT)
+        sync(sys.argv[2],
+             int(sys.argv[3]) if len(sys.argv) > 3 else SYNC_COUNT,
+             sys.argv[4] if len(sys.argv) > 4 else "podcast")
     elif len(sys.argv) == 2:
         print("\n".join(expand(sys.argv[1])))
     else:

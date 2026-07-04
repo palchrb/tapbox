@@ -207,14 +207,21 @@ def main():
          f"--audio-device={ALSA_DEVICE}", f"--input-ipc-server={sock}"] + urls)
     signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
 
-    # NRK podcast? Cache the newest episodes in the background for offline use
+    # NRK podcast/series? Cache the newest episodes in the background
+    kind = None
     m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
+    if m:
+        kind = "podcast"
+    else:
+        m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
+        if m:
+            kind = "series"
     if m:
         nrkpy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nrk.py")
         if os.path.exists(nrkpy):
-            subprocess.Popen([sys.executable, nrkpy, "sync", m.group(1)],
+            subprocess.Popen([sys.executable, nrkpy, "sync", m.group(1), "50", kind],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            log(f"background sync started for '{m.group(1)}'")
+            log(f"background sync started for '{m.group(1)}' ({kind})")
 
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):
