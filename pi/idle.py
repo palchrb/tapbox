@@ -20,6 +20,7 @@ import time
 import urllib.request
 
 API = "http://127.0.0.1:3678"
+DAEMON = "http://127.0.0.1:3679"
 MPV_SOCK = "/run/tapbox-mpv.sock"
 IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 30
 CHECK_S = 60
@@ -51,12 +52,23 @@ def mpv_playing():
     return False
 
 
+def daemon_playing():
+    """Unified answer from the orchestration daemon, None if it's down."""
+    try:
+        with urllib.request.urlopen(DAEMON + "/status", timeout=5) as r:
+            return bool(json.loads(r.read()).get("playing"))
+    except (OSError, ValueError):
+        return None
+
+
 def main():
     idle = 0
     print(f"tapbox-idle: will power off after {IDLE_MIN} min without playback",
           flush=True)
     while True:
-        active = go_playing() or mpv_playing()
+        active = daemon_playing()
+        if active is None:  # daemon down — check the sources directly
+            active = go_playing() or mpv_playing()
         idle = 0 if active else idle + CHECK_S
         if idle >= IDLE_MIN * 60:
             subprocess.run(["logger",

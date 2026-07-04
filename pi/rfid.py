@@ -21,7 +21,9 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 
+DAEMON = "http://127.0.0.1:3679"
 CARDS_FILE = "/etc/tapbox/cards.json"
 PENDING_FILE = "/etc/tapbox/pending-map"
 READ_TIMEOUT_S = 0.15   # how long each poll waits for a card
@@ -51,13 +53,21 @@ def stop_mpv():
 
 def play(target):
     global mpv_proc
+    log.info("playing: %s", target)
+    # Preferred path: hand the target to the orchestration daemon, which
+    # owns playback state (so buttons etc. route coherently afterwards).
+    try:
+        req = urllib.request.Request(
+            DAEMON + "/play", data=json.dumps({"target": target}).encode(),
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=15).read()
+        return
+    except (OSError, ValueError) as e:
+        log.warning("daemon unreachable (%s) — playing directly", e)
     stop_mpv()
     player = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.py")
     if not os.path.exists(player):
         player = "/usr/local/bin/tapbox-player"
-    log.info("playing: %s", target)
-    # player.py routes: Spotify -> go-librespot API (exits right away),
-    # everything else -> mpv with resume (runs until stopped/finished)
     mpv_proc = subprocess.Popen([sys.executable, player, target])
 
 

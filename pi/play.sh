@@ -6,8 +6,9 @@
 # Usage:
 #   sudo ./play.sh connect                # auto-find device in pairing mode, pair + connect
 #   sudo ./play.sh connect "jbl"          # same, but match device name (if several found)
-#   sudo ./play.sh <spotify-link>         # play (auto-connects remembered/nearby device)
+#   sudo ./play.sh <spotify-link>         # play IN BACKGROUND via the daemon
 #   sudo ./play.sh --fresh <link>         # ignore remembered position, start from the top
+#   sudo ./play.sh --fg <link>            # play in the foreground (dev; Ctrl+C stops)
 #   sudo ./play.sh AA:BB:CC:DD:EE:FF <spotify-link>   # explicit MAC still works
 #   sudo ./play.sh scan                   # list everything seen during a scan
 #   sudo ./play.sh test                   # play a test sound through the headset (no Spotify)
@@ -33,11 +34,14 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+DAEMON="http://127.0.0.1:3679"
 FRESH_ARG=""
-if [[ ${1:-} == "--fresh" ]]; then
-  FRESH_ARG="--fresh"
+FG=0
+while [[ ${1:-} == "--fresh" || ${1:-} == "--fg" ]]; do
+  [[ $1 == "--fresh" ]] && FRESH_ARG="--fresh"
+  [[ $1 == "--fg" ]] && FG=1
   shift
-fi
+done
 
 usage() {
   cat >&2 <<EOF
@@ -272,8 +276,21 @@ case "$1" in
     aplay -D tapbox_bt /usr/share/sounds/alsa/Front_Center.wav
     exit 0 ;;
   pause|resume|next|prev|stop)
-    wait_for_api
-    curl -sf -X POST "$API/player/$1" >/dev/null && echo "OK: $1"
+    # Route via the daemon so the command hits whatever is actually active
+    case "$1" in
+      pause|resume) EP=playpause ;;
+      *) EP="$1" ;;
+    esac
+    if curl -sf -X POST "$DAEMON/$EP" -H 'Content-Type: application/json' -d '{}'; then
+      echo " OK: $1"
+    else
+      echo "daemon not running — falling back to Spotify API" >&2
+      wait_for_api
+      curl -sf -X POST "$API/player/$1" >/dev/null && echo "OK: $1 (spotify only)"
+    fi
+    exit 0 ;;
+  status)
+    curl -sf "$DAEMON/status" | jq . || echo "daemon not running" >&2
     exit 0 ;;
 esac
 
@@ -295,7 +312,26 @@ if [[ $LINK =~ ^spotify: || $LINK == *open.spotify.com* || $LINK == *spotify.lin
     echo "WARNING: not logged in to Spotify yet — run install.sh and pick the device in the Spotify app." >&2
   fi
 fi
-PLAYERPY="$(dirname "$(readlink -f "$0")")/player.py"
-[[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/tapbox-player
-# shellcheck disable=SC2086
-python3 "$PLAYERPY" $FRESH_ARG "$LINK"
+
+if [[ $FG -eq 1 ]]; then
+  PLAYERPY="$(dirname "$(readlink -f "$0")")/player.py"
+  [[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/tapbox-player
+  # shellcheck disable=SC2086
+  python3 "$PLAYERPY" $FRESH_ARG "$LINK"
+  exit 0
+fi
+
+FRESH_BOOL=false
+[[ -n $FRESH_ARG ]] && FRESH_BOOL=true
+if curl -sf -X POST "$DAEMON/play" -H 'Content-Type: application/json' \
+     -d "{\"target\": \"$LINK\", \"fresh\": $FRESH_BOOL}" >/dev/null; then
+  echo "==> Playing in the background (survives this terminal)."
+  echo "    Follow:  journalctl -u tapbox-daemon -f"
+  echo "    Control: sudo $0 pause|next|prev|stop   or the buttons"
+else
+  echo "daemon not running — playing in the foreground instead" >&2
+  PLAYERPY="$(dirname "$(readlink -f "$0")")/player.py"
+  [[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/tapbox-player
+  # shellcheck disable=SC2086
+  python3 "$PLAYERPY" $FRESH_ARG "$LINK"
+fi

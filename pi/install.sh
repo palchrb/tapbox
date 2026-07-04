@@ -224,6 +224,22 @@ install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || tru
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
 install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  || true
 
+DAEMON_CHANGED=0
+install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
+write_if_changed /etc/systemd/system/tapbox-daemon.service <<'EOF' && DAEMON_CHANGED=1
+[Unit]
+Description=TapBox orchestration daemon (playback state + API)
+After=go-librespot.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 BTN_CHANGED=0
 install_if_changed 755 "$SCRIPT_DIR/buttons.py" /usr/local/bin/tapbox-buttons && BTN_CHANGED=1
 write_if_changed /etc/systemd/system/tapbox-buttons.service <<'EOF' && BTN_CHANGED=1
@@ -257,11 +273,12 @@ EOF
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
-  tapbox-rfid.service tapbox-buttons.service
+  tapbox-rfid.service tapbox-buttons.service tapbox-daemon.service
 [[ $GO_CHANGED    -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
+[[ $DAEMON_CHANGED -eq 1 ]] && { echo "    orchestration daemon changed — restarting"; systemctl restart tapbox-daemon.service; }
 
 # --- 7. API + login ----------------------------------------------------------
 

@@ -25,6 +25,7 @@ import urllib.request
 # (used by the PiSugar tap shells) imports lazily so it runs on plain python3.
 
 API = "http://127.0.0.1:3678"
+DAEMON = "http://127.0.0.1:3679"
 MPV_SOCK = os.environ.get("TAPBOX_MPV_SOCK", "/run/tapbox-mpv.sock")
 
 # Standard Linux input-event-codes (raw ints so no evdev import at load)
@@ -92,6 +93,18 @@ def spotify_command(action):
 
 
 def handle(action):
+    # Preferred: the orchestration daemon owns "what is active" and can
+    # even resume the last-played target on a dead session.
+    try:
+        req = urllib.request.Request(
+            DAEMON + "/" + action, data=b"{}",
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            routed = json.loads(r.read()).get("routed")
+        log(f"{action} -> daemon ({routed})")
+        return
+    except (OSError, ValueError):
+        pass  # daemon not running — fall back to direct heuristic
     try:
         if mpv_command(MPV_CMDS[action]):
             log(f"{action} -> mpv")
