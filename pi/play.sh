@@ -48,6 +48,10 @@ strip_ansi() { sed -E $'s/\x1B\\[[0-9;]*[A-Za-z]//g'; }
 bt_up() {
   rfkill unblock bluetooth 2>/dev/null || true
   bluetoothctl power on >/dev/null
+  # Without pairable on, BlueZ does a non-bonding pairing (new_link_key with
+  # store_hint 0): "Pairing successful" but the key is thrown away, so the
+  # bond is gone after a power cycle and reconnect never works.
+  bluetoothctl pairable on >/dev/null
 }
 
 # Scan for SCAN_SECS and print one line per device actually seen during the
@@ -85,7 +89,15 @@ connect_headset() {
 
   if ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Paired: yes"; then
     echo "==> Pairing with $mac (make sure it is in pairing mode)..."
-    bluetoothctl pair "$mac"
+    if ! bluetoothctl pair "$mac"; then
+      # Typically auth failed 0x05: the device holds a stale key from an
+      # earlier half-pairing. Clear our side and pair fresh.
+      echo "==> Pairing failed — clearing stale bond and retrying once..."
+      bluetoothctl remove "$mac" >/dev/null 2>&1 || true
+      sleep 2
+      bluetoothctl --timeout 10 scan on >/dev/null 2>&1 || true
+      bluetoothctl pair "$mac"
+    fi
     bluetoothctl trust "$mac"
   fi
 

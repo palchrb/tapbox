@@ -113,6 +113,7 @@ cat > /usr/local/bin/tapbox-bt-reconnect <<'EOF'
 MAC_FILE=/etc/tapbox/bt-headset
 rfkill unblock bluetooth 2>/dev/null || true
 bluetoothctl power on >/dev/null 2>&1 || true
+bluetoothctl pairable on >/dev/null 2>&1 || true
 while true; do
   mac="$(cat "$MAC_FILE" 2>/dev/null || true)"
   if [[ -n $mac ]] && ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
