@@ -9,6 +9,7 @@
 #   sudo ./play.sh <spotify-link>         # play (auto-connects remembered/nearby device)
 #   sudo ./play.sh AA:BB:CC:DD:EE:FF <spotify-link>   # explicit MAC still works
 #   sudo ./play.sh scan                   # list everything seen during a scan
+#   sudo ./play.sh test                   # play a test sound through the headset (no Spotify)
 #   sudo ./play.sh pause | resume | next | prev | stop
 #
 # <spotify-link> can be a share link (https://open.spotify.com/track/...),
@@ -34,6 +35,7 @@ Usage:
   sudo $0 <spotify-link>        play a track/album/playlist link
   sudo $0 <MAC> <spotify-link>  explicit device MAC
   sudo $0 scan                  list all devices seen during a scan
+  sudo $0 test                  play a test sound through the headset (no Spotify)
   sudo $0 pause|resume|next|prev|stop
 EOF
   exit 1
@@ -87,21 +89,34 @@ connect_headset() {
     bluetoothctl trust "$mac"
   fi
 
-  if bluetoothctl info "$mac" | grep -q "Connected: yes"; then
-    echo "==> Device already connected."
+  # Always request a profile connect: right after pairing the device shows
+  # "Connected: yes" from the pairing link itself, but A2DP is not up yet.
+  echo "==> Connecting (A2DP) to $mac..."
+  local ok=""
+  for _ in 1 2 3; do
+    if bluetoothctl connect "$mac"; then ok=1; break; fi
+    sleep 3
+  done
+  if [[ -z $ok ]]; then
+    echo "Could not connect. If pairing keeps failing, try interactively:" >&2
+    echo "  bluetoothctl  ->  scan on / pair $mac / trust $mac / connect $mac" >&2
+    exit 1
+  fi
+
+  # The real "connected" test: bluealsa must expose an A2DP PCM for the device.
+  echo -n "==> Waiting for audio transport"
+  local ready=""
+  for _ in $(seq 1 15); do
+    if bluealsa-aplay -L 2>/dev/null | grep -qi "$mac"; then ready=1; break; fi
+    echo -n "."
+    sleep 1
+  done
+  echo
+  if [[ -n $ready ]]; then
+    echo "==> Audio transport ready."
   else
-    echo "==> Connecting to $mac..."
-    local ok=""
-    for _ in 1 2 3; do
-      if bluetoothctl connect "$mac"; then ok=1; break; fi
-      sleep 3
-    done
-    if [[ -z $ok ]]; then
-      echo "Could not connect. If pairing keeps failing, try interactively:" >&2
-      echo "  bluetoothctl  ->  scan on / pair $mac / trust $mac / connect $mac" >&2
-      exit 1
-    fi
-    sleep 2  # give bluealsa a moment to register the A2DP transport
+    echo "WARNING: bluetooth connected, but no A2DP audio transport appeared." >&2
+    echo "Debug with: bluealsa-aplay -L   and   journalctl -u bluealsa -n 20" >&2
   fi
 
   mkdir -p "$(dirname "$MAC_FILE")"
@@ -223,6 +238,11 @@ case "$1" in
   connect)
     auto_connect "${2:-}"
     echo "Device connected and set as output. Play with: sudo $0 <spotify-link>"
+    exit 0 ;;
+  test)
+    ensure_headset
+    echo "==> Playing test sound (you should hear 'Front Center')..."
+    aplay -D tapbox_bt /usr/share/sounds/alsa/Front_Center.wav
     exit 0 ;;
   pause|resume|next|prev|stop)
     wait_for_api
