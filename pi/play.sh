@@ -4,10 +4,12 @@
 # Requires install.sh to have been run (and Spotify login completed).
 #
 # Usage:
-#   sudo ./play.sh scan                                  # find your headset's MAC
-#   sudo ./play.sh AA:BB:CC:DD:EE:FF <spotify-link>      # pair + connect + play
-#   sudo ./play.sh <spotify-link>                        # reuse remembered headset
-#   sudo ./play.sh pause | resume | next | prev | stop   # playback control
+#   sudo ./play.sh connect                # auto-find headset in pairing mode, pair + connect
+#   sudo ./play.sh connect "jbl"          # same, but match device name (if several found)
+#   sudo ./play.sh <spotify-link>         # play (auto-connects remembered/nearby headset)
+#   sudo ./play.sh AA:BB:CC:DD:EE:FF <spotify-link>   # explicit MAC still works
+#   sudo ./play.sh scan                   # raw scan, list everything with MACs
+#   sudo ./play.sh pause | resume | next | prev | stop
 #
 # <spotify-link> can be a share link (https://open.spotify.com/track/...),
 # a short link (https://spotify.link/...), or a spotify:track:... URI.
@@ -24,17 +26,41 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-usage() { sed -n '3,15p' "$0"; exit 1; }
+usage() {
+  cat >&2 <<EOF
+Usage:
+  sudo $0 connect [name]        pair + connect headset (pairing mode on!)
+  sudo $0 <spotify-link>        play a track/album/playlist link
+  sudo $0 <MAC> <spotify-link>  explicit headset MAC
+  sudo $0 scan                  list all visible bluetooth devices
+  sudo $0 pause|resume|next|prev|stop
+EOF
+  exit 1
+}
 
 scan() {
   bluetoothctl power on >/dev/null
   echo "Scanning for 15s — put your headset in pairing mode now..."
-  bluetoothctl --timeout 15 scan on >/dev/null || true
+  bluetoothctl --timeout 15 scan on >/dev/null 2>&1 || true
   echo
   echo "Devices found (name + MAC):"
   bluetoothctl devices
-  echo
-  echo "Next: sudo $0 <MAC> <spotify-link>"
+}
+
+# Prints "MAC<TAB>NAME" for nearby audio devices (A2DP sinks / headsets).
+discover_audio() {
+  bluetoothctl power on >/dev/null
+  echo "Scanning 15s for audio devices — put your headset in pairing mode..." >&2
+  bluetoothctl --timeout 15 scan on >/dev/null 2>&1 || true
+  local mac name info
+  while read -r _ mac name; do
+    info="$(bluetoothctl info "$mac" 2>/dev/null)" || continue
+    # must look like an audio device (headset icon or A2DP sink UUID)
+    grep -qiE 'Icon: audio|Audio Sink|0000110b' <<<"$info" || continue
+    # must be nearby right now (RSSI from this scan) or already paired
+    grep -qE 'RSSI:|Paired: yes' <<<"$info" || continue
+    printf '%s\t%s\n' "$mac" "$name"
+  done < <(bluetoothctl devices)
 }
 
 connect_headset() {
@@ -43,7 +69,6 @@ connect_headset() {
 
   if ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Paired: yes"; then
     echo "==> Pairing with $mac (make sure it is in pairing mode)..."
-    bluetoothctl --timeout 12 scan on >/dev/null || true
     bluetoothctl pair "$mac"
     bluetoothctl trust "$mac"
   fi
@@ -65,7 +90,10 @@ connect_headset() {
     sleep 2  # give bluealsa a moment to register the A2DP transport
   fi
 
-  # Point the tapbox_bt ALSA device at this headset and remember the MAC
+  mkdir -p "$(dirname "$MAC_FILE")"
+  echo "$mac" > "$MAC_FILE"
+
+  # Point the tapbox_bt ALSA device at this headset
   if ! grep -q "$mac" /etc/asound.conf 2>/dev/null; then
     cat > /etc/asound.conf <<EOF
 # Managed by tapbox pi/play.sh
@@ -78,10 +106,51 @@ pcm.tapbox_bt {
     }
 }
 EOF
-    mkdir -p "$(dirname "$MAC_FILE")"
-    echo "$mac" > "$MAC_FILE"
     echo "==> ALSA output routed to $mac, restarting go-librespot..."
     systemctl restart go-librespot
+  fi
+}
+
+# Find a headset automatically (optionally filtered by name), then connect.
+auto_connect() {
+  local filter="${1:-}"
+  local candidates
+  if [[ -n $filter ]]; then
+    candidates="$(discover_audio | grep -iF "$filter" || true)"
+  else
+    candidates="$(discover_audio)"
+  fi
+
+  local count
+  count="$(grep -c . <<<"$candidates" || true)"
+  [[ -n $candidates ]] || count=0
+
+  if [[ $count -eq 0 ]]; then
+    echo "No audio devices found. Is the headset in pairing mode?" >&2
+    echo "See everything nearby with: sudo $0 scan" >&2
+    exit 1
+  elif [[ $count -gt 1 ]]; then
+    echo "Multiple audio devices found:" >&2
+    sed 's/^/  /' <<<"$candidates" >&2
+    echo "Pick one by name: sudo $0 connect \"<name>\"" >&2
+    exit 1
+  fi
+
+  local mac name
+  mac="${candidates%%$'\t'*}"
+  name="${candidates#*$'\t'}"
+  echo "==> Found headset: $name ($mac)"
+  connect_headset "$mac"
+}
+
+# Connect whatever we know about: remembered headset, else auto-discover.
+ensure_headset() {
+  local mac
+  mac="$(cat "$MAC_FILE" 2>/dev/null || true)"
+  if [[ -n $mac ]]; then
+    connect_headset "$mac"
+  else
+    auto_connect ""
   fi
 }
 
@@ -121,27 +190,24 @@ show_status() {
 case "$1" in
   scan)
     scan; exit 0 ;;
+  connect)
+    auto_connect "${2:-}"
+    echo "Headset connected and set as output. Play with: sudo $0 <spotify-link>"
+    exit 0 ;;
   pause|resume|next|prev|stop)
     wait_for_api
     curl -sf -X POST "$API/player/$1" >/dev/null && echo "OK: $1"
     exit 0 ;;
 esac
 
-# Sort out MAC vs link arguments
+# Remaining forms: <link>  or  <MAC> <link>
 if [[ $1 =~ $MAC_RE ]]; then
-  MAC="$1"
+  connect_headset "$1"
   LINK="${2:-}"
 else
-  MAC="$(cat "$MAC_FILE" 2>/dev/null || true)"
   LINK="$1"
-  if [[ -z $MAC ]]; then
-    echo "No headset remembered yet. Run: sudo $0 scan" >&2
-    echo "Then: sudo $0 <MAC> <spotify-link>" >&2
-    exit 1
-  fi
+  ensure_headset
 fi
-
-connect_headset "$MAC"
 
 [[ -n ${LINK:-} ]] || { echo "Headset connected. Add a Spotify link to play something."; exit 0; }
 
