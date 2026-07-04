@@ -33,10 +33,15 @@ Unknown URLs pass through untouched (mpv + yt-dlp handles them).
 import json
 import os
 import re
+import sys
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+
+
+def _log(msg):
+    print(f"nrk: {msg}", file=sys.stderr, flush=True)
 
 PSAPI = "https://psapi.nrk.no"
 MAX_EPISODES = 100
@@ -74,47 +79,55 @@ def _podcast_manifest_url(episode_id):
     return None
 
 
-def _psapi_podcast_episode_ids(slug):
-    """Full episode id list from the psapi catalog, oldest first."""
-    ids = []
+def _episode_stub(ep):
+    self_href = ((ep.get("_links") or {}).get("self") or {}).get("href", "")
+    eid = self_href.rstrip("/").split("/")[-1]
+    title = (ep.get("titles") or {}).get("title") or ""
+    return {"id": eid, "title": title} if eid else None
+
+
+def _psapi_podcast_episodes(slug):
+    """Full [{id, title}] list from the psapi catalog, oldest first."""
+    stubs = []
     href = f"/radio/catalog/podcast/{slug}/episodes?page=1&pageSize=50&sort=asc"
-    while href and len(ids) < MAX_EPISODES:
+    while href and len(stubs) < MAX_EPISODES:
         data = _get_json(PSAPI + href)
         for ep in (data.get("_embedded") or {}).get("episodes") or []:
-            self_href = ((ep.get("_links") or {}).get("self") or {}).get("href", "")
-            eid = self_href.rstrip("/").split("/")[-1]
-            if eid:
-                ids.append(eid)
+            stub = _episode_stub(ep)
+            if stub:
+                stubs.append(stub)
         href = ((data.get("_links") or {}).get("next") or {}).get("href")
-    return ids[:MAX_EPISODES]
+    return stubs[:MAX_EPISODES]
 
 
 def _episode_file(slug, episode_id):
     return os.path.join(CACHE_DIR, slug, f"{episode_id}.mp3")
 
 
-def _new_episode_ids(slug, known_ids):
-    """IDs newer than anything we know, oldest first. Walks pages newest-first
-    and stops at the first known id, so the steady-state cost is ONE call."""
+def _new_episodes(slug, known_ids):
+    """[{id, title}] newer than anything we know, oldest first. Walks pages
+    newest-first and stops at the first known id: steady-state cost is ONE call."""
     new = []
     href = f"/radio/catalog/podcast/{slug}/episodes?page=1&pageSize=50&sort=desc"
     while href and len(new) < MAX_EPISODES:
         data = _get_json(PSAPI + href)
         for ep in (data.get("_embedded") or {}).get("episodes") or []:
-            self_href = ((ep.get("_links") or {}).get("self") or {}).get("href", "")
-            eid = self_href.rstrip("/").split("/")[-1]
-            if eid in known_ids:
+            stub = _episode_stub(ep)
+            if stub and stub["id"] in known_ids:
                 return list(reversed(new))
-            if eid:
-                new.append(eid)
+            if stub:
+                new.append(stub)
         href = ((data.get("_links") or {}).get("next") or {}).get("href")
     return list(reversed(new))
 
 
-def _resolve_manifests(ids):
+def _resolve_manifests(stubs):
     with ThreadPoolExecutor(max_workers=8) as ex:
-        urls = list(ex.map(_podcast_manifest_url, ids))
-    return [{"id": i, "url": u} for i, u in zip(ids, urls) if u]
+        urls = list(ex.map(_podcast_manifest_url, [s["id"] for s in stubs]))
+    resolved = [{**s, "url": u} for s, u in zip(stubs, urls) if u]
+    if len(resolved) < len(stubs):
+        _log(f"warning: {len(stubs) - len(resolved)} episode(s) had no playable manifest")
+    return resolved
 
 
 def _podcast_catalog(slug):
@@ -130,15 +143,25 @@ def _podcast_catalog(slug):
     except (OSError, ValueError):
         pass
     if cached and time.time() - cached.get("fetched_at", 0) < CATALOG_TTL_S:
+        age_h = (time.time() - cached["fetched_at"]) / 3600
+        _log(f"{slug}: catalog cache fresh ({len(cached['episodes'])} episodes, {age_h:.1f}h old) — no API calls")
         return cached["episodes"]
 
     try:
         if cached and cached.get("episodes"):
             known = {ep["id"] for ep in cached["episodes"]}
-            episodes = cached["episodes"] + _resolve_manifests(_new_episode_ids(slug, known))
+            fresh = _new_episodes(slug, known)
+            if fresh:
+                _log(f"{slug}: {len(fresh)} new episode(s) since last check: "
+                     + ", ".join(s.get("title") or s["id"] for s in fresh[:5]))
+            else:
+                _log(f"{slug}: catalog re-checked — nothing new")
+            episodes = cached["episodes"] + _resolve_manifests(fresh)
             episodes = episodes[-MAX_EPISODES:]
         else:
-            episodes = _resolve_manifests(_psapi_podcast_episode_ids(slug))
+            _log(f"{slug}: first fetch — walking full psapi catalog...")
+            episodes = _resolve_manifests(_psapi_podcast_episodes(slug))
+            _log(f"{slug}: catalog has {len(episodes)} playable episodes")
         if episodes:
             os.makedirs(CACHE_DIR, exist_ok=True)
             tmp = path + ".tmp"
@@ -146,9 +169,10 @@ def _podcast_catalog(slug):
                 json.dump({"fetched_at": time.time(), "episodes": episodes}, f)
             os.replace(tmp, path)
             return episodes
-    except OSError:
-        pass
+    except OSError as e:
+        _log(f"{slug}: psapi catalog failed ({e!r})")
     if cached:
+        _log(f"{slug}: using stale catalog cache ({len(cached['episodes'])} episodes) — offline mode")
         return cached["episodes"]
     return []
 
@@ -179,7 +203,16 @@ def _podcast(slug, episode_id=None):
     # psapi catalog (cached). Cached episodes play from disk.
     episodes = _podcast_catalog(slug)
     if episodes:
-        return [_local_or_remote(slug, ep) for ep in episodes]
+        urls = [_local_or_remote(slug, ep) for ep in episodes]
+        n_local = sum(1 for u in urls if u.startswith("/"))
+        _log(f"{slug}: queueing {len(urls)} episodes, oldest first "
+             f"({n_local} from local cache, {len(urls) - n_local} streamed):")
+        for i, (ep, u) in enumerate(zip(episodes, urls), 1):
+            mark = "  [cached]" if u.startswith("/") else ""
+            _log(f"  {i:3d}. {ep.get('title') or ep['id']}{mark}")
+        return urls
+    _log(f"{slug}: psapi gave nothing — falling back to official RSS "
+         "(often truncated to the last few episodes!)")
     return _feed_enclosures(_get(f"https://podkast.nrk.no/program/{slug}.rss"))
 
 
@@ -193,8 +226,12 @@ def sync(slug, count=SYNC_COUNT):
     """Download the newest <count> episodes to the cache, newest first.
     Already-cached episodes are skipped, so this is cheap to re-run."""
     episodes = _podcast_catalog(slug)  # oldest first
+    wanted = episodes[-count:]
+    have = sum(1 for ep in wanted if os.path.exists(_episode_file(slug, ep["id"])))
+    _log(f"{slug}: sync — {len(wanted)} newest wanted, {have} already cached, "
+         f"{len(wanted) - have} to download")
     os.makedirs(os.path.join(CACHE_DIR, slug), exist_ok=True)
-    for ep in reversed(episodes[-count:]):  # newest first
+    for ep in reversed(wanted):  # newest first
         dest = _episode_file(slug, ep["id"])
         if os.path.exists(dest):
             continue
