@@ -104,8 +104,43 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+cat > /usr/local/bin/tapbox-bt-reconnect <<'EOF'
+#!/usr/bin/env bash
+# Reconnects the remembered BT headset (written by play.sh) whenever it is
+# powered on near the box, so turning the headset on is all it takes.
+# Cheap poll loop for the test rig; the product version will be D-Bus
+# event-driven inside the orchestration daemon.
+MAC_FILE=/etc/tapbox/bt-headset
+rfkill unblock bluetooth 2>/dev/null || true
+bluetoothctl power on >/dev/null 2>&1 || true
+while true; do
+  mac="$(cat "$MAC_FILE" 2>/dev/null || true)"
+  if [[ -n $mac ]] && ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
+    bluetoothctl connect "$mac" >/dev/null 2>&1 || true
+  fi
+  sleep 20
+done
+EOF
+chmod +x /usr/local/bin/tapbox-bt-reconnect
+
+cat > /etc/systemd/system/tapbox-bt-reconnect.service <<EOF
+[Unit]
+Description=TapBox bluetooth headset auto-reconnect
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+ExecStart=/usr/local/bin/tapbox-bt-reconnect
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable --now go-librespot.service
+systemctl enable --now tapbox-bt-reconnect.service
 
 echo "==> [5/6] Waiting for the API to come up..."
 for _ in $(seq 1 20); do
