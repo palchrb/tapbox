@@ -78,8 +78,8 @@ status_report() {
     bi="$(pisugar_get battery_i)" || true
     local plugged
     plugged="$(pisugar_get battery_power_plugged)" || true
-    [[ -n ${bat:-} ]] && printf 'PiSugar batt:  ~%.0f%%  (estimate — voltage is the truth)\n' "$bat"
-    [[ -n ${bv:-} ]]  && printf 'PiSugar volt:  %.2f V  (4.1=full, ~3.75=half, <3.5=charge now)\n' "$bv"
+    [[ -n ${bat:-} ]] && LC_ALL=C printf 'PiSugar batt:  ~%.0f%%  (estimate — voltage is the truth)\n' "$bat"
+    [[ -n ${bv:-} ]]  && LC_ALL=C printf 'PiSugar volt:  %.2f V  (4.1=full, ~3.75=half, <3.5=charge now)\n' "$bv"
     if [[ ${plugged:-} == true ]]; then
       echo "PiSugar amp:   on charger — battery draw not measurable now"
     elif [[ -n ${bi:-} ]] && awk -v x="$bi" 'BEGIN{exit !(x > 0.001)}'; then
