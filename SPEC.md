@@ -139,6 +139,7 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 - Cloud-relay for remote management
 - Multi-device household sync
 - Spotify Connect Partner certification (if scale justifies cost)
+- **Official partner integrations for DRM services (distinct from the BYO-content default):** Storytel, Spotify etc. run sanctioned partner APIs — Storytel's official Sonos integration proves a certified path exists. Pursuing these turns audiobook/streaming support from a reverse-engineering grey area into a real, licensed integration (business agreement + certification, possibly rev-share). Storytel is Nordic-headquartered and TapBox is a Nordic kids' product — a plausible pitch once there's volume to show. Until then the product ships BYO-content only (local files, open RSS/podcasts, DRM-free audiobooks from Libro.fm/Downpour/libraries/LibriVox); reverse-engineered clients (librespot aside) stay out.
 - Card pack marketplace (parents share curated collections)
 
 ## 9. Onboarding Flow (Unboxing → First Card Scan)
