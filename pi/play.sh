@@ -253,6 +253,15 @@ print("\n".join(urls))
 PYEOF
   )
   curl -sf -X POST "$API/player/pause" >/dev/null 2>&1 || true
+  # Podcast link? Cache the newest episodes in the background for offline use.
+  if [[ $link =~ radio\.nrk\.no/podkast/([a-zA-Z0-9_-]+) ]]; then
+    local nrkpy
+    nrkpy="$(dirname "$(readlink -f "$0")")/nrk.py"
+    [[ -f $nrkpy ]] || nrkpy=/usr/local/bin/nrk.py
+    nohup python3 "$nrkpy" sync "${BASH_REMATCH[1]}" \
+      >> /var/log/tapbox-sync.log 2>&1 &
+    echo "==> Background sync started (newest 50 episodes -> /var/lib/tapbox/cache)"
+  fi
   echo "==> Playing ${#urls[@]} stream(s) via mpv (Ctrl+C to stop)"
   mpv --no-video --really-quiet --audio-device=alsa/tapbox_bt "${urls[@]}"
 }

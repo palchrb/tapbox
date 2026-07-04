@@ -107,6 +107,16 @@ def play(target):
     mpv_proc = subprocess.Popen(
         ["mpv", "--no-video", "--really-quiet",
          f"--audio-device={ALSA_DEVICE}"] + urls)
+    # Cache the newest episodes in the background for offline playback
+    try:
+        import nrk
+        slug = nrk.podcast_slug(target)
+        if slug:
+            subprocess.Popen(
+                [sys.executable, nrk.__file__, "sync", slug],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        log.warning("could not start podcast sync: %s", e)
 
 
 def load_cards():
