@@ -57,7 +57,13 @@ pisugar_get() {  # query pisugar-server, e.g. pisugar_get battery_v
 status_report() {
   echo "online CPUs:   $(cat /sys/devices/system/cpu/online)"
   echo "governor:      $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
-  echo "arm clock:     $(vcgencmd measure_clock arm 2>/dev/null | cut -d= -f2 || echo n/a) Hz"
+  local khz
+  khz="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null || echo '')"
+  if [[ -n $khz ]]; then
+    echo "arm clock:     $((khz / 1000)) MHz"
+  else
+    echo "arm clock:     n/a"
+  fi
   echo "temp:          $(vcgencmd measure_temp 2>/dev/null | cut -d= -f2 || echo n/a)"
   echo "throttled:     $(vcgencmd get_throttled 2>/dev/null | cut -d= -f2 || echo n/a)"
   echo "wifi pwr save: $(iw dev wlan0 get power_save 2>/dev/null | awk '{print $NF}' || echo n/a)"
@@ -66,9 +72,15 @@ status_report() {
     bat="$(pisugar_get battery)" || true
     bv="$(pisugar_get battery_v)" || true
     bi="$(pisugar_get battery_i)" || true
+    local plugged
+    plugged="$(pisugar_get battery_power_plugged)" || true
     [[ -n ${bat:-} ]] && echo "PiSugar batt:  ${bat}%  (estimate — voltage is the truth)"
     [[ -n ${bv:-} ]]  && echo "PiSugar volt:  ${bv} V  (4.1=full, 3.58=half-ish, <3.5=charge now)"
-    [[ -n ${bi:-} ]]  && echo "PiSugar amp:   ${bi} A draw"
+    if [[ ${plugged:-} == true ]]; then
+      echo "PiSugar amp:   on charger — battery draw not measurable now"
+    elif [[ -n ${bi:-} ]]; then
+      echo "PiSugar amp:   ${bi} A draw"
+    fi
   fi
   return 0
 }
