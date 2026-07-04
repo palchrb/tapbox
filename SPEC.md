@@ -1,6 +1,6 @@
 # tapbox — MVP Specification
 
-**Version:** 0.8 (draft)
+**Version:** 0.9 (draft)
 **Last updated:** 2026-07-04
 **Status:** Design phase, pre-implementation
 
@@ -35,7 +35,7 @@ This is **not** the same audience that buys Tonies in a department store. It is 
 | Offline-capable (away from home) | ✅ | ✅ | Partial | Local files | Partial (local files + BT) |
 | Hackable / extensible | ❌ | ❌ | ❌ | ✅ | ✅ |
 | Privacy (no always-listening) | ✅ | ✅ | ✅ | ✅ | ✅ (PTT for v2 voice) |
-| Multi-service streaming | ❌ | ❌ | Spotify only | Spotify only | Spotify + Tidal + BT + local |
+| Multi-service streaming | ❌ | ❌ | Spotify only | Spotify only | Spotify + BT-sink escape hatch + local |
 
 **Where we win:** polished onboarding + multi-service + open/hackable. We do not try to match Tonies on raw offline portability.
 
@@ -54,7 +54,7 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 
 | Component | Choice | Approx cost (NOK) | Rationale |
 |---|---|---|---|
-| SBC | Raspberry Pi Zero 2 W | ~150 | Runs librespot + Music Assistant + RFID daemon comfortably; small form factor; low idle power for long battery life |
+| SBC | Raspberry Pi Zero 2 W | ~150 | Runs go-librespot + mpv + RFID daemon comfortably (512MB RAM rules out Music Assistant, which needs 2GB+); small form factor; low idle power for long battery life |
 | Audio amp + DAC | [Pimoroni Audio Amp SHIM](https://shop.pimoroni.com/products/audio-amp-shim-3w-mono-amp) (MAX98357A I2S DAC + Class-D amp, 3W mono, 5V) | ~110 | Slim SHIM form factor (fits between Pi and other HATs); well-supported by Pimoroni; sourced from a reliable EU/UK retailer rather than Aliexpress. 3W is well-matched to the 4W driver under realistic volume-capped usage; amp headroom matters less than driver size for perceived quality. |
 | Main driver | Dayton Audio CE Series 70mm 4Ω full-range (CE70P-4 or similar) | ~120 | Real fullrange driver, full midrange + decent treble. Mono in this form factor is better than weak stereo. |
 | Passive radiator | Tang Band 2" passive radiator (or Dayton equivalent) | ~60 | Extends low-end response without amp power cost; critical for "not tinny" feel |
@@ -74,10 +74,9 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 | Layer | Choice | License | Notes |
 |---|---|---|---|
 | OS | Raspberry Pi OS Lite (Bookworm or current Legacy Lite) | Debian mix | Standard Pi OS |
-| Music orchestration | [Music Assistant](https://music-assistant.io/) | Apache 2.0 | Handles Spotify, Tidal, podcasts, local files in one abstraction |
-| Spotify backend | librespot (via Music Assistant) | MIT | Reverse-engineered Spotify Connect — see risks. Hardware-validated 2026-07-04 with go-librespot test rig (`pi/`): zeroconf login + BT A2DP output + play-by-share-link all work end-to-end on the Zero 2 W |
-| Audio playback | mpv (driven by Music Assistant) | GPL-2.0 | Used as binary, no linking issues |
-| RFID daemon | Custom Python (~200 LOC) | Apache 2.0 | Reads PN532, looks up mapping, calls MA API |
+| Spotify backend | [go-librespot](https://github.com/devgianlu/go-librespot) (standalone daemon, local HTTP API) | GPL-3.0 | Reverse-engineered Spotify Connect — see risks. Also covers Spotify podcasts (episode/show URIs). Used as separate binary over HTTP, no linking issues. Hardware-validated 2026-07-04 with test rig (`pi/`): zeroconf login + BT A2DP output + play-by-share-link all work end-to-end on the Zero 2 W |
+| Local files + radio playback | mpv | GPL-2.0 | Used as binary, no linking issues |
+| Orchestration + RFID daemon | Custom Python (~300 LOC) | Apache 2.0 | Reads PN532, looks up mapping, routes to go-librespot's HTTP API (Spotify) or mpv (local files, internet radio); stops one backend before starting the other. Replaces Music Assistant, which needs 2GB+ RAM — 4× what the Zero 2 W has |
 | Web UI | Custom (React or Svelte + Vite + Tailwind, TBD) | Apache 2.0 | Onboarding + admin |
 | Web server | Caddy (auto-HTTPS via local CA) or nginx + selfsigned | Apache 2.0 / BSD | TLS solves mixed-content for any future hosted PWA |
 | Captive portal | comitup or NetworkManager + custom | various | First-boot Wi-Fi setup |
@@ -112,8 +111,7 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 - [ ] Factory reset (long-press combo, wipes Wi-Fi + mappings)
 
 ### Should have
-- [ ] Tidal support via Music Assistant
-- [ ] Internet radio (NRK Radio, others)
+- [ ] Internet radio (NRK Radio, others) via mpv
 - [ ] Sleep timer
 - [ ] Volume cap for safety
 - [ ] Export/import mappings (JSON download/upload)
@@ -123,6 +121,7 @@ Target prototype cost: ~1180 NOK BOM. Target Kickstarter MSRP: ~1400-1700 NOK.
 - Voice control (push-to-talk) — hardware ready, software is v2
 - Cloud-relay for remote admin — v2 if there's demand
 - Multi-device sync — v2
+- Tidal — the only practical integration path was Music Assistant, which needs 2GB+ RAM (Zero 2 W has 512MB). BT sink mode covers Tidal users indirectly
 - Apple Music — not feasible in indie scale
 - YouTube Music — ToS risk too high
 
@@ -171,8 +170,6 @@ The polish target. We want this to take **<10 minutes** from unboxing to "kid ta
    Credentials transfer automatically and are persisted on the device — no password
    entry, no OAuth screen, no developer-app registration. Works because phone and
    device are on the same Wi-Fi (guaranteed by steps 6-7). Requires Spotify Premium.
-   - Optional: "Connect Tidal" (standard OAuth) / "Skip"
-
 9. "Speaker test" — plays a 3-second chime. Volume calibration slider.
 
 10. "Program your first card" — paste any Spotify URL, tap a blank card to device.
@@ -187,12 +184,11 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 
 ### Legal / business
 - **Spotify ToS via librespot:** Risk that Spotify sends C&D at any time. Historically not enforced at indie scale. Mitigation: don't use Spotify trademarks, don't claim "Spotify Connect Certified". Watch for enforcement signals.
-- **Tidal API ToS:** Same risk profile.
 - **EU Toy Safety Directive (EN 71):** Required if marketing to under-14s. ~30-80k NOK testing cost. Mitigation: market initially as "for families," not "for children" specifically.
 - **UN38.3 battery certification** for shipping: ~50k NOK. Required to ship Li-Po internationally.
 
 ### Technical
-- **No offline mode for streaming services:** librespot, Tidal, and other DRM-protected services cannot cache content. Tonies users will miss the "works anywhere offline" magic. Mitigations: (1) microSD slot for local audio, (2) drag-and-drop upload via parent web app so non-technical parents can move kid's favorite content offline, (3) auto-cache podcast episodes when on WiFi, (4) explicit positioning: "Home-first; bring your own MP3s for offline use." Don't claim feature parity with Tonies on offline.
+- **No offline mode for streaming services:** librespot and other DRM-protected services cannot cache content. Tonies users will miss the "works anywhere offline" magic. Mitigations: (1) microSD slot for local audio, (2) drag-and-drop upload via parent web app so non-technical parents can move kid's favorite content offline, (3) auto-cache podcast episodes when on WiFi, (4) explicit positioning: "Home-first; bring your own MP3s for offline use." Don't claim feature parity with Tonies on offline.
 - **Captive portal UX on iOS vs Android:** Subtle differences in how captive portals are triggered and dismissed. Needs real-device testing across iOS 16+/17+/18+ and Android 11+/12+/13+/14+/15+.
 - **Battery life realism:** With Adafruit 6600mAh LiPo: ~8h streaming baseline, ~14h with MVP power optimizations (CPU governor, WiFi power save, disabled HDMI/BT/LED, fewer cores), ~28h with v1.1 cached-local-playback + WiFi off. The cached-mode number matches Yoto-tier for that use case. Validate with real measurements before committing in marketing — assumptions about volume levels and idle behavior are load-bearing.
 - **Boot time:** Pi Zero 2 W cold boot ~25-35s on default Pi OS. May need optimization (custom init, removed services, faster SD card) to feel snappy on power-on. Likely fine for "always-on, deep-sleep" usage pattern.
@@ -209,7 +205,7 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 
 - **Phoniebox / RPi-Jukebox-RFID v3** (MIT) — solid reference for RFID+GPIO+audio on Pi. Cherry-pick patterns, do not fork.
 - **Jooki** — commercial precedent; instructive case study (bankrupt 2020, relaunched). Read their post-mortem if available.
-- **Music Assistant** — our music orchestration layer; aligned community.
+- **Music Assistant** — evaluated as orchestration layer, dropped for MVP: requires 2GB+ RAM vs the Zero 2 W's 512MB. Relevant again only if a hub/server architecture emerges.
 - **Home Assistant Voice / Wyoming protocol** — relevant for v2 voice features.
 
 ---
