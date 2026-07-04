@@ -222,6 +222,7 @@ install_if_changed 644 "$SCRIPT_DIR/nrk.py"    /usr/local/bin/nrk.py        && R
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
+install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  || true
 
 BTN_CHANGED=0
 install_if_changed 755 "$SCRIPT_DIR/buttons.py" /usr/local/bin/tapbox-buttons && BTN_CHANGED=1

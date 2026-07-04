@@ -10,6 +10,9 @@
 #   sudo tapbox-power log-on    log battery voltage/current/percent to CSV
 #                               every 60s (for calibrating the battery curve)
 #   sudo tapbox-power log-off   stop logging (the CSV file is kept)
+#   sudo tapbox-power idle-on [min]  power off after [min] (default 30) with
+#                                    no playback; PiSugar button wakes it
+#   sudo tapbox-power idle-off  disable auto-shutdown
 #
 # Bluetooth is deliberately left alone — it drives the speaker.
 # If Spotify playback stutters in save mode, set WIFI_POWERSAVE=0 below:
@@ -165,6 +168,36 @@ EOF
     systemctl daemon-reload
     echo "Battery logging stopped — data kept in $LOG_FILE"
     ;;
+  idle-on)
+    mins="${2:-30}"
+    idle_bin=/usr/local/bin/tapbox-idle
+    if [[ ! -x $idle_bin ]]; then
+      echo "tapbox-idle not installed — run install.sh first" >&2
+      exit 1
+    fi
+    cat > /etc/systemd/system/tapbox-idle.service <<EOF
+[Unit]
+Description=TapBox idle auto-shutdown
+
+[Service]
+ExecStart=/opt/tapbox/venv/bin/python3 $idle_bin $mins
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now tapbox-idle.service
+    echo "Auto-shutdown ON: powers off after ${mins} min without playback."
+    echo "Press the PiSugar button to wake it (cold boot ~25-35s)."
+    ;;
+  idle-off)
+    systemctl disable --now tapbox-idle.service 2>/dev/null || true
+    rm -f /etc/systemd/system/tapbox-idle.service
+    systemctl daemon-reload
+    echo "Auto-shutdown disabled."
+    ;;
   _logloop)  # internal: run by tapbox-batlog.service
     [[ -f $LOG_FILE ]] || echo "time,volt,amp,percent,plugged" > "$LOG_FILE"
     while true; do
@@ -173,7 +206,7 @@ EOF
     done
     ;;
   *)
-    sed -n '4,16p' "$0"
+    sed -n '4,19p' "$0"
     exit 1
     ;;
 esac
