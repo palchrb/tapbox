@@ -131,12 +131,22 @@ server:
   address: localhost
   port: $API_PORT
 zeroconf_enabled: true
+disable_autoplay: true  # playlist ends -> silence, not algorithm radio
 credentials:
   type: zeroconf
   zeroconf:
     persist_credentials: true
 EOF
   chown -R "$RUN_USER:" "$CONF_DIR"
+fi
+
+# Config migrations for existing installs (append-only, idempotent).
+# Kids box: when a playlist/album ends we want silence, not Spotify's
+# algorithmic autoplay picking "similar" tracks.
+if [[ -f "$CONF_DIR/config.yml" ]] && ! grep -q '^disable_autoplay:' "$CONF_DIR/config.yml"; then
+  echo 'disable_autoplay: true  # playlist ends -> silence, not algorithm radio' >> "$CONF_DIR/config.yml"
+  echo "    config: added disable_autoplay: true"
+  GO_RESTART_NEEDED=1
 fi
 
 # --- 4. bluetooth + go-librespot services ------------------------------------
@@ -300,7 +310,7 @@ echo "==> [6/8] Enabling services (restarting only what changed)..."
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
   tapbox-rfid.service tapbox-buttons.service tapbox-daemon.service
-[[ $GO_CHANGED    -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
+[[ $GO_CHANGED -eq 1 || ${GO_RESTART_NEEDED:-0} -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
