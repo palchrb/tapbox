@@ -139,8 +139,11 @@ Every step has: clear status, retry path, what-to-do-if-stuck. No JSON, no SSH.
   as "charges overnight" (plausible for a bedtime device), (b) a 2-3A
   charger IC (6600mAh at 2A ≈ 0.3C, gentle → ~3.5h), (c) smaller battery —
   3300mAh + 2A ≈ 2h charge and still solid playtime if the 28h cached-mode
-  estimate proves to be overkill. Decide after the rig's measured discharge
-  run.
+  estimate proves to be overkill, (d) **PiSugar 3 Plus instead of
+  PowerBoost+LiPo**: 5000mAh, 3A in / 2.5-3A out (charges in ~2.5h), UPS +
+  RTC + power button integrated, and it's the platform already proven on
+  the rig — tradeoffs are cost and its full-size-Pi form factor in a
+  Zero-based enclosure. Decide after the rig's measured discharge run.
 - **Captive portal UX on iOS vs Android:** needs real-device testing.
 - **Card programming UX:** NDEF write (preferred) vs UID mapping (works with
   Mifare Classic). Support both? Default NDEF?
