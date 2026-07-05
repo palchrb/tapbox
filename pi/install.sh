@@ -262,6 +262,7 @@ Description=TapBox RFID daemon
 After=go-librespot.service
 
 [Service]
+EnvironmentFile=-/etc/tapbox/rfid.conf
 ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-rfid
 Restart=always
 RestartSec=10
@@ -269,6 +270,31 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# RFID config: poll mode by default; slot mode (card slot + detector switch)
+# is enabled by editing this file. Written only if missing.
+if [[ -f /etc/tapbox/rfid.conf ]]; then
+  echo "    keeping existing /etc/tapbox/rfid.conf"
+else
+  mkdir -p /etc/tapbox
+  cat > /etc/tapbox/rfid.conf <<'EOF'
+# TapBox RFID daemon config (systemd EnvironmentFile).
+# Default (everything commented out) = PN532 poll mode.
+#
+# Slot mode: a detector switch in the card slot senses the card; the PN532
+# is only powered/read once per insertion. Card in = play, card out = pause.
+# Apply changes with: sudo systemctl restart tapbox-rfid
+#
+#SLOT_GPIO=17          # BCM pin of the slot switch (other pole to GND)
+#SLOT_PRESENT=low      # 'low' = switch closes to GND when card is in (default)
+#PN532_POWER_GPIO=     # optional MOSFET gate powering the PN532 (BCM pin)
+#
+# Testing without hardware:
+#SLOT_GPIO=file:/tmp/card   # `touch /tmp/card` = insert, `rm` = remove
+#FAKE_UID=cafebabe          # UID to pretend when no PN532 answers
+EOF
+  echo "    wrote /etc/tapbox/rfid.conf (poll mode; edit it to enable slot mode)"
+fi
 
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 systemctl daemon-reload

@@ -6,7 +6,7 @@ commands, so cards, buttons, the CLI and (later) the parent PWA behave
 coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
 
   POST /play       {"target": <any link/path>, "fresh": bool}
-  POST /playpause  |  /next  |  /prev  |  /stop
+  POST /playpause  |  /pause  |  /next  |  /prev  |  /stop
   GET  /status     unified now-playing (source, title, position, ...)
 
 Command routing:
@@ -190,6 +190,18 @@ class Orchestrator:
 
     def play(self, target, fresh=False):
         with self.lock:
+            # Same card back in the slot (or same link replayed): if its
+            # session is still loaded, unpause instead of restarting.
+            if (not fresh and target == self.target and self.source == "mpv"
+                    and self._mpv_alive()):
+                try:
+                    r = mpv_ipc(["set_property", "pause", False])
+                    if r.get("error") == "success":
+                        log(f"play (already loaded) -> unpause: {target}")
+                        return {"source": "mpv", "target": target,
+                                "resumed": True}
+                except OSError:
+                    pass  # IPC gone but child alive? fall through to respawn
             self._stop_child()
             self._spawn(target, fresh)
             self.target = target
@@ -197,6 +209,28 @@ class Orchestrator:
             self._persist()
             log(f"play [{self.source}] {target}")
             return {"source": self.source, "target": target}
+
+    def pause(self):
+        """Pause (never toggle) whatever is audible. Used by the card-slot
+        switch on card removal: player stays loaded, so re-inserting the
+        same card unpauses instantly."""
+        with self.lock:
+            acted = []
+            if self._mpv_alive():
+                try:
+                    if mpv_ipc(["set_property", "pause", True]).get("error") \
+                            == "success":
+                        acted.append("mpv")
+                except OSError:
+                    pass
+            if spotify_playing():
+                try:
+                    go("/player/pause")
+                    acted.append("spotify")
+                except OSError:
+                    pass
+            log(f"pause -> {', '.join(acted) if acted else 'nothing playing'}")
+            return {"paused": acted}
 
     def stop(self):
         with self.lock:
@@ -301,6 +335,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, ORCH.play(target, bool(body.get("fresh"))))
             elif self.path in ("/playpause", "/next", "/prev"):
                 self._send(200, ORCH.command(self.path[1:]))
+            elif self.path == "/pause":
+                self._send(200, ORCH.pause())
             elif self.path == "/stop":
                 self._send(200, ORCH.stop())
             else:

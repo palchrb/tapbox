@@ -278,8 +278,9 @@ case "$1" in
   pause|resume|next|prev|stop)
     # Route via the daemon so the command hits whatever is actually active
     case "$1" in
-      pause|resume) EP=playpause ;;
-      *) EP="$1" ;;
+      pause)  EP=pause ;;      # pure pause (never toggles into playing)
+      resume) EP=playpause ;;
+      *)      EP="$1" ;;
     esac
     if curl -sf -X POST "$DAEMON/$EP" -H 'Content-Type: application/json' -d '{}'; then
       echo " OK: $1"
