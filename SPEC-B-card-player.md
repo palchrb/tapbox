@@ -129,14 +129,18 @@ Every step has: clear status, retry path, what-to-do-if-stuck. No JSON, no SSH.
 - **Battery life realism:** 8h/14h/28h numbers must be re-validated on final
   hardware with the CSV logger before any marketing use.
 - **Charge time vs battery size (found on the rig 2026-07-05):** the rig's
-  PiSugar 3 charges at ~1A (~0.8C on its 1200mAh cell → ~1h from 25%; the
-  charger IC, not the wall adapter, is the bottleneck). The BOM's PowerBoost
-  1000C also tops out at ~1A — into 6600mAh that is **~7-8h charge time**,
-  which is weak next to Yoto. Options: (a) accept and position as
-  "charges overnight" (plausible for a bedtime device), (b) 2-3A charger IC
-  (6600mAh handles 2A ≈ 0.3C fine → ~3.5h), (c) smaller battery — 3300mAh +
-  2A ≈ 2h charge and still solid playtime if the 28h cached-mode estimate
-  proves to be overkill. Decide after the rig's measured discharge run.
+  PiSugar 3 charges at up to 2A (input spec 5V-3A max; 3A peak with chip at
+  ~80°C per PiSugar docs) — measured: 26%→full in ~70 min on a 5V/2A
+  charger, i.e. roughly 1.5C on its 1200mAh cell. PiSugar 3 also pauses
+  charging every 3s to measure battery voltage, so logged voltage/percent
+  during charge is mostly trustworthy. The product concern is the BOM's
+  PowerBoost 1000C, which charges at only ~1A — into 6600mAh that is
+  **~7-8h charge time**, weak next to Yoto. Options: (a) accept and position
+  as "charges overnight" (plausible for a bedtime device), (b) a 2-3A
+  charger IC (6600mAh at 2A ≈ 0.3C, gentle → ~3.5h), (c) smaller battery —
+  3300mAh + 2A ≈ 2h charge and still solid playtime if the 28h cached-mode
+  estimate proves to be overkill. Decide after the rig's measured discharge
+  run.
 - **Captive portal UX on iOS vs Android:** needs real-device testing.
 - **Card programming UX:** NDEF write (preferred) vs UID mapping (works with
   Mifare Classic). Support both? Default NDEF?
