@@ -82,7 +82,8 @@ Explicitly **not** trying to be:
 - **DRM services:** BYO-content only in v1 (local files, open RSS, DRM-free audiobooks). Official partner APIs (Storytel's Sonos integration proves the path) are the v2 strategy — no reverse-engineered clients beyond librespot.
 
 ### Technical
-- **No offline mode for streaming services:** librespot cannot cache. Mitigations: local files, drag-and-drop upload in the PWA, podcast auto-cache (implemented), honest positioning: "Home-first."
+- **No offline mode for streaming services:** DRM playback always needs a live session + per-track key, so true offline Spotify is off the table regardless of client. Mitigations: local files, drag-and-drop upload in the PWA, podcast auto-cache (implemented), honest positioning: "Home-first; travel content = local files and cached podcasts."
+- **No Spotify *bandwidth* cache either (2026-07-05):** Rust librespot caches downloaded (still-encrypted) audio to disk, making repeat plays free — a big deal on mobile hotspots given kids' repeat-heavy listening (~72 MB/h at 160 kbps otherwise). go-librespot, which we use for its control API, has no audio cache. **Action: propose/request an audio cache upstream in go-librespot** (same mechanics as Rust librespot's, no extra DRM exposure since keys are still fetched live; devgianlu is responsive). Backend swap to Rust librespot is the last resort — it lacks the HTTP API tapbox is built on. Note: a cache saves data, not connectivity; fully-offline is covered by the mitigation above only.
 - **Boot time:** ~25-35s cold boot. Mitigate with custom init/service pruning if needed.
 - **Battery life:** validate all marketing numbers with the CSV logger on real hardware (discharge run in progress on the rig).
 
