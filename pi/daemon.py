@@ -7,6 +7,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
 
   POST /play       {"target": <any link/path>, "fresh": bool}
   POST /playpause  |  /pause  |  /next  |  /prev  |  /stop
+  POST /volume     {"volume": 0-100} or {"delta": +/-n} — routes to the
+                   active source (mpv softvol / go-librespot volume)
+  GET  /volume     current volume of the active source (0-100)
   GET  /status     unified now-playing (source, title, position, ...)
 
 Command routing:
@@ -38,6 +41,7 @@ GO_API = "http://127.0.0.1:3678"
 MPV_SOCK = os.environ.get("TAPBOX_MPV_SOCK", "/run/tapbox-mpv.sock")
 STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
+VOL_FILE = os.path.join(STATE_DIR, "volume.json")
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
 
 
@@ -57,8 +61,9 @@ def player_path():
 
 # --- go-librespot (Spotify) ---------------------------------------------------
 
-def go(path, timeout=5):
-    req = urllib.request.Request(GO_API + path, data=b"{}",
+def go(path, timeout=5, body=None):
+    data = json.dumps(body).encode() if body is not None else b"{}"
+    req = urllib.request.Request(GO_API + path, data=data,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
@@ -210,6 +215,62 @@ class Orchestrator:
             log(f"play [{self.source}] {target}")
             return {"source": self.source, "target": target}
 
+    def _save_volume(self, v):
+        """Remember the box volume so player.py can start mpv at it."""
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            tmp = VOL_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"volume": v}, f)
+            os.replace(tmp, VOL_FILE)
+        except OSError:
+            pass
+
+    def volume(self, absolute=None, delta=None):
+        """One volume knob for the box: set/adjust whatever is active.
+        mpv gets its softvol (0-100); Spotify gets go-librespot's volume
+        scaled from our 0-100 to its volume_steps."""
+        with self.lock:
+            if self._mpv_alive() and self.source == "mpv":
+                try:
+                    if absolute is None:
+                        cur = mpv_get("volume")
+                        absolute = (100 if cur is None else cur) + delta
+                    v = max(0, min(100, round(absolute)))
+                    r = mpv_ipc(["set_property", "volume", v])
+                    if r.get("error") == "success":
+                        self._save_volume(v)
+                        log(f"volume -> mpv {v}")
+                        return {"routed": "mpv", "volume": v}
+                except OSError:
+                    pass  # child starting up; fall through to spotify
+            st = go_status()
+            steps = st.get("volume_steps") or 65535
+            if absolute is None:
+                absolute = (st.get("volume") or 0) * 100 / steps + delta
+            v = max(0, min(100, round(absolute)))
+            try:
+                go("/player/volume", body={"volume": round(v * steps / 100)})
+                self._save_volume(v)
+                log(f"volume -> spotify {v}")
+                return {"routed": "spotify", "volume": v}
+            except OSError:
+                log("volume: no active player")
+                return {"routed": None, "volume": None}
+
+    def get_volume(self):
+        with self.lock:
+            if self._mpv_alive() and self.source == "mpv":
+                v = mpv_get("volume")
+                if v is not None:
+                    return {"routed": "mpv", "volume": round(v)}
+        st = go_status()
+        if st:
+            steps = st.get("volume_steps") or 65535
+            return {"routed": "spotify",
+                    "volume": round((st.get("volume") or 0) * 100 / steps)}
+        return {"routed": None, "volume": None}
+
     def pause(self):
         """Pause (never toggle) whatever is audible. Used by the card-slot
         switch on card removal: player stays loaded, so re-inserting the
@@ -317,6 +378,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/status":
             self._send(200, ORCH.status())
+        elif self.path == "/volume":
+            self._send(200, ORCH.get_volume())
         else:
             self._send(404, {"error": "not found"})
 
@@ -337,6 +400,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, ORCH.command(self.path[1:]))
             elif self.path == "/pause":
                 self._send(200, ORCH.pause())
+            elif self.path == "/volume":
+                if body.get("volume") is None and body.get("delta") is None:
+                    self._send(400, {"error": "volume or delta required"})
+                    return
+                self._send(200, ORCH.volume(absolute=body.get("volume"),
+                                            delta=body.get("delta")))
             elif self.path == "/stop":
                 self._send(200, ORCH.stop())
             else:

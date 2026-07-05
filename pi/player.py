@@ -228,12 +228,19 @@ def main():
         os.remove(sock)
     except OSError:
         pass
+    # Start at the box volume last set through tapboxd (POST /volume)
+    try:
+        with open(os.path.join(STATE_DIR, "volume.json")) as f:
+            volume = max(0, min(100, round(json.load(f)["volume"])))
+    except (OSError, ValueError, KeyError, TypeError):
+        volume = 100
     proc = subprocess.Popen(
         ["mpv", "--no-video", "--really-quiet",
          # A2DP/SBC to the speaker runs at 44100 Hz; low-bitrate audiobooks
          # come in at 16000 Hz which the BT link can't deliver (silence).
          # Resample everything to 44100 stereo so any source rate plays.
          "--audio-samplerate=44100", "--audio-channels=stereo",
+         f"--volume={volume}",
          f"--audio-device={ALSA_DEVICE}", f"--input-ipc-server={sock}"] + urls)
     signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
 

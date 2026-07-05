@@ -36,11 +36,16 @@ ACTIONS = {
     166: "playpause",  # KEY_STOPCD
     163: "next",       # KEY_NEXTSONG
     165: "prev",       # KEY_PREVIOUSSONG
+    115: "volup",      # KEY_VOLUMEUP
+    114: "voldown",    # KEY_VOLUMEDOWN
 }
+VOL_STEP = 5  # percent per volume key press
 MPV_CMDS = {
     "playpause": ["cycle", "pause"],
     "next": ["playlist-next"],
     "prev": ["playlist-prev"],
+    "volup": ["add", "volume", VOL_STEP],
+    "voldown": ["add", "volume", -VOL_STEP],
 }
 SPOTIFY_PATHS = {
     "playpause": "/player/playpause",
@@ -62,9 +67,10 @@ def mpv_command(cmd):
         return resp.get("error") == "success"
 
 
-def spotify_post(path):
+def spotify_post(path, body=None):
+    data = json.dumps(body).encode() if body is not None else b"{}"
     req = urllib.request.Request(
-        API + path, data=b"{}", headers={"Content-Type": "application/json"})
+        API + path, data=data, headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req, timeout=5).read()
 
 
@@ -77,6 +83,12 @@ def spotify_status():
 
 
 def spotify_command(action):
+    if action in ("volup", "voldown"):
+        steps = spotify_status().get("volume_steps") or 65535
+        delta = VOL_STEP if action == "volup" else -VOL_STEP
+        spotify_post("/player/volume",
+                     {"volume": round(delta * steps / 100), "relative": True})
+        return
     if action != "prev":
         spotify_post(SPOTIFY_PATHS[action])
         return
@@ -96,8 +108,13 @@ def handle(action):
     # Preferred: the orchestration daemon owns "what is active" and can
     # even resume the last-played target on a dead session.
     try:
+        if action in ("volup", "voldown"):
+            path, data = "/volume", json.dumps(
+                {"delta": VOL_STEP if action == "volup" else -VOL_STEP}).encode()
+        else:
+            path, data = "/" + action, b"{}"
         req = urllib.request.Request(
-            DAEMON + "/" + action, data=b"{}",
+            DAEMON + path, data=data,
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=15) as r:
             routed = json.loads(r.read()).get("routed")
@@ -172,8 +189,9 @@ if __name__ == "__main__":
     # One-shot CLI (used by the PiSugar tap shells): `buttons.py next`
     if len(sys.argv) > 1:
         action = sys.argv[1]
-        if action not in ("playpause", "next", "prev"):
-            print("usage: buttons.py [playpause|next|prev]", file=sys.stderr)
+        if action not in ("playpause", "next", "prev", "volup", "voldown"):
+            print("usage: buttons.py [playpause|next|prev|volup|voldown]",
+                  file=sys.stderr)
             sys.exit(1)
         handle(action)
     else:

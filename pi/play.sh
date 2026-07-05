@@ -52,6 +52,7 @@ Usage:
   sudo $0 scan                  list all devices seen during a scan
   sudo $0 test                  play a test sound through the headset (no Spotify)
   sudo $0 pause|resume|next|prev|stop
+  sudo $0 vol [0-100 | +N | -N]  show or set the box volume
 EOF
   exit 1
 }
@@ -288,6 +289,18 @@ case "$1" in
       echo "daemon not running — falling back to Spotify API" >&2
       wait_for_api
       curl -sf -X POST "$API/player/$1" >/dev/null && echo "OK: $1 (spotify only)"
+    fi
+    exit 0 ;;
+  vol)
+    if [[ -z ${2:-} ]]; then
+      curl -sf "$DAEMON/volume" | jq . || echo "daemon not running" >&2
+    else
+      case "$2" in
+        +*|-*) BODY="{\"delta\": $2}" ;;
+        *)     BODY="{\"volume\": $2}" ;;
+      esac
+      curl -sf -X POST "$DAEMON/volume" -H 'Content-Type: application/json' \
+        -d "$BODY" | jq . || echo "daemon not running" >&2
     fi
     exit 0 ;;
   status)
