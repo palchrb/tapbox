@@ -111,8 +111,10 @@ Everything else (playback, resume, cache, BT, power) is the existing platform.
 ## 7. Open questions
 
 - Button layout after kid-testing (3-year-old vs 6-year-old ergonomics differ).
-- Should the screen show cover art (Spotify images are available via API;
-  NRK psapi has images) or keep a text-only, low-power UI in v1?
+- Should the screen show cover art (Spotify images via the API —
+  go-librespot's `server.image_size` picks the delivered size, 240x240ish
+  fits our display; NRK psapi has images) or keep a text-only, low-power
+  UI in v1?
 - Battery impact of the display (backlight ~20-40mA) — measure with the CSV
   logger; auto-off mitigates.
 - Does the 1W mini speaker suffice for "nightstand mode", or does Concept A
