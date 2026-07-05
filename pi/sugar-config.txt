@@ -1,24 +1,36 @@
-# PiSugar 3 — conservative battery curve for TapBox
+# PiSugar 3 — CALIBRATED battery curve for TapBox (2026-07-05)
 #
-# The stock curve in pisugar-server is optimistic in the 3.6–3.7V band
-# (it reports ~50-65% for charge levels that are realistically 15-30%),
-# which makes the percentage hover around half and then collapse to
-# near-zero in minutes. This curve is based on typical 1S LiPo tables
-# and errs on the pessimistic side — "20%" still means you have real
-# time left to find the charger.
+# Built from a real full-discharge run on the test rig: fully charged
+# (4.19V) -> safe shutdown at 16:13 after 5h04m of continuous Bluetooth
+# playback (~0.8W average system draw), voltage logged every 60s by
+# tapbox-batlog. Percent is defined as REMAINING PLAYTIME: "40%" means
+# 40% of the ~5h runtime was left at that voltage under playback load.
+#
+# Notes on the calibration:
+# - Measured UNDER LOAD (~200mA playback incl. IR sag). At true idle the
+#   voltage reads a bit higher, so the percentage over-estimates slightly
+#   when nothing is playing. For a music box that bias is the right one.
+# - 0% is placed at the safe-shutdown point (~3.55V under load), not at
+#   the battery-protection cliff (~3.4V) — percent hits 0 when the box
+#   actually turns off, as it should.
+# - The mid-plateau is real: the cell spends ~70 min between 3.80V and
+#   3.75V. That is why the old curves felt "stuck around half".
+# - Safe shutdown: with THIS curve, 5% maps to ~3.65V (~15 min left at
+#   playback draw). If you keep safe_shutdown_level=5 you shut down a
+#   little earlier than the measured run did; set it to 2-3% to match
+#   the old behaviour. 5% is the safer, recommended choice.
 #
 # HOW TO APPLY
 # 1. Edit the config:      sudo nano /etc/pisugar-server/config.json
-# 2. Add the line below inside the top-level { ... } object (remember a
-#    comma after the previous entry). Do NOT paste the # comment lines.
+# 2. Replace/add the line below inside the top-level { ... } object
+#    (comma after the previous entry; do NOT paste the # comment lines).
 # 3. Restart the server:   sudo systemctl restart pisugar-server
 # 4. Verify:               sudo tapbox-power status
-#    (the percentage will read LOWER than before on the same charge —
-#    that is the point.)
 #
 # The server validates the curve: voltages and percentages must both be
-# strictly increasing/decreasing together, so keep it monotonic if you
-# tweak it. Replace with a calibrated curve once a full discharge log
-# (sudo tapbox-power log-on) has been collected.
+# strictly monotonic together — keep it that way if you tweak it.
 
-"battery_curve": [[4.10, 100.0], [4.00, 84.0], [3.90, 65.0], [3.80, 46.0], [3.70, 26.0], [3.60, 11.0], [3.50, 4.0], [3.40, 1.0], [3.20, 0.0]]
+"battery_curve": [[4.20, 100.0], [4.10, 91.0], [4.00, 79.0], [3.90, 65.0], [3.85, 56.0], [3.80, 41.0], [3.75, 18.0], [3.70, 9.0], [3.60, 3.0], [3.50, 0.0]]
+
+# Previous conservative (uncalibrated) curve, kept for reference:
+# "battery_curve": [[4.10, 100.0], [4.00, 84.0], [3.90, 65.0], [3.80, 46.0], [3.70, 26.0], [3.60, 11.0], [3.50, 4.0], [3.40, 1.0], [3.20, 0.0]]

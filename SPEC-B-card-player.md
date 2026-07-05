@@ -126,17 +126,21 @@ Every step has: clear status, retry path, what-to-do-if-stuck. No JSON, no SSH.
   passive radiator; driver size does ~85% of the perceived difference, not amp
   headroom. Validate by side-by-side listening test before locking the
   enclosure; upgrade levers: enclosure tuning, then TAS5805M bridged mono (~10W).
-- **Battery life realism:** 8h/14h/28h numbers must be re-validated on final
-  hardware with the CSV logger before any marketing use. Rig measurement
-  (2026-07-05, in progress): ~0.7W total system draw during BT playback —
-  but note the rig outsources amplification to the BT speaker's own
-  battery. Concept B drives its own MAX98357A + 70mm driver: add
-  ~0.3-0.6W average at volume-capped kid levels (3W is peak, music crest
-  factor keeps the average low) ≈ **~1.0-1.3W playing on the built-in
-  speaker**. Battery sizing at ~1.1W: 3300mAh ≈ 10-11h (all-day, ~2h
-  charge at 2A), 6600mAh ≈ 20-22h (Yoto-tier marketing numbers, slower
-  charge/heavier). Positioning choice, not a technical one — decide after
-  the rig's full discharge run pins the base draw.
+- **Battery life realism — MEASURED (2026-07-05, full discharge run):**
+  the rig played continuously over Bluetooth for **5h04m on 1200mAh**
+  (full charge 4.19V -> safe shutdown at 5%), i.e. **~0.8W measured
+  average system draw** (Pi Zero 2 W + WiFi + BT streaming + PiSugar,
+  optimized: governor/LED/HDMI off/wifi powersave). Calibrated
+  battery_curve derived from the run lives in `pi/sugar-config.txt`.
+  Note the rig outsources amplification to the BT speaker's own battery;
+  Concept B drives its own MAX98357A + 70mm driver: add ~0.3-0.6W at
+  volume-capped kid levels (3W is peak; music crest factor keeps the
+  average low) ≈ **~1.1-1.4W playing on the built-in speaker**. Battery
+  sizing at ~1.2W: 3300mAh ≈ 9-10h (all-day, ~2h charge at 2A),
+  5000mAh (PiSugar 3 Plus) ≈ 14-15h, 6600mAh ≈ 19-20h (Yoto-tier
+  marketing numbers, slower charge/heavier). Positioning choice, not a
+  technical one. Cached-local + WiFi-off playback stretches all numbers
+  further (unmeasured; travel-mode experiment pending).
 - **Charge time vs battery size (found on the rig 2026-07-05):** the rig's
   PiSugar 3 charges at up to 2A (input spec 5V-3A max; 3A peak with chip at
   ~80°C per PiSugar docs) — measured: 26%→full in ~70 min on a 5V/2A
