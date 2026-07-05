@@ -1,7 +1,7 @@
 # tapbox — MVP Specification
 
-**Version:** 0.9 (draft)
-**Last updated:** 2026-07-04
+**Version:** 0.10 (draft)
+**Last updated:** 2026-07-05
 **Status:** Design phase, pre-implementation
 
 ---
@@ -197,11 +197,14 @@ Every step has: clear status, retry path on failure, what-to-do-if-stuck. No JSO
 - **Kid-voice STT (for v2):** Local Whisper not viable on Pi Zero 2 W. v2 voice will likely require either cloud STT (no hardware change) or a hardware revision to Pi 4/CM4. Decide later based on real user feedback.
 
 ### Open product questions
-- **RFID wake strategy (power):** The NFC field is the power cost (~30-50mA while on). Software mitigations are implemented in the test rig (PN532 power-down between polls, adaptive poll rate) and IRQ-driven InAutoPoll is the next step (chip polls autonomously, wakes the Pi via GPIO interrupt — near-zero host cost). For the product, gate the reader with a physical "something is happening" signal, like the commercial boxes do. Candidates:
-  - Card slot/dock with microswitch (Yoto-style): zero standby power, card-inserted is a visible state for the kid — current favourite, but constrains enclosure design
-  - Capacitive touch pad under the tap surface (TTP223, ~5 NOK, ~3µA)
-  - Accelerometer wake on lift/knock (Toniebox-style, ~µA)
-  Decide together with enclosure design.
+- **RFID wake strategy — DECIDED (2026-07-05): card slot + detector switch (Yoto model).** The NFC field is the power cost (~30-50mA while on); the fix is to make the *switch*, not the radio, the presence sensor:
+  - Idle: PN532 fully unpowered (power-gated or held in reset). The only listener is a mechanical detector switch in the card slot on a GPIO with internal pull-up — 0 mA standby.
+  - Card inserted: switch edge → GPIO interrupt → power the reader → **one single read** (slot guarantees mm-precise antenna alignment, so first read succeeds) → reader off. ~100ms of RF per card change instead of all-day polling.
+  - Card removed: opposite switch edge → pause via tapboxd (bookmark saved; same card resumes). NFC is never involved in stop detection — that's what forces Toniebox-style continuous polling and kills its battery life.
+  - UX side-effect: physical state == audio state (card in slot = sound), the Phoniebox "place not swipe" model but at zero power. Constrains the product to **cards only** (no figurines/stickers on a tap surface). Copy Yoto's shallow slot where the card sticks up visibly (kid can see + pull it, and it discourages posting other objects in).
+  - Switch type: subminiature/detector microswitch with low operating force and gold-plated contacts (dry-circuit GPIO switching), e.g. Omron D2F-01FL class. IR break-beam rejected (LED draws mA and needs its own duty cycling).
+  - Fallback for slot-less designs: PN532 IRQ-driven InAutoPoll (chip polls autonomously, wakes the Pi via GPIO — near-zero host cost, but the RF field still costs). Both paths share the same interrupt-driven rfid daemon architecture; enclosure design picks the wake source.
+  - Backlog idea (from Phoniebox): command cards — a card can map to an action (`cmd:stop`, `cmd:next`, a parent's bedtime "stop everything" card) instead of content.
 - **Card programming UX:** Write NDEF to NTAG (preferred) vs. UID mapping (works with Mifare Classic too). Support both? Default to NDEF?
 - **Should we sell pre-printed cards?** Themed packs (animals, fairy tales, etc.) increase perceived value but add inventory/SKU complexity.
 - **Subscription business model?** Cloud-relay + card-pack-marketplace could justify ~30-50 NOK/month. Probably not in MVP, but worth keeping the door open architecturally.
