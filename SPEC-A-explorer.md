@@ -141,8 +141,12 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
    (screen/cap/idle + system info, wifi toggle, shutdown/restart with
    confirm). Security note: auth-less on the home LAN by design — PIN
    gate is a product-phase addition; never expose :3679 to the internet.
-   Remaining phases: /bt endpoints + BT page (2), wifi join via nmcli (3),
-   AP-mode captive-portal onboarding (4), PIN/TLS/installability (later).
+   Phase 2 BUILT (2026-07-06): /bt endpoints (GET /bt, POST /bt/pair via
+   play.sh's validated flow — installed as tapbox-play with new use/forget
+   commands — /bt/connect, /bt/forget; mac-validated, serialized with 409)
+   + the PWA speaker card. Remaining: wifi join via nmcli (3), AP-mode
+   captive-portal onboarding (4), PIN/TLS/installability (later); the
+   screen UI's BT pages can now consume the same endpoints.
    Card mapping UI comes with Concept B's card admin endpoints.
 
 Everything else (playback, resume, cache, BT, power) is the existing platform.
