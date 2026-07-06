@@ -16,6 +16,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   PUT  /library    replace the library (validated, atomic write)
   GET  /expand?id=<entry>|target=<url>   entry -> playable episode list
                    with titles + cached flags (offline-aware menus)
+  GET  /output     current audio output ("bt" or "local")
+  POST /output     {"device": "bt"|"local"} — mpv switches live over IPC;
+                   go-librespot needs a config rewrite + service restart
 
 The library lives in /etc/tapbox/library.json ON THE BOX — menus must
 render (and cached content must play) with no internet at all. A future
@@ -54,10 +57,15 @@ MPV_SOCK = os.environ.get("TAPBOX_MPV_SOCK", "/run/tapbox-mpv.sock")
 STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
 VOL_FILE = os.path.join(STATE_DIR, "volume.json")
+OUT_FILE = os.path.join(STATE_DIR, "output.json")
+NOW_FILE = os.path.join(STATE_DIR, "now-playing.json")
 LIB_FILE = os.environ.get("TAPBOX_LIBRARY", "/etc/tapbox/library.json")
 CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
+GO_CONFIG = os.environ.get("TAPBOX_GO_CONFIG", "")  # go-librespot config.yml
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
 ORDERS = ("auto", "newest_first", "oldest_first")
+OUTPUT_PCMS = {"bt": "tapbox_bt",
+               "local": os.environ.get("TAPBOX_LOCAL_PCM", "tapbox_local")}
 
 
 def log(msg):
@@ -262,6 +270,45 @@ def expand_target(target, order="auto", name=None):
             "image": image, "episodes": episodes}
 
 
+# --- audio output (bt speaker vs built-in/HAT) ----------------------------------
+
+def current_output():
+    try:
+        with open(OUT_FILE) as f:
+            d = json.load(f)
+        return {"output": d.get("output") or "bt",
+                "pcm": d.get("pcm") or "tapbox_bt"}
+    except (OSError, ValueError):
+        return {"output": "bt", "pcm": "tapbox_bt"}
+
+
+def _retarget_go_librespot(pcm):
+    """Point go-librespot's audio_device at pcm. Unlike mpv, its audio
+    device is startup config — a change means config rewrite + restart.
+    Returns True when the config was changed."""
+    if not GO_CONFIG:
+        return False
+    try:
+        with open(GO_CONFIG) as f:
+            text = f.read()
+    except OSError:
+        return False
+    new, n = re.subn(r"(?m)^audio_device:.*$", f"audio_device: {pcm}", text)
+    if n == 0:
+        new = text.rstrip("\n") + f"\naudio_device: {pcm}\n"
+    if new == text:
+        return False
+    with open(GO_CONFIG + ".tmp", "w") as f:
+        f.write(new)
+    os.replace(GO_CONFIG + ".tmp", GO_CONFIG)
+    try:
+        subprocess.run(["systemctl", "restart", "go-librespot"], timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"go-librespot restart failed ({e!r}) — config updated, "
+            "restart it manually")
+    return True
+
+
 # --- the orchestrator ----------------------------------------------------------
 
 class Orchestrator:
@@ -419,6 +466,31 @@ class Orchestrator:
                     "volume": round((st.get("volume") or 0) * 100 / steps)}
         return {"routed": None, "volume": None}
 
+    def set_output(self, device):
+        pcm = OUTPUT_PCMS.get(device)
+        if not pcm:
+            return None  # handler answers 400
+        with self.lock:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            with open(OUT_FILE + ".tmp", "w") as f:
+                json.dump({"output": device, "pcm": pcm}, f)
+            os.replace(OUT_FILE + ".tmp", OUT_FILE)
+            mpv_switched = False
+            if self._mpv_alive():
+                try:  # mpv can retarget its audio device live
+                    mpv_switched = mpv_ipc(
+                        ["set_property", "audio-device", f"alsa/{pcm}"]
+                    ).get("error") == "success"
+                except OSError:
+                    pass
+            restarted = _retarget_go_librespot(pcm)
+            log(f"output -> {device} (pcm {pcm}, "
+                f"mpv {'switched' if mpv_switched else 'n/a'}, "
+                f"go-librespot {'restarted' if restarted else 'unchanged'})")
+            return {"output": device, "pcm": pcm,
+                    "mpv_switched": mpv_switched,
+                    "spotify_restarted": restarted}
+
     def pause(self):
         """Pause (never toggle) whatever is audible. Used by the card-slot
         switch on card removal: player stays loaded, so re-inserting the
@@ -492,12 +564,21 @@ class Orchestrator:
             target, source = self.target, self.source
         out = {"source": source, "target": target, "playing": False,
                "title": None, "position": None, "duration": None,
-               "artwork": None}
+               "artwork": None, "episode_id": None,
+               "output": current_output()["output"]}
         if mpv_alive:
             out["playing"] = mpv_get("pause") is False
             out["title"] = mpv_get("media-title")
             out["position"] = mpv_get("playback-time")
             out["duration"] = mpv_get("duration")  # None = live stream
+            try:  # which episode (player.py publishes it; match on path)
+                with open(NOW_FILE) as f:
+                    now = json.load(f)
+                if now.get("url") == mpv_get("path"):
+                    out["episode_id"] = now.get("id")
+                    out["title"] = now.get("title") or out["title"]
+            except (OSError, ValueError):
+                pass
         st = go_status()
         track = st.get("track") or {}
         out["spotify"] = {"playing": spotify_playing(st),
@@ -538,6 +619,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, ORCH.get_volume())
         elif url.path == "/library":
             self._send(200, load_library())
+        elif url.path == "/output":
+            self._send(200, current_output())
         elif url.path == "/expand":
             q = urllib.parse.parse_qs(url.query)
             entry_id = (q.get("id") or [None])[0]
@@ -609,6 +692,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, ORCH.volume(absolute=body.get("volume"),
                                             delta=body.get("delta")))
+            elif self.path == "/output":
+                r = ORCH.set_output(body.get("device"))
+                if r is None:
+                    self._send(400, {"error":
+                                     f"device must be one of {sorted(OUTPUT_PCMS)}"})
+                    return
+                self._send(200, r)
             elif self.path == "/stop":
                 self._send(200, ORCH.stop())
             else:

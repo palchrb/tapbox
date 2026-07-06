@@ -123,8 +123,15 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
    renderer + button handling (gpio-keys overlay or gpiozero) + now-playing
    screen (title/position from `GET /status`, battery % from PiSugar).
    Backlight off after N seconds idle (power).
-2. **tapboxd additions:** ~~`GET /library`~~ done (see §2, incl. /expand and
-   episode play); `POST /output` (see §4) remains. `/volume` is done.
+2. **tapboxd additions: ALL DONE (2026-07-06).** `/library` + `/expand` +
+   episode play (§2), `/volume`, and `GET/POST /output` — mpv retargets
+   live over IPC, go-librespot via config rewrite + service restart;
+   "local" maps to ALSA pcm `tapbox_local` (define in asound.conf when
+   the HAT arrives; `TAPBOX_LOCAL_PCM` overrides). `/status` carries
+   title/artwork/position/duration/episode_id/output. Also implemented:
+   offline-aware queue (player.py skips dead stream URLs when offline —
+   cached episodes play cleanly; `TAPBOX_OFFLINE=1` forces it).
+   The screen UI is now a pure consumer.
 3. **PWA:** library editor (add/name/reorder/delete links per service). Same
    editor Concept B needs for card mapping — build once.
 

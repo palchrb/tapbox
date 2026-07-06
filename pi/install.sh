@@ -268,12 +268,13 @@ install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  || tru
 
 DAEMON_CHANGED=0
 install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
-write_if_changed /etc/systemd/system/tapbox-daemon.service <<'EOF' && DAEMON_CHANGED=1
+write_if_changed /etc/systemd/system/tapbox-daemon.service <<EOF && DAEMON_CHANGED=1
 [Unit]
 Description=TapBox orchestration daemon (playback state + API)
 After=go-librespot.service
 
 [Service]
+Environment=TAPBOX_GO_CONFIG=$CONF_DIR/config.yml
 ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-daemon
 Restart=always
 RestartSec=5

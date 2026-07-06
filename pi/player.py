@@ -41,7 +41,6 @@ import time
 import urllib.request
 
 STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
-ALSA_DEVICE = "alsa/tapbox_bt"
 API = "http://127.0.0.1:3678"
 RESUME_MIN_S = 20   # don't bother resuming the first seconds
 POLL_S = 3
@@ -133,6 +132,28 @@ def is_spotify(target):
             or "spotify.link/" in target)
 
 
+def output_pcm():
+    """The ALSA pcm playback goes to — set via tapboxd POST /output
+    (bt = the paired speaker, local = the built-in/HAT speaker)."""
+    try:
+        with open(os.path.join(STATE_DIR, "output.json")) as f:
+            return json.load(f)["pcm"]
+    except (OSError, ValueError, KeyError):
+        return "tapbox_bt"
+
+
+def online():
+    """Quick connectivity probe. TAPBOX_OFFLINE=1 forces offline mode
+    (manual travel switch / tests). Plain IP:port — no DNS to hang on."""
+    if os.environ.get("TAPBOX_OFFLINE"):
+        return False
+    try:
+        socket.create_connection(("1.1.1.1", 443), timeout=2).close()
+        return True
+    except OSError:
+        return False
+
+
 def to_spotify_uri(target):
     if SPOTIFY_URI_RE.match(target):
         return target
@@ -207,6 +228,14 @@ def main():
     if reverse and len(urls) > 1:
         urls.reverse()  # titles/ids are url-keyed dicts — unaffected
         log("queue order reversed (library setting)")
+
+    # Offline? Don't let mpv grind through dead stream URLs — play what is
+    # on disk. (All-remote queues are left alone: failing is the only option.)
+    streams = [u for u in urls if u.startswith(("http://", "https://"))]
+    if streams and len(streams) < len(urls) and not online():
+        urls = [u for u in urls if not u.startswith(("http://", "https://"))]
+        log(f"offline — playing {len(urls)} cached episode(s), "
+            f"skipping {len(streams)} streams")
     key = state_key(target)
     if fresh:
         clear_state(key)
@@ -227,6 +256,8 @@ def main():
     url_by_id = {eid: u for u, eid in ids.items()}
     if episode:
         picked = url_by_id.get(episode)
+        if picked is not None and picked not in urls:
+            picked = None  # filtered away (offline) — fall back gracefully
         if picked is None:
             log(f"episode '{episode}' not in this queue — playing from start")
         else:
@@ -242,7 +273,7 @@ def main():
                 + (f", {int(start_pos)}s" if start_pos else ""))
     elif st and st.get("pos", 0) > RESUME_MIN_S:
         idx = None
-        if st.get("id") and st["id"] in url_by_id:
+        if st.get("id") and url_by_id.get(st["id"]) in urls:
             idx = urls.index(url_by_id[st["id"]])
         if idx is None and st.get("url") in urls:
             idx = urls.index(st["url"])
@@ -273,7 +304,8 @@ def main():
          # Resample everything to 44100 stereo so any source rate plays.
          "--audio-samplerate=44100", "--audio-channels=stereo",
          f"--volume={volume}",
-         f"--audio-device={ALSA_DEVICE}", f"--input-ipc-server={sock}"] + urls)
+         f"--audio-device=alsa/{output_pcm()}",
+         f"--input-ipc-server={sock}"] + urls)
     signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
 
     # NRK podcast/series? Cache the newest episodes in the background
@@ -310,11 +342,26 @@ def main():
             log("could not seek to resume position — playing from start")
 
     # Poll position and persist it until mpv exits; log track changes
+    os.makedirs(STATE_DIR, exist_ok=True)
+    now_file = os.path.join(STATE_DIR, "now-playing.json")
+    last_np = None
     last_title = None
     last_beat = 0.0
     while proc.poll() is None:
         try:
             path = ipc_get(sock, "path")
+            # Publish which episode is playing (tapboxd /status -> menu
+            # highlight); written only when the track changes.
+            if path and path != last_np:
+                last_np = path
+                try:
+                    with open(now_file + ".tmp", "w") as f:
+                        json.dump({"id": ids.get(path), "url": path,
+                                   "title": titles.get(path),
+                                   "target": target}, f)
+                    os.replace(now_file + ".tmp", now_file)
+                except OSError:
+                    pass
             pos = ipc_get(sock, "playback-time")
             # A live stream (radio) has no finite duration — don't bookmark
             # it (its "position" is the live-edge timestamp, not progress).
