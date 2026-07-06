@@ -137,7 +137,33 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
 
 Everything else (playback, resume, cache, BT, power) is the existing platform.
 
-## 7. Open questions
+## 7. Settings menu (designed 2026-07-06, not built)
+
+Entered via a **parental lock**: hold A+B ~3s (a kid must not be able to
+shut the box down mid-story or wipe caches — the lock is the single most
+important idea here). Contents:
+
+| Setting | Values | Consumed by |
+|---|---|---|
+| Screen timeout | 15 / 30 / 60 s / always; **always-on while charging**; any button wakes (the waking press does nothing) | tapbox-ui reads /settings |
+| Volume cap (child safety) | 50-100% | tapboxd clamps every /volume path (buttons, AVRCP, phone) |
+| Idle auto-shutdown | 15 / 30 / 60 min / off | idle.py re-reads /settings each cycle (no restart) |
+| Bluetooth | pair new (auto-pair strongest — validated flow), known-devices list, connect/forget | new /bt endpoints |
+| WiFi | on/off + show SSID/IP (the IP doubles as the PWA URL) | /system endpoints |
+| Storage | SD used/free, cache sizes per type, clear cache | GET /system |
+| Battery | % + charging + **estimated playtime left** (the calibrated curve is literally remaining-playtime — show "~2.5 h igjen") | GET /system |
+| Power | shutdown / restart | POST /system/shutdown |
+| Later | backlight dimming (PWM on BCM13), language NO/EN, About page | |
+
+**API gaps this requires (playback/menu side is complete):**
+1. `GET /system` — battery (pisugar), disk, cache sizes, wifi state, temps, version
+2. `POST /system/wifi {"enabled"}`, `POST /system/shutdown`
+3. `GET/PUT /settings` — settings.json owned by tapboxd (screen_timeout_s,
+   idle_shutdown_min, volume_cap, ...)
+4. `/bt` endpoints — move play.sh's pairing/connect logic behind the daemon
+   (the consolidation SPEC.md already flags)
+
+## 8. Open questions
 
 - Button layout after kid-testing (3-year-old vs 6-year-old ergonomics differ).
 - Should the screen show cover art (Spotify images via the API —
