@@ -268,6 +268,7 @@ install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && R
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
+install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
 
 # Parent PWA (served by tapbox-daemon at http://tapbox.local:3679)
 mkdir -p /usr/share/tapbox/web

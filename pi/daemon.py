@@ -24,6 +24,11 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   GET  /system     battery (PiSugar), disk/cache usage, wifi state, temps
   POST /system/wifi      {"enabled": bool} — rfkill wifi
   POST /system/shutdown  {"restart": bool} — graceful poweroff/reboot
+  GET  /bt         known/paired/connected speakers + the configured one
+  POST /bt/pair    {"name"?} — button-first pairing: scan ~20s, auto-pair
+                   the strongest audio device (play.sh's validated flow)
+  POST /bt/connect {"mac"}  — switch to a known speaker (routes audio too)
+  POST /bt/forget  {"mac"}  — drop the bond
 
 The library lives in /etc/tapbox/library.json ON THE BOX — menus must
 render (and cached content must play) with no internet at all. A future
@@ -413,6 +418,64 @@ def set_wifi(enabled):
     log(f"wifi {cmd}ed")
     en, ssid, ip = wifi_state()
     return {"enabled": en, "ssid": ssid, "ip": ip}
+
+
+# --- bluetooth (delegates to play.sh — the pairing logic with all the
+# --- hard-won BlueZ workarounds lives there, in ONE place) -----------------------
+
+BT_FILE = os.environ.get("TAPBOX_BT_FILE", "/etc/tapbox/bt-headset")
+BT_LOCK = threading.Lock()  # one pairing/connect operation at a time
+MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+def play_cli():
+    p = os.path.join(_here, "play.sh")
+    return os.environ.get("TAPBOX_PLAY") or (
+        p if os.path.exists(p) else "/usr/local/bin/tapbox-play")
+
+
+def bt_status():
+    configured = None
+    try:
+        with open(BT_FILE) as f:
+            configured = f.read().strip() or None
+    except OSError:
+        pass
+    devices = {}
+    for line in _run_out(["bluetoothctl", "devices"]).splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0] == "Device":
+            devices[parts[1]] = {"mac": parts[1], "name": parts[2],
+                                 "paired": False, "connected": False}
+    for filt, key in (("Paired", "paired"), ("Connected", "connected")):
+        out = _run_out(["bluetoothctl", "devices", filt])
+        if filt == "Paired" and ("Invalid" in out or "Unknown" in out):
+            out = _run_out(["bluetoothctl", "paired-devices"])  # older bluez
+        for line in out.splitlines():
+            parts = line.split(" ", 2)
+            if len(parts) >= 2 and parts[0] == "Device" and parts[1] in devices:
+                devices[parts[1]][key] = True
+    return {"configured": configured, "pairing": BT_LOCK.locked(),
+            "devices": sorted(devices.values(),
+                              key=lambda d: d["name"].lower())}
+
+
+def bt_action(args, timeout):
+    """Run a play.sh BT command; None = another operation is in flight."""
+    if not BT_LOCK.acquire(blocking=False):
+        return None
+    try:
+        r = subprocess.run(["bash", play_cli(), *args], capture_output=True,
+                           text=True, timeout=timeout)
+        out = (r.stdout + "\n" + r.stderr).strip()
+        tail = "\n".join(out.splitlines()[-6:])
+        log(f"bt {' '.join(args)} -> exit {r.returncode}")
+        result = {"ok": r.returncode == 0, "output": tail}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        result = {"ok": False, "output": f"failed: {e}"}
+    finally:
+        BT_LOCK.release()
+    return {**result, **bt_status()}
 
 
 def shutdown(restart=False):
@@ -825,6 +888,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, load_settings())
         elif url.path == "/system":
             self._send(200, system_status())
+        elif url.path == "/bt":
+            self._send(200, bt_status())
         elif url.path == "/expand":
             q = urllib.parse.parse_qs(url.query)
             entry_id = (q.get("id") or [None])[0]
@@ -933,6 +998,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, set_wifi(body["enabled"]))
             elif self.path == "/system/shutdown":
                 self._send(200, shutdown(bool(body.get("restart"))))
+            elif self.path == "/bt/pair":
+                args = ["connect"]
+                if body.get("name"):
+                    args.append(str(body["name"]))
+                r = bt_action(args, timeout=120)
+                self._send(409 if r is None else 200,
+                           r or {"error": "bt operation already in progress"})
+            elif self.path in ("/bt/connect", "/bt/forget"):
+                mac = str(body.get("mac") or "")
+                if not MAC_RE.match(mac):
+                    self._send(400, {"error": "valid mac required"})
+                    return
+                cmd = "use" if self.path == "/bt/connect" else "forget"
+                r = bt_action([cmd, mac], timeout=90 if cmd == "use" else 30)
+                self._send(409 if r is None else 200,
+                           r or {"error": "bt operation already in progress"})
             elif self.path == "/stop":
                 self._send(200, ORCH.stop())
             else:

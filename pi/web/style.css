@@ -156,6 +156,9 @@ dl {
 dt { color: var(--dim); }
 dd { margin: 0; text-align: right; }
 
+.dim { color: var(--dim); }
+.small { font-size: 0.85rem; }
+
 #toast {
   position: fixed;
   bottom: 1rem;

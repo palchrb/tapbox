@@ -47,6 +47,8 @@ usage() {
   cat >&2 <<EOF
 Usage:
   sudo $0 connect [name]        pair + connect headset/speaker (pairing mode on!)
+  sudo $0 use <MAC>             connect a known device + route audio to it
+  sudo $0 forget <MAC>          remove the bond (and config if it was active)
   sudo $0 <spotify-link>        play a track/album/playlist link
   sudo $0 <MAC> <spotify-link>  explicit device MAC
   sudo $0 scan                  list all devices seen during a scan
@@ -290,6 +292,20 @@ case "$1" in
       wait_for_api
       curl -sf -X POST "$API/player/$1" >/dev/null && echo "OK: $1 (spotify only)"
     fi
+    exit 0 ;;
+  use)
+    [[ ${2:-} =~ $MAC_RE ]] || { echo "usage: sudo $0 use <MAC>" >&2; exit 1; }
+    connect_headset "$2"
+    exit 0 ;;
+  forget)
+    [[ ${2:-} =~ $MAC_RE ]] || { echo "usage: sudo $0 forget <MAC>" >&2; exit 1; }
+    bluetoothctl disconnect "$2" >/dev/null 2>&1 || true
+    bluetoothctl remove "$2" 2>/dev/null || true
+    if [[ "$(cat "$MAC_FILE" 2>/dev/null)" == "$2" ]]; then
+      rm -f "$MAC_FILE"
+      echo "==> That was the active device — pair or pick another one."
+    fi
+    echo "==> Forgot $2"
     exit 0 ;;
   vol)
     if [[ -z ${2:-} ]]; then

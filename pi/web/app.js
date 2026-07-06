@@ -35,7 +35,7 @@ document.querySelectorAll("nav button").forEach((btn) => {
       $(`#tab-${t}`).hidden = t !== btn.dataset.tab;
     });
     if (btn.dataset.tab === "library") loadLibrary();
-    if (btn.dataset.tab === "settings") { loadSettings(); loadSystem(); }
+    if (btn.dataset.tab === "settings") { loadSettings(); loadSystem(); loadBt(); }
   });
 });
 
@@ -312,6 +312,69 @@ $("#btn-restart").addEventListener("click", async () => {
   if (!confirm("Starte boksen på nytt?")) return;
   await api("/system/shutdown", { method: "POST", body: { restart: true } }).catch(() => {});
   toast("Starter på nytt …", 10000);
+});
+
+/* --- bluetooth ------------------------------------------------------------- */
+
+async function loadBt() {
+  let bt;
+  try { bt = await api("/bt"); } catch (e) { return; }
+  const active = bt.devices.find((d) => d.mac === bt.configured);
+  $("#bt-current").textContent = bt.configured
+    ? `Aktiv: ${active ? active.name : bt.configured}` +
+      (active && active.connected ? " (tilkoblet)" : " (ikke tilkoblet nå)")
+    : "Ingen høyttaler valgt ennå.";
+  const wrap = $("#bt-devices");
+  wrap.textContent = "";
+  for (const d of bt.devices) {
+    const row = document.createElement("div");
+    row.className = "entry";
+    const info = document.createElement("div");
+    info.className = "entry-info";
+    const name = document.createElement("strong");
+    name.textContent = d.name + (d.connected ? " ●" : "");
+    const mac = document.createElement("small");
+    mac.textContent = d.mac + (d.paired ? " · paret" : "");
+    info.append(name, mac);
+
+    const use = document.createElement("button");
+    use.textContent = "Bruk";
+    use.disabled = d.mac === bt.configured && d.connected;
+    use.addEventListener("click", () => btAction("/bt/connect", { mac: d.mac },
+      `Kobler til ${d.name} …`));
+
+    const forget = document.createElement("button");
+    forget.textContent = "Glem";
+    forget.className = "danger";
+    forget.addEventListener("click", () => {
+      if (confirm(`Glemme «${d.name}»?`)) {
+        btAction("/bt/forget", { mac: d.mac }, "Glemmer …");
+      }
+    });
+    row.append(info, use, forget);
+    wrap.appendChild(row);
+  }
+  $("#btn-pair").disabled = bt.pairing;
+}
+
+async function btAction(path, body, busyMsg) {
+  toast(busyMsg, 60000);
+  try {
+    const r = await api(path, { method: "POST", body });
+    toast(r.ok ? "OK" : (r.output || "Feilet").split("\n").pop(), r.ok ? 2500 : 8000);
+  } catch (e) {
+    toast(e.message, 6000);
+  }
+  loadBt();
+}
+
+$("#btn-pair").addEventListener("click", async () => {
+  const btn = $("#btn-pair");
+  btn.disabled = true;
+  btn.textContent = "Parer … (opptil 60 s)";
+  await btAction("/bt/pair", {}, "Skanner etter høyttalere …");
+  btn.disabled = false;
+  btn.textContent = "Par ny høyttaler";
 });
 
 /* --- boot ------------------------------------------------------------------ */
