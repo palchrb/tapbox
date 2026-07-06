@@ -198,7 +198,7 @@ def battery_corner(draw, system):
     if pct is not None:
         fill = max(2, int((w - 4) * min(pct, 100) / 100))
         draw.rectangle([x + 2, y + 2, x + 2 + fill, y + h - 2], fill=color)
-        label = "lader" if plugged else f"{int(round(pct))}%"
+        label = "chg" if plugged else f"{int(round(pct))}%"
         draw.text((x - 4, y + 1), label, font=F_SMALL, fill=color, anchor="ra")
     else:
         draw.text((x - 4, y + 1), "?", font=F_SMALL, fill=color, anchor="ra")
@@ -363,35 +363,35 @@ class App:
 
     def current_items(self):
         if self.view == "home":
-            return [s["name"] for s in self.library["sections"]] or ["(tomt bibliotek)"]
+            return [s["name"] for s in self.library["sections"]] or ["(empty library)"]
         if self.view == "entries":
             return [e["name"] for e in self.section["entries"]]
         if self.view == "episodes":
             eps = self.expanded["episodes"]
-            return ["▶ Spill alle"] + [
+            return ["▶ Play all"] + [
                 (e.get("title") or e.get("id") or "?",
                  "✓" if e.get("cached") else "") for e in eps]
         if self.view == "settings":
             s = self.settings
-            wifi = "på" if (self.system.get("wifi") or {}).get("enabled") else "av"
-            return [("Skjerm av etter", self.fmt_timeout(s["screen_timeout_s"])),
-                    ("Volumtak", f"{s['volume_cap']}%"),
-                    ("Auto-av (idle)", self.fmt_idle(s["idle_shutdown_min"])),
+            wifi = "on" if (self.system.get("wifi") or {}).get("enabled") else "off"
+            return [("Screen off after", self.fmt_timeout(s["screen_timeout_s"])),
+                    ("Volume cap", f"{s['volume_cap']}%"),
+                    ("Auto-off (idle)", self.fmt_idle(s["idle_shutdown_min"])),
                     ("Wi-Fi", wifi),
-                    ("Lagring", ""),
-                    ("Slå av", ""),
-                    ("Omstart", "")]
+                    ("Storage", ""),
+                    ("Shut down", ""),
+                    ("Restart", "")]
         if self.view == "storage":
             return []
         return []
 
     @staticmethod
     def fmt_timeout(v):
-        return "aldri" if v == 0 else f"{v}s"
+        return "never" if v == 0 else f"{v}s"
 
     @staticmethod
     def fmt_idle(v):
-        return "av" if v == 0 else f"{v} min"
+        return "off" if v == 0 else f"{v} min"
 
     def select(self):
         try:
@@ -403,7 +403,7 @@ class App:
                 self.push("entries")
             elif self.view == "entries":
                 self.entry = self.section["entries"][self.sel]
-                self.draw_message("Henter episoder ...")
+                self.draw_message("Fetching episodes ...")
                 self.expanded = api_get(f"/expand?id={self.entry['id']}")
                 if self.expanded["kind"] == "spotify" or not self.expanded["episodes"]:
                     api_post("/play", {"id": self.entry["id"]})
@@ -422,7 +422,7 @@ class App:
                 self.select_setting()
         except OSError as e:
             log(f"action failed: {e}")
-            self.draw_message("Nettverksfeil — prøv igjen")
+            self.draw_message("Network error — try again")
             time.sleep(1)
 
     def select_setting(self):
@@ -437,14 +437,14 @@ class App:
             self.settings = api_put("/settings", {key: nxt})
         elif i == 3:
             enabled = (self.system.get("wifi") or {}).get("enabled")
-            self.draw_message("Vent ...")
+            self.draw_message("Please wait ...")
             r = api_post("/system/wifi", {"enabled": not enabled})
             self.system.setdefault("wifi", {}).update(r)
         elif i == 4:
             self.push("storage")
         elif i in (5, 6):
-            action = "Omstart" if i == 6 else "Slår av"
-            self.draw_message(f"{action} ... (A for å bekrefte, B avbryt)")
+            action = "Restarting" if i == 6 else "Shutting down"
+            self.draw_message(f"{action} ... (A confirms, B cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
                 api_post("/system/shutdown", {"restart": i == 6})
@@ -474,17 +474,17 @@ class App:
         if self.view == "home":
             self.load_library()
             draw_list(d, "TapBox", self.current_items(), self.sel, self.system,
-                      hint="A: velg   hold A+B: innstillinger")
+                      hint="A: select   hold A+B: settings")
         elif self.view == "entries":
             draw_list(d, self.section["name"], self.current_items(), self.sel,
                       self.system)
         elif self.view == "episodes":
             draw_list(d, self.expanded.get("name") or "Episoder",
                       self.current_items(), self.sel, self.system,
-                      hint="✓ = lagret (spilles uten nett)")
+                      hint="✓ = downloaded (plays offline)")
         elif self.view == "settings":
-            draw_list(d, "Innstillinger", self.current_items(), self.sel,
-                      self.system, hint="A: endre   B: tilbake")
+            draw_list(d, "Settings", self.current_items(), self.sel,
+                      self.system, hint="A: change   B: back")
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "now":
@@ -492,23 +492,23 @@ class App:
         self.display.show(img)
 
     def render_storage(self, d):
-        d.text((10, 4), "Lagring", font=F_MED, fill=DIM)
+        d.text((10, 4), "Storage", font=F_MED, fill=DIM)
         battery_corner(d, self.system)
         y = 40
         disk = self.system.get("disk") or {}
         rows = []
         if disk:
             used = disk["total"] - disk["free"]
-            rows.append(("SD-kort", f"{fmt_bytes(used)} / {fmt_bytes(disk['total'])}"))
-            rows.append(("Ledig", fmt_bytes(disk["free"])))
+            rows.append(("SD card", f"{fmt_bytes(used)} / {fmt_bytes(disk['total'])}"))
+            rows.append(("Free", fmt_bytes(disk["free"])))
         for name, size in (self.system.get("caches") or {}).items():
-            label = "Podcast-cache" if name == "podcasts" else "Spotify-cache"
+            label = "Podcast cache" if name == "podcasts" else "Spotify cache"
             rows.append((label, fmt_bytes(size)))
         wifi = self.system.get("wifi") or {}
         rows.append(("Wi-Fi", wifi.get("ssid") or "—"))
         rows.append(("IP", wifi.get("ip") or "—"))
         if self.system.get("cpu_temp") is not None:
-            rows.append(("CPU-temp", f"{self.system['cpu_temp']}°C"))
+            rows.append(("CPU temp", f"{self.system['cpu_temp']}°C"))
         for label, val in rows:
             d.text((12, y), label, font=F_MED, fill=DIM)
             d.text((W - 12, y), val, font=F_MED, fill=FG, anchor="ra")
@@ -523,7 +523,7 @@ class App:
             ty = 150
         else:
             ty = 70
-        title = st.get("title") or "(ingenting spiller)"
+        title = st.get("title") or "(nothing playing)"
         d.text((W // 2, ty), title[:26], font=F_MED, fill=FG, anchor="ma")
         sub = ", ".join((st.get("spotify") or {}).get("artists") or [])
         if sub:
@@ -548,7 +548,7 @@ class App:
                        (W // 2 + 8, cy)], fill=FG)
         if time.monotonic() < self.volume_flash and self.volume_shown is not None:
             d.rounded_rectangle([60, 90, 180, 130], radius=8, fill=(30, 30, 45))
-            d.text((W // 2, 100), f"Volum {self.volume_shown}", font=F_MED,
+            d.text((W // 2, 100), f"Volume {self.volume_shown}", font=F_MED,
                    fill=HILITE, anchor="ma")
 
     # -- main loop -------------------------------------------------------------------

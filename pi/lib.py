@@ -13,11 +13,11 @@ Usage:
   sudo tapbox-lib order <entry-id> auto|newest|oldest
 
 Examples:
-  sudo tapbox-lib add Fortellinger Fantorangen \\
+  sudo tapbox-lib add Stories Fantorangen \\
       https://radio.nrk.no/podkast/fantorangenfortellinger
-  sudo tapbox-lib add Musikk Barnesanger \\
+  sudo tapbox-lib add Music "Kids songs" \\
       "https://open.spotify.com/playlist/..."
-  sudo tapbox-lib add Lydbøker "Lydbok X" /var/lib/tapbox/local/lydbok-x oldest
+  sudo tapbox-lib add Audiobooks "Book X" /var/lib/tapbox/local/book-x oldest
 
 'order' controls playback/menu direction for multi-episode links:
 auto = the service's natural order (NRK podcasts newest first, series and
