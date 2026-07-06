@@ -83,10 +83,18 @@ fi
 
 # --- 2. go-librespot ---------------------------------------------------------
 
-if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 ]]; then
-  echo "==> [2/8] go-librespot already installed — skipping (use --update to refresh)"
+# TapBox fork: upstream + on-disk cache for the encrypted audio files, so a
+# track a kid replays is downloaded once instead of every time (bandwidth on
+# hotspots; NOT offline playback — the session and audio keys are still live).
+GO_LIBRESPOT_REPO="palchrb/go-librespot"
+GO_LIBRESPOT_VERSION="v0.0.2"
+GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
+
+if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \
+      && "$(cat "$GL_VERSION_FILE" 2>/dev/null)" == "$GO_LIBRESPOT_REPO $GO_LIBRESPOT_VERSION" ]]; then
+  echo "==> [2/8] go-librespot $GO_LIBRESPOT_VERSION already installed — skipping"
 else
-  echo "==> [2/8] Downloading go-librespot (latest release)..."
+  echo "==> [2/8] Downloading go-librespot ($GO_LIBRESPOT_REPO $GO_LIBRESPOT_VERSION)..."
   case "$(uname -m)" in
     aarch64)        ASSET="go-librespot_linux_arm64.tar.gz" ;;
     armv6l|armv7l)  ASSET="go-librespot_linux_armv6_rpi.tar.gz" ;;
@@ -96,9 +104,11 @@ else
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
   curl -fL --retry 3 -o "$TMP/gl.tar.gz" \
-    "https://github.com/devgianlu/go-librespot/releases/latest/download/$ASSET"
+    "https://github.com/$GO_LIBRESPOT_REPO/releases/download/$GO_LIBRESPOT_VERSION/$ASSET"
   tar -xzf "$TMP/gl.tar.gz" -C "$TMP"
   install -m 755 "$(find "$TMP" -type f -name go-librespot | head -n1)" /usr/local/bin/go-librespot
+  echo "$GO_LIBRESPOT_REPO $GO_LIBRESPOT_VERSION" > "$GL_VERSION_FILE"
+  GO_RESTART_NEEDED=1  # new binary -> restart the service in step 6
 fi
 
 # --- 3. configs --------------------------------------------------------------
@@ -132,6 +142,12 @@ server:
   port: $API_PORT
 zeroconf_enabled: true
 disable_autoplay: true  # playlist ends -> silence, not algorithm radio
+# TapBox fork feature: encrypted audio files cached on disk (repeat plays
+# skip the CDN download; still requires a live session + audio key).
+cache:
+  enabled: true
+  dir: /var/lib/tapbox/spotify-cache
+  size_limit: 2GB
 credentials:
   type: zeroconf
   zeroconf:
@@ -148,6 +164,21 @@ if [[ -f "$CONF_DIR/config.yml" ]] && ! grep -q '^disable_autoplay:' "$CONF_DIR/
   echo "    config: added disable_autoplay: true"
   GO_RESTART_NEEDED=1
 fi
+# Audio cache (TapBox fork feature) — see the config template above.
+if [[ -f "$CONF_DIR/config.yml" ]] && ! grep -q '^cache:' "$CONF_DIR/config.yml"; then
+  cat >> "$CONF_DIR/config.yml" <<'EOF'
+cache:
+  enabled: true
+  dir: /var/lib/tapbox/spotify-cache
+  size_limit: 2GB
+EOF
+  echo "    config: enabled the audio cache (2GB, /var/lib/tapbox/spotify-cache)"
+  GO_RESTART_NEEDED=1
+fi
+# The cache dir must be writable by the service user (go-librespot runs
+# as $RUN_USER, unlike the root-owned tapbox daemons).
+mkdir -p /var/lib/tapbox/spotify-cache
+chown "$RUN_USER:" /var/lib/tapbox/spotify-cache
 
 # --- 4. bluetooth + go-librespot services ------------------------------------
 
