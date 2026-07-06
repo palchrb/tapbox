@@ -47,6 +47,14 @@ local folder.
         "order": "auto" } ] } ] }
 ```
 
+`cache` (0-100, default 0) keeps the newest N episodes downloaded for
+offline playback — per entry, decided by the parent when adding the link
+(works for NRK and any RSS feed; generic-RSS sync + offline feed listings
+implemented 2026-07-06; Spotify is excluded — its encrypted-audio cache is
+global, sized by the `spotify_cache_gb` setting, default 20 GB, applied by
+rewriting go-librespot's size_limit). Raw targets (cards/CLI) keep the
+legacy auto-sync-50 for NRK.
+
 `order` (`auto | newest_first | oldest_first`) sets menu/playback direction
 per entry: `auto` = the service's natural order (NRK podcasts newest first,
 series/folders oldest first, RSS as the feed lists), explicit values
