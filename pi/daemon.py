@@ -25,9 +25,11 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /system/wifi      {"enabled": bool} — rfkill wifi
   POST /system/shutdown  {"restart": bool} — graceful poweroff/reboot
   GET  /bt         known/paired/connected speakers + the configured one
-  POST /bt/pair    {"name"?} — button-first pairing: scan ~20s, auto-pair
-                   the strongest audio device (play.sh's validated flow)
-  POST /bt/connect {"mac"}  — switch to a known speaker (routes audio too)
+  POST /bt/scan    scan ~20s, list nearby devices (pick one -> /bt/connect)
+  POST /bt/pair    {"name"?} — one-button flow: auto-pair the single audio
+                   device in pairing mode (play.sh's validated flow)
+  POST /bt/connect {"mac"}  — connect a speaker; pairs first when the mac
+                   is new (picked from a scan), routes audio to it
   POST /bt/forget  {"mac"}  — drop the bond
 
 The library lives in /etc/tapbox/library.json ON THE BOX — menus must
@@ -476,6 +478,29 @@ def bt_action(args, timeout):
     finally:
         BT_LOCK.release()
     return {**result, **bt_status()}
+
+
+def bt_scan():
+    """~20s discovery; devices in pairing mode show up here. None = busy."""
+    if not BT_LOCK.acquire(blocking=False):
+        return None
+    try:
+        r = subprocess.run(["bash", play_cli(), "scan-raw"],
+                           capture_output=True, text=True, timeout=60)
+        found = []
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and MAC_RE.match(parts[0]):
+                found.append({"mac": parts[0], "name": parts[1],
+                              "audio": len(parts) > 2 and parts[2] == "yes"})
+        # audio devices first, then by name
+        found.sort(key=lambda d: (not d["audio"], d["name"].lower()))
+        log(f"bt scan -> {len(found)} device(s)")
+        return {"ok": True, "found": found}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "found": [], "output": f"failed: {e}"}
+    finally:
+        BT_LOCK.release()
 
 
 def shutdown(restart=False):
@@ -998,6 +1023,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, set_wifi(body["enabled"]))
             elif self.path == "/system/shutdown":
                 self._send(200, shutdown(bool(body.get("restart"))))
+            elif self.path == "/bt/scan":
+                r = bt_scan()
+                self._send(409 if r is None else 200,
+                           r or {"error": "bt operation already in progress"})
             elif self.path == "/bt/pair":
                 args = ["connect"]
                 if body.get("name"):

@@ -91,9 +91,14 @@
     <h2>Bluetooth-høyttaler</h2>
     <p id="bt-current" class="dim">–</p>
     <div id="bt-devices"></div>
-    <button id="btn-pair">Par ny høyttaler</button>
-    <p class="dim small">Sett høyttaleren i paringsmodus først — boksen finner
-    og kobler seg til den sterkeste lydenheten i nærheten (tar ~30–60 s).</p>
+    <div class="controls">
+      <button id="btn-scan">Søk etter nye</button>
+      <button id="btn-pair">Par nærmeste</button>
+    </div>
+    <div id="bt-found"></div>
+    <p class="dim small">Sett høyttaleren i paringsmodus først. «Søk» viser
+    enhetene i nærheten så du kan velge; «Par nærmeste» kobler automatisk til
+    den ene lydenheten som er i paringsmodus (~30–60 s).</p>
   </div>
   <div class="card">
     <h2>System</h2>

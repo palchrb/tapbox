@@ -293,6 +293,11 @@ case "$1" in
       curl -sf -X POST "$API/player/$1" >/dev/null && echo "OK: $1 (spotify only)"
     fi
     exit 0 ;;
+  scan-raw)
+    # Machine-readable scan for tapboxd /bt/scan: mac<TAB>name<TAB>audio
+    bt_up >/dev/null 2>&1
+    discover
+    exit 0 ;;
   use)
     [[ ${2:-} =~ $MAC_RE ]] || { echo "usage: sudo $0 use <MAC>" >&2; exit 1; }
     connect_headset "$2"

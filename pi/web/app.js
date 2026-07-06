@@ -338,8 +338,8 @@ async function loadBt() {
     info.append(name, mac);
 
     const use = document.createElement("button");
-    use.textContent = "Bruk";
-    use.disabled = d.mac === bt.configured && d.connected;
+    use.textContent = d.connected ? "Tilkoblet" : "Koble til";
+    use.disabled = d.connected;
     use.addEventListener("click", () => btAction("/bt/connect", { mac: d.mac },
       `Kobler til ${d.name} …`));
 
@@ -371,10 +371,46 @@ async function btAction(path, body, busyMsg) {
 $("#btn-pair").addEventListener("click", async () => {
   const btn = $("#btn-pair");
   btn.disabled = true;
-  btn.textContent = "Parer … (opptil 60 s)";
-  await btAction("/bt/pair", {}, "Skanner etter høyttalere …");
+  btn.textContent = "Parer …";
+  await btAction("/bt/pair", {}, "Skanner og parer nærmeste høyttaler …");
   btn.disabled = false;
-  btn.textContent = "Par ny høyttaler";
+  btn.textContent = "Par nærmeste";
+});
+
+$("#btn-scan").addEventListener("click", async () => {
+  const btn = $("#btn-scan");
+  btn.disabled = true;
+  btn.textContent = "Søker … (~25 s)";
+  const wrap = $("#bt-found");
+  wrap.textContent = "";
+  try {
+    const r = await api("/bt/scan", { method: "POST", body: {} });
+    if (!r.found.length) {
+      wrap.innerHTML = "<p class='dim'>Fant ingen nye enheter — er høyttaleren i paringsmodus og i nærheten?</p>";
+    }
+    for (const d of r.found) {
+      const row = document.createElement("div");
+      row.className = "entry";
+      const info = document.createElement("div");
+      info.className = "entry-info";
+      const name = document.createElement("strong");
+      name.textContent = d.name + (d.audio ? " 🔊" : "");
+      const mac = document.createElement("small");
+      mac.textContent = d.mac;
+      info.append(name, mac);
+      const pick = document.createElement("button");
+      pick.textContent = "Par og koble til";
+      pick.addEventListener("click", async () => {
+        wrap.textContent = "";
+        await btAction("/bt/connect", { mac: d.mac },
+          `Parer og kobler til ${d.name} …`);
+      });
+      row.append(info, pick);
+      wrap.appendChild(row);
+    }
+  } catch (e) { toast(e.message, 6000); }
+  btn.disabled = false;
+  btn.textContent = "Søk etter nye";
 });
 
 /* --- boot ------------------------------------------------------------------ */
