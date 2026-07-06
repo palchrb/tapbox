@@ -190,6 +190,12 @@ pcm.tapbox_bt {
         profile "a2dp"
     }
 }
+# Built-in/HAT speaker (Pirate Audio / Amp SHIM, MAX98357A over I2S).
+# Needs dtoverlay=hifiberry-dac (sudo tapbox-power hat-audio-on) + reboot.
+pcm.tapbox_local {
+    type plug
+    slave.pcm "hw:sndrpihifiberry"
+}
 EOF
     echo "==> ALSA output routed to $mac, restarting go-librespot..."
     systemctl restart go-librespot

@@ -721,6 +721,14 @@ def shutdown(restart=False):
 
 # --- audio output (bt speaker vs built-in/HAT) ----------------------------------
 
+def _i2s_card_present():
+    try:
+        with open("/proc/asound/cards") as f:
+            return "sndrpihifiberry" in f.read()
+    except OSError:
+        return False
+
+
 def current_output():
     try:
         with open(OUT_FILE) as f:
@@ -962,9 +970,14 @@ class Orchestrator:
             log(f"output -> {device} (pcm {pcm}, "
                 f"mpv {'switched' if mpv_switched else 'n/a'}, "
                 f"go-librespot {'restarted' if restarted else 'unchanged'})")
-            return {"output": device, "pcm": pcm,
-                    "mpv_switched": mpv_switched,
-                    "spotify_restarted": restarted}
+            out = {"output": device, "pcm": pcm,
+                   "mpv_switched": mpv_switched,
+                   "spotify_restarted": restarted}
+            if device == "local" and not _i2s_card_present():
+                out["warning"] = ("no I2S sound card found — is the HAT "
+                                  "mounted and hat-audio-on + reboot done? "
+                                  "Playback will be silent until then.")
+            return out
 
     def shuffle(self, enabled):
         """mpv: reshuffle/restore the playlist order (current track keeps

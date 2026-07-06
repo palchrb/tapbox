@@ -16,6 +16,9 @@
 #   sudo tapbox-power taps-on   PiSugar button: short=play/pause, double=next,
 #                               long=previous (via pisugar-server tap shells)
 #   sudo tapbox-power taps-off  restore default PiSugar button behaviour
+#   sudo tapbox-power hat-audio-on   enable I2S audio for the HAT speaker
+#                                    (hifiberry-dac overlay; reboot needed)
+#   sudo tapbox-power hat-audio-off  remove the overlay again
 #   sudo tapbox-power curve     apply the calibrated TapBox battery curve
 #                               (percent = remaining playtime; see pi/sugar-config.txt)
 #
@@ -226,6 +229,25 @@ PY
       echo "PiSugar button: short=play/pause, double=next, long=previous."
     else
       echo "PiSugar button tap actions disabled."
+    fi
+    ;;
+  hat-audio-on|hat-audio-off)
+    # I2S audio for the Pirate Audio / Amp SHIM speaker (MAX98357A).
+    # Adds/removes dtoverlay=hifiberry-dac; takes effect after a reboot.
+    boot=/boot/firmware/config.txt
+    [[ -f $boot ]] || boot=/boot/config.txt
+    [[ -f $boot ]] || { echo "config.txt not found" >&2; exit 1; }
+    if [[ $1 == hat-audio-on ]]; then
+      if grep -q '^dtoverlay=hifiberry-dac' "$boot"; then
+        echo "hifiberry-dac overlay already enabled in $boot"
+      else
+        printf '\n# TapBox HAT speaker (MAX98357A I2S)\ndtoverlay=hifiberry-dac\n' >> "$boot"
+        echo "Enabled hifiberry-dac in $boot — reboot to activate."
+        echo "After the reboot: pick 'Built-in' in the PWA (or POST /output)."
+      fi
+    else
+      sed -i '/^# TapBox HAT speaker/d; /^dtoverlay=hifiberry-dac/d' "$boot"
+      echo "Disabled the HAT audio overlay — reboot to apply."
     fi
     ;;
   curve)

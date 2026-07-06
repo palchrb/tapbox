@@ -128,8 +128,9 @@ document.querySelectorAll("input[name=output]").forEach((r) => {
   r.addEventListener("change", async () => {
     try {
       const res = await api("/output", { method: "POST", body: { device: r.value } });
-      toast(res.spotify_restarted
-        ? "Switching output (Spotify restarts …)" : "Audio output switched");
+      toast(res.warning || (res.spotify_restarted
+        ? "Switching output (Spotify restarts …)" : "Audio output switched"),
+        res.warning ? 9000 : 2500);
     } catch (e) { toast(e.message); }
   });
 });

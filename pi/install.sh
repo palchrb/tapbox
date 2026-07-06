@@ -122,8 +122,26 @@ pcm.tapbox_bt {
     type plug
     slave.pcm "null"
 }
+# Built-in/HAT speaker (Pirate Audio / Amp SHIM, MAX98357A over I2S).
+# Needs dtoverlay=hifiberry-dac (sudo tapbox-power hat-audio-on) + reboot.
+pcm.tapbox_local {
+    type plug
+    slave.pcm "hw:sndrpihifiberry"
+}
 EOF
   echo "    wrote placeholder /etc/asound.conf"
+fi
+# Migration: older asound.conf versions lack the tapbox_local pcm
+if ! grep -q "tapbox_local" /etc/asound.conf 2>/dev/null; then
+  cat >> /etc/asound.conf <<'EOF'
+# Built-in/HAT speaker (Pirate Audio / Amp SHIM, MAX98357A over I2S).
+# Needs dtoverlay=hifiberry-dac (sudo tapbox-power hat-audio-on) + reboot.
+pcm.tapbox_local {
+    type plug
+    slave.pcm "hw:sndrpihifiberry"
+}
+EOF
+  echo "    added tapbox_local pcm to /etc/asound.conf"
 fi
 
 if [[ -f "$CONF_DIR/config.yml" ]]; then
