@@ -39,18 +39,19 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
 
-STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
-API = "http://127.0.0.1:3678"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, "/usr/local/lib/tapbox-py"):
+    if os.path.isdir(os.path.join(_p, "tapbox")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        break
+from tapbox import content, mpv as _mpv, spotify  # noqa: E402
+from tapbox.paths import STATE_DIR  # noqa: E402
+
+is_spotify = spotify.is_spotify
 RESUME_MIN_S = 20   # don't bother resuming the first seconds
 POLL_S = 3
-
-SPOTIFY_URI_RE = re.compile(
-    r"^spotify:(track|album|playlist|artist|episode|show):[A-Za-z0-9]+$")
-SPOTIFY_LINK_RE = re.compile(
-    r"open\.spotify\.com/(?:intl-[a-z-]+/)?"
-    r"(track|album|playlist|artist|episode|show)/([A-Za-z0-9]+)")
 
 
 def log(msg):
@@ -93,44 +94,14 @@ def clear_state(key):
 
 
 def ipc(sock_path, *command):
-    with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(2)
-        s.connect(sock_path)
-        s.sendall(json.dumps({"command": list(command)}).encode() + b"\n")
-        # mpv interleaves async events with command replies; find the line
-        # that actually answers our command (has an "error" field).
-        for line in s.recv(65536).split(b"\n"):
-            if not line.strip():
-                continue
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                continue
-            if "error" in msg:
-                return msg
-    return {}
+    return _mpv.ipc(list(command), sock=sock_path)
 
 
 def ipc_get(sock_path, prop):
     try:
-        resp = ipc(sock_path, "get_property", prop)
+        return _mpv.get(prop, sock=sock_path)
     except (OSError, ValueError):
         return None
-    return resp.get("data") if resp.get("error") == "success" else None
-
-
-def api(path, payload=None, timeout=10):
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        API + path, data=data, method="POST" if data else "GET",
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-
-def is_spotify(target):
-    return (target.startswith("spotify:") or "open.spotify.com" in target
-            or "spotify.link/" in target)
 
 
 def output_pcm():
@@ -155,35 +126,22 @@ def online():
         return False
 
 
-def to_spotify_uri(target):
-    if SPOTIFY_URI_RE.match(target):
-        return target
-    if "spotify.link/" in target:  # short links redirect to open.spotify.com
-        with urllib.request.urlopen(target, timeout=10) as r:
-            target = r.url
-    m = SPOTIFY_LINK_RE.search(target)
-    return f"spotify:{m.group(1)}:{m.group(2)}" if m else None
-
-
 def play_spotify(target):
-    uri = to_spotify_uri(target)
+    uri = spotify.to_uri(target)
     if not uri:
         log(f"could not parse spotify link: {target}")
         sys.exit(1)
     try:
-        api("/player/play", {"uri": uri})
+        spotify.go("/player/play", timeout=10, body={"uri": uri})
     except OSError as e:
         log(f"go-librespot API unreachable ({e}) — check: journalctl -u go-librespot")
         sys.exit(1)
     log(f"spotify: playing {uri}")
     time.sleep(2)
-    try:
-        track = (json.loads(api("/status")) or {}).get("track") or {}
-        if track.get("name"):
-            artists = ", ".join(track.get("artist_names") or [])
-            log(f"now playing: {track['name']} — {artists}")
-    except (OSError, ValueError):
-        pass
+    track = spotify.status().get("track") or {}
+    if track.get("name"):
+        artists = ", ".join(track.get("artist_names") or [])
+        log(f"now playing: {track['name']} — {artists}")
 
 
 def main():
@@ -223,10 +181,8 @@ def main():
 
     titles, ids, images = {}, {}, {}
     if not urls:  # expand the link ourselves — pure-python entrypoint
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
-            import nrk
-            entries = nrk.expand_entries(target)
+            entries = content.expand_entries(target)
             urls = [e["url"] for e in entries]
             titles = {e["url"]: e["title"] for e in entries if e.get("title")}
             ids = {e["url"]: e["id"] for e in entries if e.get("id")}
@@ -251,7 +207,7 @@ def main():
         log("starting fresh — cleared remembered position")
 
     try:
-        api("/player/pause", {})  # don't talk over Spotify
+        spotify.go("/player/pause")  # don't talk over Spotify
     except OSError:
         pass
 
@@ -336,12 +292,11 @@ def main():
             and target.startswith(("http://", "https://")):
         sync_args = ["sync-feed", target, str(cache_n)]
     if sync_args:
-        nrkpy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nrk.py")
-        if os.path.exists(nrkpy):
-            subprocess.Popen([sys.executable, nrkpy, *sync_args],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             preexec_fn=lambda: os.nice(19))  # never compete with audio
-            log(f"background sync started: {' '.join(sync_args)}")
+        # content.py is stdlib-only and runs fine as a plain script
+        subprocess.Popen([sys.executable, content.__file__, *sync_args],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         preexec_fn=lambda: os.nice(19))  # never compete with audio
+        log(f"background sync started: {' '.join(sync_args)}")
 
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):

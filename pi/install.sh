@@ -261,9 +261,19 @@ else
   echo "    python libs already installed — skipping pip"
 fi
 
-RFID_CHANGED=0
+# Shared python package (tapbox/): one copy under /usr/local/lib/tapbox-py.
+# The entry scripts bootstrap it from there (repo checkout wins when present).
+PKG_CHANGED=0
+mkdir -p /usr/local/lib/tapbox-py/tapbox
+for f in "$SCRIPT_DIR"/tapbox/*.py; do
+  install_if_changed 644 "$f" "/usr/local/lib/tapbox-py/tapbox/$(basename "$f")" && PKG_CHANGED=1
+done
+# The pre-package layout installed nrk.py loose in /usr/local/bin — remove it
+# so a stale copy can never shadow the package (we've been bitten before).
+rm -f /usr/local/bin/nrk.py
+
+RFID_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/tapbox-rfid   && RFID_CHANGED=1
-install_if_changed 644 "$SCRIPT_DIR/nrk.py"    /usr/local/bin/nrk.py        && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
@@ -294,7 +304,7 @@ EOF
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
 install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  || true
 
-DAEMON_CHANGED=0
+DAEMON_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
 write_if_changed /etc/systemd/system/tapbox-daemon.service <<EOF && DAEMON_CHANGED=1
 [Unit]
@@ -311,7 +321,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-BTN_CHANGED=0
+BTN_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/buttons.py" /usr/local/bin/tapbox-buttons && BTN_CHANGED=1
 write_if_changed /etc/systemd/system/tapbox-buttons.service <<'EOF' && BTN_CHANGED=1
 [Unit]

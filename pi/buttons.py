@@ -6,27 +6,28 @@ buttons (any speaker/headset — BlueZ maps them all to the same standard
 evdev codes), USB media keyboards, and future GPIO buttons via the
 gpio-keys overlay. Nothing here is specific to one device.
 
-Routing (same rule as everywhere else in tapbox): if the mpv player is
-running (its IPC socket answers), commands go there; otherwise to
-go-librespot's API (Spotify).
+Routing: commands go to the orchestration daemon (which owns "what is
+active" and can even resume a dead session); if it is down, fall back to
+the direct heuristic (mpv first, else Spotify).
 
 Devices come and go with bluetooth connections, so the device list is
 re-scanned every few seconds (hot-plug).
 """
 
-import json
 import os
-import socket
 import sys
 import time
-import urllib.request
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, "/usr/local/lib/tapbox-py"):
+    if os.path.isdir(os.path.join(_p, "tapbox")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        break
+from tapbox import boxapi, mpv, spotify  # noqa: E402
 
 # evdev is only needed for the daemon (device watching); the one-shot CLI
 # (used by the PiSugar tap shells) imports lazily so it runs on plain python3.
-
-API = "http://127.0.0.1:3678"
-DAEMON = "http://127.0.0.1:3679"
-MPV_SOCK = os.environ.get("TAPBOX_MPV_SOCK", "/run/tapbox-mpv.sock")
 
 # Standard Linux input-event-codes (raw ints so no evdev import at load)
 ACTIONS = {
@@ -47,61 +48,20 @@ MPV_CMDS = {
     "volup": ["add", "volume", VOL_STEP],
     "voldown": ["add", "volume", -VOL_STEP],
 }
-SPOTIFY_PATHS = {
-    "playpause": "/player/playpause",
-    "next": "/player/next",
-    "prev": "/player/prev",
-}
 
 
 def log(msg):
     print(f"buttons: {msg}", flush=True)
 
 
-def mpv_command(cmd):
-    with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(2)
-        s.connect(MPV_SOCK)
-        s.sendall(json.dumps({"command": cmd}).encode() + b"\n")
-        resp = json.loads(s.recv(65536).split(b"\n")[0])
-        return resp.get("error") == "success"
-
-
-def spotify_post(path, body=None):
-    data = json.dumps(body).encode() if body is not None else b"{}"
-    req = urllib.request.Request(
-        API + path, data=data, headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=5).read()
-
-
-def spotify_status():
-    try:
-        with urllib.request.urlopen(API + "/status", timeout=5) as r:
-            return json.loads(r.read())
-    except (OSError, ValueError):
-        return {}
-
-
 def spotify_command(action):
     if action in ("volup", "voldown"):
-        steps = spotify_status().get("volume_steps") or 65535
+        steps = spotify.status().get("volume_steps") or 65535
         delta = VOL_STEP if action == "volup" else -VOL_STEP
-        spotify_post("/player/volume",
-                     {"volume": round(delta * steps / 100), "relative": True})
-        return
-    if action != "prev":
-        spotify_post(SPOTIFY_PATHS[action])
-        return
-    # "prev" in Spotify rewinds the current track first and only jumps to the
-    # previous track on a second press. Since the button is one gesture, do
-    # the second press ourselves when the first only rewound.
-    before = spotify_status().get("track", {}).get("uri")
-    spotify_post("/player/prev")
-    time.sleep(0.4)
-    after = spotify_status()
-    same = after.get("track", {}).get("uri") == before
-    if same and (after.get("position") or 0) < 2000:
-        spotify_post("/player/prev")  # it only rewound — go to the real prev
+        spotify.go("/player/volume",
+                   body={"volume": round(delta * steps / 100), "relative": True})
+    else:
+        spotify.command(action)
 
 
 def handle(action):
@@ -109,21 +69,17 @@ def handle(action):
     # even resume the last-played target on a dead session.
     try:
         if action in ("volup", "voldown"):
-            path, data = "/volume", json.dumps(
-                {"delta": VOL_STEP if action == "volup" else -VOL_STEP}).encode()
+            path = "/volume"
+            body = {"delta": VOL_STEP if action == "volup" else -VOL_STEP}
         else:
-            path, data = "/" + action, b"{}"
-        req = urllib.request.Request(
-            DAEMON + path, data=data,
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            routed = json.loads(r.read()).get("routed")
+            path, body = "/" + action, {}
+        routed = boxapi.post(path, body).get("routed")
         log(f"{action} -> daemon ({routed})")
         return
     except (OSError, ValueError):
         pass  # daemon not running — fall back to direct heuristic
     try:
-        if mpv_command(MPV_CMDS[action]):
+        if mpv.ipc(MPV_CMDS[action]).get("error") == "success":
             log(f"{action} -> mpv")
             return
     except OSError:

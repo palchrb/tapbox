@@ -29,15 +29,18 @@ target to /etc/tapbox/pending-map; the next card is bound to it.
 import json
 import logging
 import os
-import socket
 import subprocess
 import sys
 import time
-import urllib.request
 
-DAEMON = "http://127.0.0.1:3679"
-GO_API = "http://127.0.0.1:3678"
-MPV_SOCK = "/run/tapbox-mpv.sock"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, "/usr/local/lib/tapbox-py"):
+    if os.path.isdir(os.path.join(_p, "tapbox")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        break
+from tapbox import boxapi, mpv, spotify  # noqa: E402
+
 CARDS_FILE = "/etc/tapbox/cards.json"
 PENDING_FILE = "/etc/tapbox/pending-map"
 READ_TIMEOUT_S = 0.15   # how long each poll waits for a card (poll mode)
@@ -74,10 +77,7 @@ def play(target):
     # Preferred path: hand the target to the orchestration daemon, which
     # owns playback state (so buttons etc. route coherently afterwards).
     try:
-        req = urllib.request.Request(
-            DAEMON + "/play", data=json.dumps({"target": target}).encode(),
-            headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15).read()
+        boxapi.post("/play", {"target": target})
         return
     except (OSError, ValueError) as e:
         log.warning("daemon unreachable (%s) — playing directly", e)
@@ -91,22 +91,16 @@ def play(target):
 def pause():
     """Pause whatever is audible (card removed from the slot)."""
     try:
-        req = urllib.request.Request(DAEMON + "/pause", data=b"{}")
-        urllib.request.urlopen(req, timeout=10).read()
+        boxapi.post("/pause", {}, timeout=10)
         return
-    except OSError as e:
+    except (OSError, ValueError) as e:
         log.warning("daemon unreachable (%s) — pausing directly", e)
     try:
-        with socket.socket(socket.AF_UNIX) as s:
-            s.settimeout(2)
-            s.connect(MPV_SOCK)
-            s.sendall(b'{"command":["set_property","pause",true]}\n')
-            s.recv(4096)
+        mpv.ipc(["set_property", "pause", True])
     except OSError:
         pass
     try:
-        req = urllib.request.Request(GO_API + "/player/pause", data=b"{}")
-        urllib.request.urlopen(req, timeout=5).read()
+        spotify.go("/player/pause")
     except OSError:
         pass
 

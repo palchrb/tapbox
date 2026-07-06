@@ -1,4 +1,4 @@
-"""NRK link expansion for the TapBox rig.
+"""NRK/RSS/folder link expansion + episode cache (tapbox.content, ex nrk.py).
 
 Ported from palchrb's rfid_sonos_backend app.py, minus the Sonos-specific
 parts (x-sonos-http URIs, DIDL metadata). The strategy is the same:
@@ -50,7 +50,10 @@ def _log(msg):
 
 PSAPI = "https://psapi.nrk.no"
 MAX_EPISODES = 100
-CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
+try:
+    from tapbox.paths import CACHE_DIR
+except ImportError:  # run as a script (sync subprocess)
+    CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
 CATALOG_TTL_S = 12 * 3600
 SYNC_COUNT = 50
 

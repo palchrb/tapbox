@@ -20,7 +20,6 @@ Dev mode (no HAT needed):
                                  per event: a/b/x/y = press, s = settings
 """
 
-import json
 import os
 import select
 import sys
@@ -29,7 +28,18 @@ import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
 
-DAEMON = os.environ.get("TAPBOX_DAEMON", "http://127.0.0.1:3679")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, "/usr/local/lib/tapbox-py"):
+    if os.path.isdir(os.path.join(_p, "tapbox")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        break
+from tapbox import boxapi  # noqa: E402
+
+api_get = boxapi.get
+api_post = boxapi.post
+api_put = boxapi.put
+
 W = H = 240
 PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
 FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
@@ -47,27 +57,6 @@ WARN = (230, 80, 80)
 
 def log(msg):
     print(f"tapbox-ui: {msg}", flush=True)
-
-
-def api_get(path, timeout=10):
-    with urllib.request.urlopen(DAEMON + path, timeout=timeout) as r:
-        return json.loads(r.read())
-
-
-def api_post(path, obj=None, timeout=15):
-    req = urllib.request.Request(
-        DAEMON + path, data=json.dumps(obj or {}).encode(),
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
-
-
-def api_put(path, obj):
-    req = urllib.request.Request(
-        DAEMON + path, data=json.dumps(obj).encode(), method="PUT",
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read())
 
 
 def font(size):

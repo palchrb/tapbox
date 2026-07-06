@@ -62,26 +62,40 @@ import sys
 import threading
 import time
 import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-GO_API = "http://127.0.0.1:3678"
-MPV_SOCK = os.environ.get("TAPBOX_MPV_SOCK", "/run/tapbox-mpv.sock")
-STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
+# The tapbox package sits next to this script in the repo, or under
+# /usr/local/lib/tapbox-py when installed. Repo wins; exactly one is used.
+_here = os.path.dirname(os.path.abspath(__file__))
+for _p in (_here, "/usr/local/lib/tapbox-py"):
+    if os.path.isdir(os.path.join(_p, "tapbox")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        break
+from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
+from tapbox.paths import CACHE_DIR, SETTINGS_FILE, STATE_DIR  # noqa: E402
+
+# Module-level aliases: internal code (and the tests, which monkeypatch
+# these names) keeps calling daemon.<helper>.
+is_spotify = _spotify.is_spotify
+go = _spotify.go
+go_status = _spotify.status
+spotify_playing = _spotify.playing
+spotify_command = _spotify.command
+mpv_ipc = _mpv.ipc
+mpv_get = _mpv.get
+
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
 VOL_FILE = os.path.join(STATE_DIR, "volume.json")
 OUT_FILE = os.path.join(STATE_DIR, "output.json")
 NOW_FILE = os.path.join(STATE_DIR, "now-playing.json")
 LIB_FILE = os.environ.get("TAPBOX_LIBRARY", "/etc/tapbox/library.json")
-SETTINGS_FILE = os.environ.get("TAPBOX_SETTINGS", "/etc/tapbox/settings.json")
-CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
 GO_CONFIG = os.environ.get("TAPBOX_GO_CONFIG", "")  # go-librespot config.yml
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
 # The parent PWA is served to the LAN (http://tapbox.local:3679). Keep this
 # port firewalled from the internet — the API is deliberately auth-less on
 # the home network (a PIN gate is a product-phase addition).
 BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
-_here = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/tapbox/web")
@@ -94,79 +108,9 @@ def log(msg):
     print(f"tapboxd: {msg}", flush=True)
 
 
-def is_spotify(target):
-    return (target.startswith("spotify:") or "open.spotify.com" in target
-            or "spotify.link/" in target)
-
-
 def player_path():
-    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.py")
+    p = os.path.join(_here, "player.py")
     return p if os.path.exists(p) else "/usr/local/bin/tapbox-player"
-
-
-# --- go-librespot (Spotify) ---------------------------------------------------
-
-def go(path, timeout=5, body=None):
-    data = json.dumps(body).encode() if body is not None else b"{}"
-    req = urllib.request.Request(GO_API + path, data=data,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-
-def go_status():
-    try:
-        with urllib.request.urlopen(GO_API + "/status", timeout=5) as r:
-            return json.loads(r.read())
-    except (OSError, ValueError):
-        return {}
-
-
-def spotify_playing(st=None):
-    st = go_status() if st is None else st
-    return bool(st.get("track")) and not st.get("paused") and not st.get("stopped")
-
-
-def spotify_command(action):
-    if action == "prev":
-        # Spotify's prev only rewinds first; make one gesture reach the
-        # actual previous track (same logic as buttons.py).
-        before = (go_status().get("track") or {}).get("uri")
-        go("/player/prev")
-        time.sleep(0.4)
-        after = go_status()
-        same = (after.get("track") or {}).get("uri") == before
-        if same and (after.get("position") or 0) < 2000:
-            go("/player/prev")
-    else:
-        go({"playpause": "/player/playpause", "next": "/player/next"}[action])
-
-
-# --- mpv (player.py's IPC socket) ---------------------------------------------
-
-def mpv_ipc(command):
-    with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(2)
-        s.connect(MPV_SOCK)
-        s.sendall(json.dumps({"command": command}).encode() + b"\n")
-        for line in s.recv(65536).split(b"\n"):
-            if not line.strip():
-                continue
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                continue
-            if "error" in msg:
-                return msg
-    return {}
-
-
-def mpv_get(prop):
-    try:
-        r = mpv_ipc(["get_property", prop])
-    except OSError:
-        return None
-    return r.get("data") if r.get("error") == "success" else None
 
 
 # --- library (parent-curated named links) --------------------------------------
@@ -240,17 +184,8 @@ def find_entry(lib, entry_id):
 
 # --- expansion (entry -> playable, titled episode list) -------------------------
 
-def _nrk():
-    here = os.path.dirname(os.path.abspath(__file__))
-    for p in (here, "/usr/local/bin"):  # repo checkout first, then installed
-        if p not in sys.path:
-            sys.path.append(p)
-    import nrk
-    return nrk
-
-
 def _natural_order(target):
-    """The order nrk.expand_entries returns for this kind of target.
+    """The order content.expand_entries returns for this kind of target.
     Heuristic — used to decide whether an explicit order needs a reverse."""
     if re.match(r"https?://radio\.nrk\.no/podkast/", target, re.I):
         return "newest_first"
@@ -275,8 +210,7 @@ def expand_target(target, order="auto", name=None):
         # Not expandable without the Web API: a leaf "play all" entry.
         return {"kind": "spotify", "name": name, "target": target,
                 "order": "auto", "image": None, "episodes": []}
-    nrk = _nrk()
-    entries = nrk.expand_entries(target)
+    entries = content.expand_entries(target)
     if order != "auto" and order != _natural_order(target):
         entries = list(reversed(entries))
     stems = _cached_stems()
@@ -289,7 +223,7 @@ def expand_target(target, order="auto", name=None):
         episodes.append({"id": eid, "title": e.get("title"), "url": url,
                          "image": e.get("image"), "cached": bool(cached)})
     try:  # show-level artwork (local cover file when synced -> works offline)
-        image = nrk.collection_image(target)
+        image = content.collection_image(target)
     except Exception:
         image = None
     return {"kind": "list", "name": name, "target": target, "order": order,
