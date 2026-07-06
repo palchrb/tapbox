@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0c0c14">
+<title>TapBox</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>TapBox</h1>
+  <div id="battery" class="battery" title="Batteri">–</div>
+</header>
+
+<nav>
+  <button data-tab="player" class="active">Spiller</button>
+  <button data-tab="library">Bibliotek</button>
+  <button data-tab="settings">Innstillinger</button>
+</nav>
+
+<main>
+
+<section id="tab-player">
+  <div class="card nowplaying">
+    <img id="np-art" alt="" hidden>
+    <div id="np-title">Ingenting spiller</div>
+    <div id="np-sub"></div>
+    <div class="progress"><div id="np-bar"></div></div>
+    <div class="times"><span id="np-pos">–</span><span id="np-dur">–</span></div>
+    <div class="controls">
+      <button id="btn-prev" title="Forrige">⏮</button>
+      <button id="btn-play" title="Spill/pause" class="big">▶</button>
+      <button id="btn-next" title="Neste">⏭</button>
+      <button id="btn-stop" title="Stopp">◼</button>
+    </div>
+    <label class="volume">Volum
+      <input type="range" id="volume" min="0" max="100" step="5">
+      <span id="vol-label"></span>
+    </label>
+    <div class="output">
+      Lyd ut:
+      <label><input type="radio" name="output" value="bt"> BT-høyttaler</label>
+      <label><input type="radio" name="output" value="local"> Innebygd</label>
+    </div>
+  </div>
+</section>
+
+<section id="tab-library" hidden>
+  <div id="sections"></div>
+  <div class="card">
+    <h2>Legg til</h2>
+    <form id="add-form">
+      <input id="add-section" list="section-names" placeholder="Seksjon (f.eks. Fortellinger)" required>
+      <datalist id="section-names"></datalist>
+      <input id="add-name" placeholder="Navn (det ungen ser)" required>
+      <input id="add-target" placeholder="Lenke eller mappe (Spotify, NRK, RSS, /sti)" required>
+      <select id="add-order">
+        <option value="auto">Rekkefølge: automatisk</option>
+        <option value="oldest_first">Start på eldste (bunn)</option>
+        <option value="newest_first">Start på nyeste (topp)</option>
+      </select>
+      <button type="submit">Legg til</button>
+    </form>
+  </div>
+</section>
+
+<section id="tab-settings" hidden>
+  <div class="card">
+    <h2>Innstillinger</h2>
+    <label>Skjerm av etter
+      <select id="set-screen">
+        <option value="15">15 s</option><option value="30">30 s</option>
+        <option value="60">60 s</option><option value="0">aldri</option>
+      </select>
+    </label>
+    <label>Volumtak (barnesikring)
+      <select id="set-cap">
+        <option>60</option><option>70</option><option>80</option>
+        <option>90</option><option>100</option>
+      </select>
+    </label>
+    <label>Slå av ved inaktivitet
+      <select id="set-idle">
+        <option value="15">15 min</option><option value="30">30 min</option>
+        <option value="60">60 min</option><option value="0">aldri</option>
+      </select>
+    </label>
+  </div>
+  <div class="card">
+    <h2>System</h2>
+    <dl id="sysinfo"></dl>
+    <div class="controls">
+      <button id="btn-wifi">Wi-Fi …</button>
+      <button id="btn-restart">Omstart</button>
+      <button id="btn-shutdown" class="danger">Slå av</button>
+    </div>
+  </div>
+</section>
+
+</main>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+/* TapBox parent PWA — matches the screen UI's dark look. */
+:root {
+  --bg: #0c0c14;
+  --card: #17171f;
+  --fg: #ebebeb;
+  --dim: #8c8c96;
+  --hilite: #ffaa1e;
+  --danger: #e65050;
+  --good: #50c878;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, sans-serif;
+  padding-bottom: 3rem;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.8rem 1rem 0.2rem;
+}
+h1 { font-size: 1.3rem; margin: 0; color: var(--hilite); }
+.battery { color: var(--dim); font-size: 0.9rem; }
+.battery.low { color: var(--danger); }
+
+nav {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem 1rem;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+nav button {
+  flex: 1;
+  background: var(--card);
+  border: none;
+  color: var(--dim);
+  padding: 0.6rem;
+  border-radius: 0.6rem;
+  font-size: 1rem;
+}
+nav button.active { color: var(--fg); outline: 2px solid var(--hilite); }
+
+main { padding: 0 1rem; max-width: 34rem; margin: 0 auto; }
+
+.card {
+  background: var(--card);
+  border-radius: 0.8rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.card h2 { margin: 0 0 0.6rem; font-size: 1.05rem; color: var(--dim); }
+
+button {
+  background: #26262f;
+  color: var(--fg);
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font-size: 1rem;
+}
+button:active { background: #333340; }
+button.danger { color: var(--danger); }
+button.big { font-size: 1.5rem; padding: 0.55rem 1.3rem; }
+
+/* now playing */
+.nowplaying { text-align: center; }
+#np-art {
+  width: 12rem;
+  height: 12rem;
+  object-fit: cover;
+  border-radius: 0.8rem;
+  margin-bottom: 0.6rem;
+}
+#np-title { font-size: 1.15rem; font-weight: 600; }
+#np-sub { color: var(--dim); min-height: 1.2em; margin-bottom: 0.6rem; }
+.progress {
+  height: 6px;
+  background: #32323e;
+  border-radius: 3px;
+  overflow: hidden;
+}
+#np-bar { height: 100%; width: 0; background: var(--hilite); }
+.times {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+  font-size: 0.85rem;
+  margin: 0.3rem 0 0.8rem;
+}
+.controls {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-bottom: 0.8rem;
+  flex-wrap: wrap;
+}
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--dim);
+  justify-content: center;
+}
+.volume input { flex: 1; max-width: 14rem; accent-color: var(--hilite); }
+.output { color: var(--dim); margin-top: 0.8rem; }
+.output label { margin-left: 0.7rem; color: var(--fg); }
+
+/* library */
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid #26262f;
+}
+.entry-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.entry-info small {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entry select { max-width: 8.5rem; }
+
+form { display: flex; flex-direction: column; gap: 0.55rem; }
+input, select {
+  background: #26262f;
+  color: var(--fg);
+  border: 1px solid #33333e;
+  border-radius: 0.5rem;
+  padding: 0.55rem;
+  font-size: 1rem;
+}
+
+/* settings */
+#tab-settings label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0;
+}
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0 0 0.8rem;
+}
+dt { color: var(--dim); }
+dd { margin: 0; text-align: right; }
+
+#toast {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--hilite);
+  color: #201500;
+  padding: 0.6rem 1.2rem;
+  border-radius: 2rem;
+  font-weight: 600;
+  max-width: 90vw;
+}

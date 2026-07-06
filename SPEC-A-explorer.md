@@ -132,8 +132,18 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
    offline-aware queue (player.py skips dead stream URLs when offline —
    cached episodes play cleanly; `TAPBOX_OFFLINE=1` forces it).
    The screen UI is now a pure consumer.
-3. **PWA:** library editor (add/name/reorder/delete links per service). Same
-   editor Concept B needs for card mapping — build once.
+3. **PWA — phase 1 BUILT (2026-07-06):** served by tapboxd itself at
+   `http://tapbox.local:3679` (LAN binding, static files from `pi/web/`,
+   buildless vanilla JS — no node toolchain; `/artwork` proxy restricted
+   to cache dirs + library folder targets). Pages: Spiller (status poll,
+   controls, volume slider with cap feedback, output toggle), Bibliotek
+   (add/remove entries with per-entry order, play-now), Innstillinger
+   (screen/cap/idle + system info, wifi toggle, shutdown/restart with
+   confirm). Security note: auth-less on the home LAN by design — PIN
+   gate is a product-phase addition; never expose :3679 to the internet.
+   Remaining phases: /bt endpoints + BT page (2), wifi join via nmcli (3),
+   AP-mode captive-portal onboarding (4), PIN/TLS/installability (later).
+   Card mapping UI comes with Concept B's card admin endpoints.
 
 Everything else (playback, resume, cache, BT, power) is the existing platform.
 

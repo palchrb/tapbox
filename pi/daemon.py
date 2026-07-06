@@ -46,6 +46,7 @@ The daemon stays a thin, state-owning router.
 
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import socket
@@ -69,6 +70,14 @@ SETTINGS_FILE = os.environ.get("TAPBOX_SETTINGS", "/etc/tapbox/settings.json")
 CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
 GO_CONFIG = os.environ.get("TAPBOX_GO_CONFIG", "")  # go-librespot config.yml
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
+# The parent PWA is served to the LAN (http://tapbox.local:3679). Keep this
+# port firewalled from the internet — the API is deliberately auth-less on
+# the home network (a PIN gate is a product-phase addition).
+BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
+_here = os.path.dirname(os.path.abspath(__file__))
+WEB_DIR = os.environ.get("TAPBOX_WEB") or (
+    os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
+    else "/usr/share/tapbox/web")
 ORDERS = ("auto", "newest_first", "oldest_first")
 OUTPUT_PCMS = {"bt": "tapbox_bt",
                "local": os.environ.get("TAPBOX_LOCAL_PCM", "tapbox_local")}
@@ -453,6 +462,25 @@ def _retarget_go_librespot(pcm):
     return True
 
 
+# --- static files + artwork proxy (the PWA) --------------------------------------
+
+def artwork_roots():
+    """Directories the artwork proxy may serve from: the episode cache and
+    any local folder that is a library target (their cover.jpg files)."""
+    roots = [os.path.realpath(CACHE_DIR)]
+    for s in load_library()["sections"]:
+        for e in s["entries"]:
+            if os.path.isdir(e["target"]):
+                roots.append(os.path.realpath(e["target"]))
+    return roots
+
+
+def artwork_allowed(path):
+    real = os.path.realpath(path)
+    return any(real == r or real.startswith(r + os.sep)
+               for r in artwork_roots())
+
+
 # --- the orchestrator ----------------------------------------------------------
 
 class Orchestrator:
@@ -757,6 +785,32 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, path, cache=False):
+        try:
+            with open(path, "rb") as f:
+                body = f.read()
+        except OSError:
+            self._send(404, {"error": "not found"})
+            return
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control",
+                         "max-age=3600" if cache else "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _static(self, name):
+        """Serve a file from the PWA web dir; True when handled."""
+        path = os.path.realpath(os.path.join(WEB_DIR, name))
+        if not path.startswith(os.path.realpath(WEB_DIR) + os.sep):
+            return False
+        if not os.path.isfile(path):
+            return False
+        self._send_file(path)
+        return True
+
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         if url.path == "/status":
@@ -791,6 +845,19 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # expansion hits the network; stay alive
                 log(f"expand failed for {target}: {e!r}")
                 self._send(502, {"error": str(e)})
+        elif url.path == "/artwork":
+            path = (urllib.parse.parse_qs(url.query).get("path") or [None])[0]
+            if not path:
+                self._send(400, {"error": "path required"})
+            elif not artwork_allowed(path):
+                self._send(403, {"error": "path not allowed"})
+            else:
+                self._send_file(path, cache=True)
+        elif url.path == "/":
+            if not self._static("index.html"):
+                self._send(404, {"error": "PWA files not installed"})
+        elif "/" not in url.path[1:] and self._static(url.path[1:]):
+            pass  # /app.js, /style.css, /manifest.json ...
         else:
             self._send(404, {"error": "not found"})
 
@@ -876,8 +943,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    log(f"listening on 127.0.0.1:{PORT}")
+    server = ThreadingHTTPServer((BIND, PORT), Handler)
+    log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")
     server.serve_forever()
 
 

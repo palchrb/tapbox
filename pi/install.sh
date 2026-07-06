@@ -269,6 +269,12 @@ install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || tru
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
 
+# Parent PWA (served by tapbox-daemon at http://tapbox.local:3679)
+mkdir -p /usr/share/tapbox/web
+for f in "$SCRIPT_DIR"/web/*; do
+  install_if_changed 644 "$f" "/usr/share/tapbox/web/$(basename "$f")" || true
+done
+
 # Screen daemon service (Pirate Audio HAT). Installed but NOT enabled —
 # enable it when the screen is mounted:  sudo systemctl enable --now tapbox-ui
 write_if_changed /etc/systemd/system/tapbox-ui.service <<'EOF' || true
