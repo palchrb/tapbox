@@ -68,7 +68,8 @@ install_if_changed() {  # <mode> <src> <dest>
 # --- 1. packages -------------------------------------------------------------
 
 PKGS=(bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
-      mpv yt-dlp python3-venv python3-dev i2c-tools fonts-dejavu-core)
+      mpv yt-dlp python3-venv python3-dev i2c-tools fonts-dejavu-core
+      avahi-daemon)
 missing=()
 for p in "${PKGS[@]}"; do have_pkg "$p" || missing+=("$p"); done
 if ((${#missing[@]})); then
@@ -297,6 +298,21 @@ install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || tru
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
 install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
+
+# mDNS: advertise the box as tapbox.local regardless of the system hostname
+# (avahi's host-name option). iOS/macOS/Windows resolve .local natively;
+# Android's browsers mostly do NOT — use the IP there.
+if [[ -f /etc/avahi/avahi-daemon.conf ]] \
+    && ! grep -q '^host-name=tapbox$' /etc/avahi/avahi-daemon.conf; then
+  sed -i 's/^#\?host-name=.*/host-name=tapbox/' /etc/avahi/avahi-daemon.conf
+  grep -q '^host-name=' /etc/avahi/avahi-daemon.conf \
+    || sed -i '/^\[server\]/a host-name=tapbox' /etc/avahi/avahi-daemon.conf
+  systemctl enable --now avahi-daemon 2>/dev/null || true
+  systemctl restart avahi-daemon 2>/dev/null || true
+  echo "    mDNS: box advertised as tapbox.local"
+else
+  systemctl enable --now avahi-daemon 2>/dev/null || true
+fi
 
 # PiSugar battery curve: apply the calibrated TapBox curve (measured on a
 # full discharge run; percent = remaining playtime) — but only when the
