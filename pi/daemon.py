@@ -354,11 +354,26 @@ def pisugar_get(prop):
         with socket.create_connection(("127.0.0.1", 8423), timeout=2) as s:
             s.sendall(f"get {prop}\n".encode())
             s.settimeout(2)
-            data = s.recv(256).decode()
-        # reply format: "battery: 84.2"
-        return data.split(":", 1)[1].strip() if ":" in data else None
+            data = b""
+            while b"\n" not in data:  # reply format: "battery: 84.2\n"
+                chunk = s.recv(256)
+                if not chunk:
+                    break
+                data += chunk
+        text = data.decode(errors="ignore")
+        return text.split(":", 1)[1].strip() if ":" in text else None
     except (OSError, IndexError):
         return None
+
+
+def _safe_pct(raw):
+    """A JSON-safe battery percentage: pisugar can return nan/inf while
+    the charger toggles, and json.dumps(nan) is invalid JSON."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 1) if -1 <= v <= 200 else None  # nan/inf fail the compare
 
 
 def _dir_size(path):
@@ -414,7 +429,7 @@ def system_status():
     except (OSError, ValueError):
         pass
     enabled, ssid, ip = wifi_state()
-    return {"battery": round(float(batt), 1) if batt else None,
+    return {"battery": _safe_pct(batt),
             "plugged": plugged == "true",
             "disk": disk, "caches": caches, "cpu_temp": temp,
             "wifi": {"enabled": enabled, "ssid": ssid, "ip": ip},

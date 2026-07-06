@@ -442,7 +442,25 @@ $("#btn-scan").addEventListener("click", async () => {
   btn.textContent = "Scan for new";
 });
 
+/* --- header battery pill ---------------------------------------------------- */
+
+async function pollBattery() {
+  try {
+    const sys = await api("/system");
+    const b = $("#battery");
+    if (sys.battery == null) {
+      b.textContent = "–";
+      b.classList.remove("low");
+    } else {
+      b.textContent = `${Math.round(sys.battery)}%${sys.plugged ? " ⚡" : ""}`;
+      b.classList.toggle("low", !sys.plugged && sys.battery <= 15);
+    }
+  } catch (e) { /* box offline */ }
+}
+
 /* --- boot ------------------------------------------------------------------ */
 
 pollStatus();
 setInterval(pollStatus, 2000);
+pollBattery();
+setInterval(pollBattery, 60000);
