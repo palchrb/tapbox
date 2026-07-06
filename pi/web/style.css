@@ -117,17 +117,30 @@ button.on { outline: 2px solid var(--hilite); }
 /* library */
 .entry {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;         /* narrow screens: name on its own line, */
+  align-items: center;     /* controls wrap underneath */
   gap: 0.5rem;
   padding: 0.45rem 0;
   border-top: 1px solid #26262f;
 }
-.entry-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.entry-info {
+  flex: 1 1 12rem;         /* full width when the controls don't fit beside */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .entry-info small {
   color: var(--dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.entry-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-left: auto;
+  flex-wrap: wrap;
 }
 .entry select { max-width: 8.5rem; }
 

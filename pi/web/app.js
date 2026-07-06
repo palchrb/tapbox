@@ -253,9 +253,12 @@ function entryRow(e) {
     loadLibrary();
   });
 
-  row.append(info, order);
-  if (cache) row.append(cache);
-  row.append(play, del);
+  const actions = document.createElement("div");
+  actions.className = "entry-actions";
+  actions.append(order);
+  if (cache) actions.append(cache);
+  actions.append(play, del);
+  row.append(info, actions);
   return row;
 }
 
