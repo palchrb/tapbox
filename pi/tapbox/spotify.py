@@ -64,7 +64,7 @@ def command(action):
     before = (status().get("track") or {}).get("uri")
     go("/player/prev")
     time.sleep(0.4)
-    after = status()
-    same = (after.get("track") or {}).get("uri") == before
-    if same and (after.get("position") or 0) < 2000:
+    after = status().get("track") or {}
+    # position is on the track object (ms) — same uri near 0 = only rewound
+    if after.get("uri") == before and (after.get("position") or 0) < 2000:
         go("/player/prev")

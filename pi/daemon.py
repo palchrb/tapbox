@@ -1106,7 +1106,8 @@ class Orchestrator:
             out["source"] = "spotify"
             out["title"] = track.get("name")
             out["duration"] = (track.get("duration") or 0) / 1000 or None
-            out["position"] = (st.get("position") or 0) / 1000
+            # position lives on the track object (ms, live-extrapolated)
+            out["position"] = (track.get("position") or 0) / 1000
             out["artwork"] = out["spotify"]["artwork"]
         return out
 
