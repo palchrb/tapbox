@@ -16,6 +16,8 @@
 #   sudo tapbox-power taps-on   PiSugar button: short=play/pause, double=next,
 #                               long=previous (via pisugar-server tap shells)
 #   sudo tapbox-power taps-off  restore default PiSugar button behaviour
+#   sudo tapbox-power curve     apply the calibrated TapBox battery curve
+#                               (percent = remaining playtime; see pi/sugar-config.txt)
 #
 # Bluetooth is deliberately left alone — it drives the speaker.
 # If Spotify playback stutters in save mode, set WIFI_POWERSAVE=0 below:
@@ -225,6 +227,26 @@ PY
     else
       echo "PiSugar button tap actions disabled."
     fi
+    ;;
+  curve)
+    # Apply the calibrated TapBox battery curve (measured 2026-07-05 on a
+    # full discharge run: percent = remaining playtime under playback load,
+    # 0% = the safe-shutdown point). Source of truth: pi/sugar-config.txt.
+    cfg=/etc/pisugar-server/config.json
+    [[ -f $cfg ]] || { echo "pisugar-server config not found at $cfg" >&2; exit 1; }
+    python3 - "$cfg" <<'PY'
+import json, sys
+cfg = sys.argv[1]
+c = json.load(open(cfg))
+c["battery_curve"] = [
+    [4.20, 100.0], [4.10, 91.0], [4.00, 79.0], [3.90, 65.0], [3.85, 56.0],
+    [3.80, 41.0], [3.75, 18.0], [3.70, 9.0], [3.60, 3.0], [3.50, 0.0],
+]
+json.dump(c, open(cfg, "w"), indent=2)
+PY
+    systemctl restart pisugar-server
+    echo "Calibrated battery curve applied (percent = remaining playtime)."
+    echo "Note: with this curve 5% safe-shutdown fires at ~3.65V (~15 min left)."
     ;;
   _logloop)  # internal: run by tapbox-batlog.service
     [[ -f $LOG_FILE ]] || echo "time,volt,amp,percent,plugged" > "$LOG_FILE"
