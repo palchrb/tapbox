@@ -23,21 +23,43 @@ that Concept B (card player) also needs.
 Proof the display UX works on a Zero 2 W: drewbatchelor.com's Pi Zero 2 music
 player uses the same screen.
 
-## 2. Library model
+## 2. Library model — IMPLEMENTED (2026-07-06)
 
-The parent PWA maintains `/etc/tapbox/library.json`: a list of named links,
-grouped per service. A link is anything `player.py` already routes — Spotify
-playlist/album/track/show, NRK podcast/series/live channel, any RSS feed,
+**Architecture decision: local-first.** The library lives in
+`/etc/tapbox/library.json` on the box — menus must render (and cached
+content must play) with zero internet (the flight/cabin scenario). A future
+parent cloud service is a *sync mirror* of this file for remote admin (v2
+cloud-relay), never the source of truth.
+
+Sections are parent-named (free-form, ordered — favourites first), entries
+are named links with stable ids. A target is anything `player.py` routes:
+Spotify playlist/album/show, NRK podcast/series/live channel, any RSS feed,
 local folder.
 
 ```json
-{
-  "Spotify":   [ {"name": "Barnesanger", "target": "https://open.spotify.com/playlist/..."} ],
-  "NRK":      [ {"name": "Fantorangen-fortellinger", "target": "https://radio.nrk.no/podkast/fantorangenfortellinger"} ],
-  "Podkaster": [ {"name": "...", "target": "https://...rss"} ],
-  "Lokalt":    [ {"name": "Lydbok X", "target": "/var/lib/tapbox/local/lydbok-x"} ]
-}
+{ "version": 1, "sections": [
+  { "id": "musikk", "name": "Musikk", "entries": [
+      { "id": "f50bb730", "name": "Barnesanger",
+        "target": "https://open.spotify.com/playlist/...", "order": "auto" } ] },
+  { "id": "fortellinger", "name": "Fortellinger", "entries": [
+      { "id": "2ccfb219", "name": "Fantorangen",
+        "target": "https://radio.nrk.no/podkast/fantorangenfortellinger",
+        "order": "auto" } ] } ] }
 ```
+
+`order` (`auto | newest_first | oldest_first`) sets menu/playback direction
+per entry: `auto` = the service's natural order (NRK podcasts newest first,
+series/folders oldest first, RSS as the feed lists), explicit values
+override when a service guesses wrong (e.g. an RSS audiobook listed
+newest-first).
+
+**tapboxd API (implemented + tested):** `GET /library`, `PUT /library`
+(validated, atomic), `GET /expand?id=<entry>|target=<url>` → titled episode
+list with per-episode `cached` flags (offline-aware menus; Spotify entries
+return `kind: "spotify"` = leaf), and `POST /play {"id"|"target",
+"episode", "fresh"}` — episode picks rotate the queue there (bookmarked
+episode continues at its position, others start from the top; the bookmark
+follows). Pre-PWA management CLI: `tapbox-lib add/list/rm/order`.
 
 Screen navigation:
 
@@ -101,8 +123,8 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
    renderer + button handling (gpio-keys overlay or gpiozero) + now-playing
    screen (title/position from `GET /status`, battery % from PiSugar).
    Backlight off after N seconds idle (power).
-2. **tapboxd additions:** `GET /library` (serve library.json),
-   `POST /output` (see §4). `/volume` is done.
+2. **tapboxd additions:** ~~`GET /library`~~ done (see §2, incl. /expand and
+   episode play); `POST /output` (see §4) remains. `/volume` is done.
 3. **PWA:** library editor (add/name/reorder/delete links per service). Same
    editor Concept B needs for card mapping — build once.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TapBox player — THE entrypoint for playing any link.
 
-Usage: player.py [--fresh] <target> [url...]
+Usage: player.py [--fresh] [--episode <id>] <target> [url...]
 
 Routing:
   - Spotify links/URIs (track/album/playlist/artist/episode/show, incl.
@@ -167,11 +167,24 @@ def play_spotify(target):
 def main():
     args = sys.argv[1:]
     fresh = False
-    if args and args[0] == "--fresh":
-        fresh = True
-        args = args[1:]
+    reverse = False  # flip the expanded queue (library 'order' override)
+    episode = None   # explicit episode pick from the menu (tapboxd /play)
+    while args and args[0] in ("--fresh", "--reverse", "--episode"):
+        if args[0] == "--fresh":
+            fresh = True
+            args = args[1:]
+        elif args[0] == "--reverse":
+            reverse = True
+            args = args[1:]
+        else:
+            if len(args) < 2:
+                print("--episode needs an id", file=sys.stderr)
+                sys.exit(1)
+            episode = args[1]
+            args = args[2:]
     if not args:
-        print("usage: player.py [--fresh] <target> [url...]", file=sys.stderr)
+        print("usage: player.py [--fresh] [--reverse] [--episode <id>] "
+              "<target> [url...]", file=sys.stderr)
         sys.exit(1)
     target, urls = args[0], args[1:]
 
@@ -191,6 +204,9 @@ def main():
         except Exception as e:
             log(f"expansion failed ({e!r}) — playing the raw link")
             urls = [target]
+    if reverse and len(urls) > 1:
+        urls.reverse()  # titles/ids are url-keyed dicts — unaffected
+        log("queue order reversed (library setting)")
     key = state_key(target)
     if fresh:
         clear_state(key)
@@ -201,17 +217,33 @@ def main():
     except OSError:
         pass
 
-    # Resume: rotate the queue to the remembered episode. Match on the
-    # stable episode id first — the same episode can be a stream URL one
-    # run and a cached local file the next, so URLs alone are not reliable.
+    # Queue planning. An explicit --episode (picked in a menu) wins over the
+    # bookmark; otherwise resume: rotate the queue to the remembered episode.
+    # Matching is on the stable episode id first — the same episode can be a
+    # stream URL one run and a cached local file the next, so URLs alone are
+    # not reliable.
     start_pos = 0.0
     st = load_state(key)
-    if st and st.get("pos", 0) > RESUME_MIN_S:
+    url_by_id = {eid: u for u, eid in ids.items()}
+    if episode:
+        picked = url_by_id.get(episode)
+        if picked is None:
+            log(f"episode '{episode}' not in this queue — playing from start")
+        else:
+            idx = urls.index(picked)
+            urls = urls[idx:] + urls[:idx]
+            # Picking the bookmarked episode continues at its position;
+            # picking any other episode starts it from the top. The bookmark
+            # follows playback from here on, as always.
+            if st and st.get("id") == episode and st.get("pos", 0) > RESUME_MIN_S:
+                start_pos = float(st["pos"])
+            name = titles.get(picked) or episode
+            log(f"starting at '{name}'"
+                + (f", {int(start_pos)}s" if start_pos else ""))
+    elif st and st.get("pos", 0) > RESUME_MIN_S:
         idx = None
-        if st.get("id"):
-            url_by_id = {eid: u for u, eid in ids.items()}
-            if st["id"] in url_by_id:
-                idx = urls.index(url_by_id[st["id"]])
+        if st.get("id") and st["id"] in url_by_id:
+            idx = urls.index(url_by_id[st["id"]])
         if idx is None and st.get("url") in urls:
             idx = urls.index(st["url"])
         if idx is not None:
