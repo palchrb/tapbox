@@ -485,21 +485,28 @@ class Orchestrator:
         with self.lock:
             mpv_alive = self._mpv_alive()
             target, source = self.target, self.source
-        out = {"source": source, "target": target,
-               "playing": False, "title": None, "position": None}
+        out = {"source": source, "target": target, "playing": False,
+               "title": None, "position": None, "duration": None,
+               "artwork": None}
         if mpv_alive:
             out["playing"] = mpv_get("pause") is False
             out["title"] = mpv_get("media-title")
             out["position"] = mpv_get("playback-time")
+            out["duration"] = mpv_get("duration")  # None = live stream
         st = go_status()
         track = st.get("track") or {}
         out["spotify"] = {"playing": spotify_playing(st),
                           "track": track.get("name") or None,
-                          "artists": track.get("artist_names") or []}
+                          "artists": track.get("artist_names") or [],
+                          "album": track.get("album_name") or None,
+                          "artwork": track.get("album_cover_url") or None}
         if not mpv_alive and out["spotify"]["playing"]:
             out["playing"] = True
             out["source"] = "spotify"
             out["title"] = track.get("name")
+            out["duration"] = (track.get("duration") or 0) / 1000 or None
+            out["position"] = (st.get("position") or 0) / 1000
+            out["artwork"] = out["spotify"]["artwork"]
         return out
 
 
