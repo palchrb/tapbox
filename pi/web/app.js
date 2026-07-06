@@ -51,6 +51,21 @@ function fmtTime(s) {
 
 let volTouched = 0;
 
+// Last polled playback state; a local 500ms ticker interpolates the
+// progress display between the 2s polls so seconds count up smoothly.
+let np = { position: null, duration: null, playing: false, at: 0 };
+
+function renderProgress() {
+  let pos = np.position;
+  if (pos != null && np.playing) pos += (Date.now() - np.at) / 1000;
+  if (pos != null && np.duration != null) pos = Math.min(pos, np.duration);
+  const frac = pos && np.duration ? Math.min(1, pos / np.duration) : 0;
+  $("#np-bar").style.width = `${frac * 100}%`;
+  $("#np-pos").textContent = fmtTime(pos);
+  $("#np-dur").textContent =
+    np.position != null && np.duration == null ? "live" : fmtTime(np.duration);
+}
+
 async function pollStatus() {
   try {
     const st = await api("/status");
@@ -68,12 +83,9 @@ async function pollStatus() {
       art.hidden = true;
       art.dataset.src = "";
     }
-    const frac = st.position && st.duration
-      ? Math.min(1, st.position / st.duration) : 0;
-    $("#np-bar").style.width = `${frac * 100}%`;
-    $("#np-pos").textContent = fmtTime(st.position);
-    $("#np-dur").textContent =
-      st.position != null && st.duration == null ? "live" : fmtTime(st.duration);
+    np = { position: st.position, duration: st.duration,
+           playing: !!st.playing, at: Date.now() };
+    renderProgress();
     $("#btn-play").textContent = st.playing ? "⏸" : "▶";
     $("#btn-shuffle").classList.toggle("on", !!st.shuffle);
     $("#btn-shuffle").dataset.on = st.shuffle ? "1" : "";
@@ -579,5 +591,6 @@ async function pollBattery() {
 
 pollStatus();
 setInterval(pollStatus, 2000);
+setInterval(renderProgress, 500);
 pollBattery();
 setInterval(pollBattery, 60000);
