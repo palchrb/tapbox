@@ -137,7 +137,7 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
 
 Everything else (playback, resume, cache, BT, power) is the existing platform.
 
-## 7. Settings menu (designed 2026-07-06, not built)
+## 7. Settings menu — BUILT (2026-07-06; BT pages remain)
 
 Entered via a **parental lock**: hold A+B ~3s (a kid must not be able to
 shut the box down mid-story or wipe caches — the lock is the single most
@@ -155,13 +155,16 @@ important idea here). Contents:
 | Power | shutdown / restart | POST /system/shutdown |
 | Later | backlight dimming (PWM on BCM13), language NO/EN, About page | |
 
-**API gaps this requires (playback/menu side is complete):**
-1. `GET /system` — battery (pisugar), disk, cache sizes, wifi state, temps, version
-2. `POST /system/wifi {"enabled"}`, `POST /system/shutdown`
-3. `GET/PUT /settings` — settings.json owned by tapboxd (screen_timeout_s,
-   idle_shutdown_min, volume_cap, ...)
-4. `/bt` endpoints — move play.sh's pairing/connect logic behind the daemon
-   (the consolidation SPEC.md already flags)
+**Status:** 1-3 implemented and tested (2026-07-06): `GET /system`,
+`POST /system/wifi`, `POST /system/shutdown`, `GET/PUT /settings` (volume
+cap enforced in every /volume path; idle.py re-reads live). The screen
+daemon **tapbox-ui is built** (`pi/ui.py`, installed as a disabled service
+— `systemctl enable --now tapbox-ui` when the HAT is mounted): full menu
+flow, now-playing with artwork/progress/volume overlay, battery pill on
+every view, screen timeout with always-on-while-charging and swallowed
+waking press, settings behind hold-A+B. Dev mode without hardware:
+`TAPBOX_UI_PNG=/tmp/frame.png TAPBOX_UI_INPUT=/tmp/fifo tapbox-ui`.
+Remaining: **4. `/bt` endpoints** + the BT settings pages (pair/known/forget).
 
 ## 8. Open questions
 
