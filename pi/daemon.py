@@ -182,6 +182,52 @@ def find_entry(lib, entry_id):
     return None
 
 
+# --- background episode caching (the "offline: keep newest N" setting) ----------
+# Entries with cache > 0 are synced by the daemon itself: right after the
+# library is saved (add a podcast -> download starts immediately) and then
+# every SYNC_INTERVAL so new episodes land without anyone pressing play.
+# Syncs are incremental (existing files skipped, catalog cache TTL'd), run
+# sequentially at nice 19, and failures are just retried next sweep.
+
+SYNC_INTERVAL_S = int(os.environ.get("TAPBOX_SYNC_INTERVAL", 6 * 3600))
+SYNC_DELAY_S = int(os.environ.get("TAPBOX_SYNC_DELAY", 30))
+_sync_wake = threading.Event()
+
+
+def _sync_args_for(target, n):
+    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
+    if m:
+        return ["sync", m.group(1), str(n), "podcast"]
+    m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
+    if m:
+        return ["sync", m.group(1), str(n), "series"]
+    if target.startswith(("http://", "https://")) and not is_spotify(target):
+        return ["sync-feed", target, str(n)]
+    return None  # spotify (global cache) / local folders (already offline)
+
+
+def _cache_sweeper():
+    time.sleep(SYNC_DELAY_S)  # let wifi come up after boot
+    while True:
+        for s in load_library()["sections"]:
+            for e in s["entries"]:
+                n = e.get("cache") or 0
+                args = _sync_args_for(e["target"], n) if n > 0 else None
+                if not args:
+                    continue
+                log(f"cache sweep: {e['name']} ({' '.join(args)})")
+                try:
+                    subprocess.run(
+                        [sys.executable, content.__file__, *args],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=3600,
+                        preexec_fn=lambda: os.nice(19))
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    log(f"cache sweep failed for {e['name']}: {exc!r}")
+        _sync_wake.wait(SYNC_INTERVAL_S)
+        _sync_wake.clear()
+
+
 # --- expansion (entry -> playable, titled episode list) -------------------------
 
 def _natural_order(target):
@@ -811,13 +857,16 @@ class Orchestrator:
                 pass
         st = go_status()
         track = st.get("track") or {}
-        out["spotify"] = {"playing": spotify_playing(st),
+        sp_playing = spotify_playing(st)
+        out["spotify"] = {"playing": sp_playing,
                           "track": track.get("name") or None,
                           "artists": track.get("artist_names") or [],
                           "album": track.get("album_name") or None,
                           "artwork": track.get("album_cover_url") or None}
-        if not mpv_alive and out["spotify"]["playing"]:
-            out["playing"] = True
+        # A paused Spotify track is still "what's on" — keep showing it
+        # (title/artwork/position) with playing=False, like the mpv side does.
+        if not mpv_alive and track and not st.get("stopped"):
+            out["playing"] = sp_playing
             out["source"] = "spotify"
             out["title"] = track.get("name")
             out["duration"] = (track.get("duration") or 0) / 1000 or None
@@ -934,6 +983,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             save_library(lib)
             log(f"library updated ({sum(len(s['entries']) for s in lib['sections'])} entries)")
+            _sync_wake.set()  # start caching new/changed entries right away
             self._send(200, lib)
         elif self.path == "/settings":
             try:
@@ -1024,6 +1074,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    threading.Thread(target=_cache_sweeper, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")
     server.serve_forever()
