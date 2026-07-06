@@ -127,6 +127,9 @@ let LIB = { version: 1, sections: [] };
 const ORDER_LABEL = {
   auto: "auto", newest_first: "newest first", oldest_first: "oldest first",
 };
+const CACHE_OPTIONS = [0, 5, 10, 25, 50];
+const isSpotify = (t) => /open\.spotify\.com|spotify:|spotify\.link\//.test(t);
+const isLocal = (t) => t.startsWith("/");
 
 async function loadLibrary() {
   LIB = await api("/library");
@@ -178,6 +181,27 @@ function entryRow(e) {
     toast(`${e.name}: ${ORDER_LABEL[e.order]}`);
   });
 
+  // Per-entry offline cache — not for Spotify (global setting, DRM) or
+  // local folders (already offline)
+  let cache = null;
+  if (!isSpotify(e.target) && !isLocal(e.target)) {
+    cache = document.createElement("select");
+    cache.title = "Episodes kept offline";
+    for (const n of CACHE_OPTIONS) {
+      const o = document.createElement("option");
+      o.value = String(n);
+      o.textContent = n === 0 ? "no offline" : `keep ${n}`;
+      if ((e.cache || 0) === n) o.selected = true;
+      cache.appendChild(o);
+    }
+    cache.addEventListener("change", async () => {
+      e.cache = Number(cache.value);
+      await saveLibrary();
+      toast(e.cache ? `${e.name}: keeps the newest ${e.cache} offline`
+                    : `${e.name}: no offline copies`);
+    });
+  }
+
   const play = document.createElement("button");
   play.textContent = "▶";
   play.title = "Play now";
@@ -202,7 +226,9 @@ function entryRow(e) {
     loadLibrary();
   });
 
-  row.append(info, order, play, del);
+  row.append(info, order);
+  if (cache) row.append(cache);
+  row.append(play, del);
   return row;
 }
 
@@ -217,6 +243,7 @@ $("#add-form").addEventListener("submit", async (ev) => {
     name: $("#add-name").value.trim(),
     target: $("#add-target").value.trim(),
     order: $("#add-order").value,
+    cache: Number($("#add-cache").value),
   };
   let sec = LIB.sections.find(
     (s) => s.name.toLowerCase() === sectionName.toLowerCase());
@@ -243,11 +270,13 @@ async function loadSettings() {
   $("#set-screen").value = String(s.screen_timeout_s);
   $("#set-cap").value = String(s.volume_cap);
   $("#set-idle").value = String(s.idle_shutdown_min);
+  $("#set-spotcache").value = String(s.spotify_cache_gb);
 }
 
 for (const [id, key] of [["#set-screen", "screen_timeout_s"],
                          ["#set-cap", "volume_cap"],
-                         ["#set-idle", "idle_shutdown_min"]]) {
+                         ["#set-idle", "idle_shutdown_min"],
+                         ["#set-spotcache", "spotify_cache_gb"]]) {
   $(id).addEventListener("change", async () => {
     try {
       await api("/settings", { method: "PUT",

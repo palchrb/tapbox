@@ -60,6 +60,13 @@
         <option value="oldest_first">Start at the oldest (bottom)</option>
         <option value="newest_first">Start at the newest (top)</option>
       </select>
+      <select id="add-cache">
+        <option value="0">Offline: don't download episodes</option>
+        <option value="5">Offline: keep newest 5</option>
+        <option value="10">Offline: keep newest 10</option>
+        <option value="25">Offline: keep newest 25</option>
+        <option value="50">Offline: keep newest 50</option>
+      </select>
       <button type="submit">Add</button>
     </form>
   </div>
@@ -84,6 +91,13 @@
       <select id="set-idle">
         <option value="15">15 min</option><option value="30">30 min</option>
         <option value="60">60 min</option><option value="0">never</option>
+      </select>
+    </label>
+    <label>Spotify cache size
+      <select id="set-spotcache">
+        <option value="5">5 GB</option><option value="10">10 GB</option>
+        <option value="20">20 GB</option><option value="50">50 GB</option>
+        <option value="100">100 GB</option>
       </select>
     </label>
   </div>

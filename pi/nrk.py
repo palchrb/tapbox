@@ -33,6 +33,7 @@ enable offline playback (this is the spec's "auto-cache podcasts" story):
 Unknown URLs pass through untouched (mpv + yt-dlp handles them).
 """
 
+import hashlib
 import json
 import os
 import re
@@ -273,6 +274,15 @@ def _catalog_image(slug, kind="podcast"):
 _FEED_IMAGES = {}
 
 
+def feed_key(target):
+    """Stable cache-directory name for a generic RSS feed URL."""
+    return "feed-" + hashlib.sha1(target.encode()).hexdigest()[:12]
+
+
+def _feed_episode_id(enclosure_url):
+    return hashlib.sha1(enclosure_url.encode()).hexdigest()[:12]
+
+
 def collection_image(target):
     """Artwork for the collection a link points at (menu icon for the
     screen UI / PWA). Call after expand_entries(target). None when unknown."""
@@ -282,13 +292,17 @@ def collection_image(target):
     m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
     if m:
         return _catalog_image(m.group(1), "series")
+    if target.startswith(("http://", "https://")):
+        local = os.path.join(CACHE_DIR, feed_key(target), "cover.jpg")
+        if os.path.exists(local):
+            return local
+        return _FEED_IMAGES.get(target)
     if os.path.isdir(target):
         for name in ("cover.jpg", "cover.jpeg", "cover.png", "folder.jpg"):
             p = os.path.join(target, name)
             if os.path.exists(p):
                 return p
-        return None
-    return _FEED_IMAGES.get(target)
+    return None
 
 
 def _local_or_remote(slug, ep, kind="podcast"):
@@ -364,6 +378,50 @@ def podcast_slug(target):
     return m.group(1) if m else None
 
 
+def _download(url, dest, timeout=120):
+    tmp = dest + ".part"
+    with urllib.request.urlopen(url, timeout=timeout) as r, open(tmp, "wb") as f:
+        while True:
+            chunk = r.read(1 << 16)
+            if not chunk:
+                break
+            f.write(chunk)
+    os.replace(tmp, dest)
+
+
+def sync_feed(target, count=SYNC_COUNT):
+    """Download the first <count> episodes of a generic RSS feed (feeds list
+    newest first by convention) to the cache, plus the channel cover."""
+    chan_img, items = _parse_feed(_get(target))
+    key = feed_key(target)
+    os.makedirs(os.path.join(CACHE_DIR, key), exist_ok=True)
+    cover = os.path.join(CACHE_DIR, key, "cover.jpg")
+    if chan_img and not os.path.exists(cover):
+        try:
+            _download(chan_img, cover, timeout=30)
+            _log(f"{key}: downloaded cover art")
+        except OSError:
+            pass
+    wanted = items[:count]
+    have = sum(1 for u, _t, _i in wanted if os.path.exists(
+        os.path.join(CACHE_DIR, key, f"{_feed_episode_id(u)}.mp3")))
+    _log(f"{key}: sync (feed) — {len(wanted)} newest wanted, {have} already "
+         f"cached, {len(wanted) - have} to download")
+    for u, t, _img in wanted:
+        dest = os.path.join(CACHE_DIR, key, f"{_feed_episode_id(u)}.mp3")
+        if os.path.exists(dest):
+            continue
+        try:
+            _download(u, dest)
+            print(f"cached {key}/{t or u}", flush=True)
+        except OSError as e:
+            print(f"failed {key}/{u}: {e}", flush=True)
+            try:
+                os.remove(dest + ".part")
+            except OSError:
+                pass
+
+
 def sync(slug, count=SYNC_COUNT, kind="podcast"):
     """Download the newest <count> episodes to the cache, newest first.
     Podcasts are straight mp3 downloads; series episodes (HLS) are captured
@@ -393,13 +451,9 @@ def sync(slug, count=SYNC_COUNT, kind="podcast"):
         tmp = dest + ".part"
         try:
             if kind == "podcast":
-                with urllib.request.urlopen(ep["url"], timeout=120) as r, \
-                        open(tmp, "wb") as f:
-                    while True:
-                        chunk = r.read(1 << 16)
-                        if not chunk:
-                            break
-                        f.write(chunk)
+                _download(ep["url"], dest)
+                print(f"cached {slug}/{ep['id']}", flush=True)
+                continue
             else:  # HLS -> single m4a file, no re-encode
                 result = subprocess.run(
                     ["ffmpeg", "-nostdin", "-loglevel", "error", "-y",
@@ -508,17 +562,45 @@ def expand_entries(target):
     except (OSError, ET.ParseError):
         return passthrough  # lookup failed — let mpv+yt-dlp try the raw link
     if target.startswith(("http://", "https://")):
-        try:
-            if target.lower().split("?")[0].endswith((".rss", ".xml")) or _sniffs_like_feed(target):
+        key = feed_key(target)
+        feed_cache = os.path.join(CACHE_DIR, key, "feed.json")
+        looks_like_feed = (
+            target.lower().split("?")[0].endswith((".rss", ".xml"))
+            or os.path.exists(feed_cache)  # known feed — works offline
+            or _sniffs_like_feed(target))
+        if looks_like_feed:
+            chan_img, items = None, []
+            try:
                 chan_img, items = _parse_feed(_get(target))
-                if items:
-                    _log(f"RSS feed with {len(items)} episodes: {target}")
-                    if chan_img:
-                        _FEED_IMAGES[target] = chan_img
-                    return [{"url": u, "title": t, "id": None,
-                             "image": img or chan_img} for u, t, img in items]
-        except (OSError, ET.ParseError) as e:
-            _log(f"feed parse failed ({e!r}) — passing link to mpv: {target}")
+                if items:  # remember the listing for offline replays
+                    os.makedirs(os.path.dirname(feed_cache), exist_ok=True)
+                    with open(feed_cache + ".tmp", "w") as f:
+                        json.dump({"image": chan_img, "items": items}, f)
+                    os.replace(feed_cache + ".tmp", feed_cache)
+            except (OSError, ET.ParseError) as e:
+                try:
+                    with open(feed_cache) as f:
+                        d = json.load(f)
+                    chan_img, items = d.get("image"), [tuple(i) for i in d["items"]]
+                    _log(f"feed fetch failed ({e!r}) — using cached listing "
+                         f"({len(items)} episodes), offline mode")
+                except (OSError, ValueError, KeyError):
+                    _log(f"feed parse failed ({e!r}) — passing link to mpv: {target}")
+            if items:
+                _log(f"RSS feed with {len(items)} episodes: {target}")
+                if chan_img:
+                    _FEED_IMAGES[target] = chan_img
+                out = []
+                for u, t, img in items:
+                    eid = _feed_episode_id(u)
+                    local = os.path.join(CACHE_DIR, key, f"{eid}.mp3")
+                    out.append({"url": local if os.path.exists(local) else u,
+                                "title": t, "id": eid,
+                                "image": img or chan_img})
+                n_local = sum(1 for e in out if not e["url"].startswith("http"))
+                if n_local:
+                    _log(f"  {n_local} episode(s) from local cache")
+                return out
     return passthrough
 
 
@@ -541,8 +623,12 @@ if __name__ == "__main__":
         sync(sys.argv[2],
              int(sys.argv[3]) if len(sys.argv) > 3 else SYNC_COUNT,
              sys.argv[4] if len(sys.argv) > 4 else "podcast")
+    elif len(sys.argv) >= 3 and sys.argv[1] == "sync-feed":
+        sync_feed(sys.argv[2],
+                  int(sys.argv[3]) if len(sys.argv) > 3 else SYNC_COUNT)
     elif len(sys.argv) == 2:
         print("\n".join(expand(sys.argv[1])))
     else:
-        print("usage: nrk.py <link>  |  nrk.py sync <slug> [count]", file=sys.stderr)
+        print("usage: nrk.py <link>  |  nrk.py sync <slug> [count] [kind]"
+              "  |  nrk.py sync-feed <url> [count]", file=sys.stderr)
         sys.exit(1)

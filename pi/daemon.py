@@ -200,12 +200,16 @@ def normalize_library(obj):
             order = e.get("order") or "auto"
             if order not in ORDERS:
                 raise ValueError(f"order must be one of {ORDERS}")
+            cache = e.get("cache", 0)
+            if not isinstance(cache, int) or not 0 <= cache <= 100:
+                raise ValueError("cache must be 0-100 (episodes to keep offline)")
             eid = str(e.get("id") or hashlib.sha1(target.encode()).hexdigest()[:8])
             if eid in seen:
                 raise ValueError(f"duplicate entry id {eid}")
             seen.add(eid)
             sec["entries"].append(
-                {"id": eid, "name": ename, "target": target, "order": order})
+                {"id": eid, "name": ename, "target": target, "order": order,
+                 "cache": cache})
         out["sections"].append(sec)
     return out
 
@@ -300,6 +304,7 @@ SETTING_SPECS = {
     "screen_timeout_s": (30, 0, 600),
     "idle_shutdown_min": (30, 0, 240),
     "volume_cap": (100, 30, 100),
+    "spotify_cache_gb": (20, 1, 100),
 }
 
 
@@ -333,7 +338,32 @@ def update_settings(changes):
         json.dump(merged, f, indent=2)
     os.replace(SETTINGS_FILE + ".tmp", SETTINGS_FILE)
     log(f"settings updated: {changes}")
+    if "spotify_cache_gb" in changes:
+        _resize_spotify_cache(merged["spotify_cache_gb"])
     return merged
+
+
+def _resize_spotify_cache(gb):
+    """Write the size limit into go-librespot's config (startup-only there,
+    like audio_device) and restart it. Eviction prunes on next start."""
+    if not GO_CONFIG:
+        return
+    try:
+        with open(GO_CONFIG) as f:
+            text = f.read()
+    except OSError:
+        return
+    new, n = re.subn(r"(?m)^(\s*size_limit:).*$", rf"\g<1> {gb}GB", text, count=1)
+    if n == 0 or new == text:
+        return
+    with open(GO_CONFIG + ".tmp", "w") as f:
+        f.write(new)
+    os.replace(GO_CONFIG + ".tmp", GO_CONFIG)
+    log(f"spotify cache limit -> {gb}GB (restarting go-librespot)")
+    try:
+        subprocess.run(["systemctl", "restart", "go-librespot"], timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"go-librespot restart failed ({e!r}) — restart it manually")
 
 
 # --- system status (battery, disk, wifi) ----------------------------------------
@@ -632,7 +662,8 @@ class Orchestrator:
                 self.child.kill()
         self.child = None
 
-    def _spawn(self, target, fresh=False, episode=None, reverse=False):
+    def _spawn(self, target, fresh=False, episode=None, reverse=False,
+               cache=None):
         args = [sys.executable, player_path()]
         if fresh:
             args.append("--fresh")
@@ -640,11 +671,14 @@ class Orchestrator:
             args.append("--reverse")
         if episode:
             args += ["--episode", episode]
+        if cache is not None:
+            args += ["--cache", str(cache)]
         args.append(target)
         self.child = subprocess.Popen(args)
         self.child_started = time.monotonic()
 
-    def play(self, target, fresh=False, episode=None, reverse=False):
+    def play(self, target, fresh=False, episode=None, reverse=False,
+             cache=None):
         with self.lock:
             # Same card back in the slot (or same link replayed): if its
             # session is still loaded, unpause instead of restarting.
@@ -661,7 +695,7 @@ class Orchestrator:
                 except OSError:
                     pass  # IPC gone but child alive? fall through to respawn
             self._stop_child()
-            self._spawn(target, fresh, episode, reverse)
+            self._spawn(target, fresh, episode, reverse, cache)
             self.target = target
             self.reverse = reverse
             self.source = "spotify" if is_spotify(target) else "mpv"
@@ -985,6 +1019,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/play":
                 target = body.get("target")
                 reverse = False
+                cache = None  # None = legacy behaviour for raw targets
                 if not target and body.get("id"):
                     entry = find_entry(load_library(), body["id"])
                     if not entry:
@@ -994,11 +1029,13 @@ class Handler(BaseHTTPRequestHandler):
                     # Play in the same order the menu showed the episodes
                     reverse = (entry["order"] != "auto"
                                and entry["order"] != _natural_order(target))
+                    cache = entry.get("cache", 0)
                 if not target:
                     self._send(400, {"error": "target or id required"})
                     return
                 self._send(200, ORCH.play(target, bool(body.get("fresh")),
-                                          body.get("episode") or None, reverse))
+                                          body.get("episode") or None, reverse,
+                                          cache))
             elif self.path in ("/playpause", "/next", "/prev"):
                 self._send(200, ORCH.command(self.path[1:]))
             elif self.path == "/pause":

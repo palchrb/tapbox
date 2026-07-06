@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """TapBox player — THE entrypoint for playing any link.
 
-Usage: player.py [--fresh] [--episode <id>] <target> [url...]
+Usage: player.py [--fresh] [--reverse] [--episode <id>] [--cache <n>]
+                 <target> [url...]
 
 Routing:
   - Spotify links/URIs (track/album/playlist/artist/episode/show, incl.
@@ -190,13 +191,20 @@ def main():
     fresh = False
     reverse = False  # flip the expanded queue (library 'order' override)
     episode = None   # explicit episode pick from the menu (tapboxd /play)
-    while args and args[0] in ("--fresh", "--reverse", "--episode"):
+    cache_n = None   # library entry cache setting; None = legacy behaviour
+    while args and args[0] in ("--fresh", "--reverse", "--episode", "--cache"):
         if args[0] == "--fresh":
             fresh = True
             args = args[1:]
         elif args[0] == "--reverse":
             reverse = True
             args = args[1:]
+        elif args[0] == "--cache":
+            if len(args) < 2 or not args[1].isdigit():
+                print("--cache needs a number", file=sys.stderr)
+                sys.exit(1)
+            cache_n = int(args[1])
+            args = args[2:]
         else:
             if len(args) < 2:
                 print("--episode needs an id", file=sys.stderr)
@@ -309,7 +317,10 @@ def main():
          f"--input-ipc-server={sock}"] + urls)
     signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
 
-    # NRK podcast/series? Cache the newest episodes in the background
+    # Background episode caching. A library entry's cache setting (--cache N,
+    # passed by tapboxd) decides: 0 = never sync, N = keep the newest N.
+    # Without the flag (cards with raw links, CLI) the legacy behaviour
+    # stands: NRK podcasts/series sync their newest 50.
     kind = None
     m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
     if m:
@@ -318,13 +329,19 @@ def main():
         m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
         if m:
             kind = "series"
-    if m:
+    sync_args = None
+    if m and (cache_n is None or cache_n > 0):
+        sync_args = ["sync", m.group(1), str(cache_n or 50), kind]
+    elif (cache_n or 0) > 0 and len(urls) > 1 \
+            and target.startswith(("http://", "https://")):
+        sync_args = ["sync-feed", target, str(cache_n)]
+    if sync_args:
         nrkpy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nrk.py")
         if os.path.exists(nrkpy):
-            subprocess.Popen([sys.executable, nrkpy, "sync", m.group(1), "50", kind],
+            subprocess.Popen([sys.executable, nrkpy, *sync_args],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              preexec_fn=lambda: os.nice(19))  # never compete with audio
-            log(f"background sync started for '{m.group(1)}' ({kind})")
+            log(f"background sync started: {' '.join(sync_args)}")
 
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):

@@ -11,6 +11,8 @@ Usage:
   sudo tapbox-lib add <section> <name> <target> [auto|newest|oldest]
   sudo tapbox-lib rm <entry-id>
   sudo tapbox-lib order <entry-id> auto|newest|oldest
+  sudo tapbox-lib cache <entry-id> <n>     keep the newest n episodes offline
+                                           (0 = no offline copies, default)
 
 Examples:
   sudo tapbox-lib add Stories Fantorangen \\
@@ -123,8 +125,22 @@ def cmd_order(lib, args):
     sys.exit(f"no entry {args[0]} (see: tapbox-lib list)")
 
 
+def cmd_cache(lib, args):
+    if len(args) != 2 or not args[1].isdigit() or not 0 <= int(args[1]) <= 100:
+        sys.exit("usage: tapbox-lib cache <entry-id> <0-100>")
+    for _s, e in entries(lib):
+        if e["id"] == args[0]:
+            e["cache"] = int(args[1])
+            save(lib)
+            print(f"{e['name']}: keeps the newest {e['cache']} offline"
+                  if e["cache"] else f"{e['name']}: no offline copies")
+            return
+    sys.exit(f"no entry {args[0]} (see: tapbox-lib list)")
+
+
 def main():
-    cmds = {"list": cmd_list, "add": cmd_add, "rm": cmd_rm, "order": cmd_order}
+    cmds = {"list": cmd_list, "add": cmd_add, "rm": cmd_rm,
+            "order": cmd_order, "cache": cmd_cache}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(1)
