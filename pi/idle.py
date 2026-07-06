@@ -13,6 +13,7 @@ Usage: idle.py [minutes]   (default 30; enable via `tapbox-power idle-on`)
 """
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -22,8 +23,20 @@ import urllib.request
 API = "http://127.0.0.1:3678"
 DAEMON = "http://127.0.0.1:3679"
 MPV_SOCK = "/run/tapbox-mpv.sock"
+SETTINGS_FILE = os.environ.get("TAPBOX_SETTINGS", "/etc/tapbox/settings.json")
 IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 30
 CHECK_S = 60
+
+
+def idle_minutes():
+    """The configured timeout: tapboxd's settings.json wins (re-read every
+    cycle so the settings menu applies live); the CLI arg is the fallback.
+    0 = auto-shutdown disabled."""
+    try:
+        with open(SETTINGS_FILE) as f:
+            return int(json.load(f)["idle_shutdown_min"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return IDLE_MIN
 
 
 def go_playing():
@@ -63,16 +76,17 @@ def daemon_playing():
 
 def main():
     idle = 0
-    print(f"tapbox-idle: will power off after {IDLE_MIN} min without playback",
-          flush=True)
+    print(f"tapbox-idle: will power off after {idle_minutes()} min without "
+          "playback (live from settings.json)", flush=True)
     while True:
         active = daemon_playing()
         if active is None:  # daemon down — check the sources directly
             active = go_playing() or mpv_playing()
         idle = 0 if active else idle + CHECK_S
-        if idle >= IDLE_MIN * 60:
+        limit = idle_minutes()
+        if limit > 0 and idle >= limit * 60:
             subprocess.run(["logger",
-                            f"tapbox-idle: idle {IDLE_MIN}min, powering off"])
+                            f"tapbox-idle: idle {limit}min, powering off"])
             subprocess.run(["poweroff"])
             return
         time.sleep(CHECK_S)

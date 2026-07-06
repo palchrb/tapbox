@@ -213,7 +213,7 @@ def main():
         play_spotify(target)  # resume is Spotify's own job — session remembers
         return
 
-    titles, ids = {}, {}
+    titles, ids, images = {}, {}, {}
     if not urls:  # expand the link ourselves — pure-python entrypoint
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
@@ -222,6 +222,7 @@ def main():
             urls = [e["url"] for e in entries]
             titles = {e["url"]: e["title"] for e in entries if e.get("title")}
             ids = {e["url"]: e["id"] for e in entries if e.get("id")}
+            images = {e["url"]: e["image"] for e in entries if e.get("image")}
         except Exception as e:
             log(f"expansion failed ({e!r}) — playing the raw link")
             urls = [target]
@@ -358,6 +359,7 @@ def main():
                     with open(now_file + ".tmp", "w") as f:
                         json.dump({"id": ids.get(path), "url": path,
                                    "title": titles.get(path),
+                                   "image": images.get(path),
                                    "target": target}, f)
                     os.replace(now_file + ".tmp", now_file)
                 except OSError:

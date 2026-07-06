@@ -68,7 +68,7 @@ install_if_changed() {  # <mode> <src> <dest>
 # --- 1. packages -------------------------------------------------------------
 
 PKGS=(bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
-      mpv yt-dlp python3-venv python3-dev i2c-tools)
+      mpv yt-dlp python3-venv python3-dev i2c-tools fonts-dejavu-core)
 missing=()
 for p in "${PKGS[@]}"; do have_pkg "$p" || missing+=("$p"); done
 if ((${#missing[@]})); then
@@ -250,9 +250,13 @@ raspi-config nonint do_i2c 0 2>/dev/null || true
 if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
   python3 -m venv /opt/tapbox/venv
 fi
-if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev' 2>/dev/null; then
+if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero' 2>/dev/null; then
   echo "    installing python libs (this can take a few minutes on a Zero)..."
-  /opt/tapbox/venv/bin/pip install --quiet --upgrade adafruit-circuitpython-pn532 evdev
+  /opt/tapbox/venv/bin/pip install --quiet --upgrade \
+    adafruit-circuitpython-pn532 evdev pillow gpiozero
+  # Screen driver for the Pirate Audio HAT (harmless without the hardware)
+  /opt/tapbox/venv/bin/pip install --quiet --upgrade st7789 spidev 2>/dev/null \
+    || echo "    (st7789 screen lib skipped — install when the HAT arrives)"
 else
   echo "    python libs already installed — skipping pip"
 fi
@@ -263,6 +267,23 @@ install_if_changed 644 "$SCRIPT_DIR/nrk.py"    /usr/local/bin/nrk.py        && R
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
+install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
+
+# Screen daemon service (Pirate Audio HAT). Installed but NOT enabled —
+# enable it when the screen is mounted:  sudo systemctl enable --now tapbox-ui
+write_if_changed /etc/systemd/system/tapbox-ui.service <<'EOF' || true
+[Unit]
+Description=TapBox screen UI (Pirate Audio)
+After=tapbox-daemon.service
+
+[Service]
+ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-ui
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
 install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  || true
 
