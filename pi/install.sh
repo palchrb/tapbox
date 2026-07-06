@@ -147,7 +147,7 @@ disable_autoplay: true  # playlist ends -> silence, not algorithm radio
 cache:
   enabled: true
   dir: /var/lib/tapbox/spotify-cache
-  size_limit: 2GB
+  size_limit: 20GB
 credentials:
   type: zeroconf
   zeroconf:
@@ -170,9 +170,9 @@ if [[ -f "$CONF_DIR/config.yml" ]] && ! grep -q '^cache:' "$CONF_DIR/config.yml"
 cache:
   enabled: true
   dir: /var/lib/tapbox/spotify-cache
-  size_limit: 2GB
+  size_limit: 20GB
 EOF
-  echo "    config: enabled the audio cache (2GB, /var/lib/tapbox/spotify-cache)"
+  echo "    config: enabled the audio cache (20GB, /var/lib/tapbox/spotify-cache)"
   GO_RESTART_NEEDED=1
 fi
 # The cache dir must be writable by the service user (go-librespot runs
