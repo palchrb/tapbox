@@ -24,6 +24,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   GET  /system     battery (PiSugar), disk/cache usage, wifi state, temps
   POST /system/wifi      {"enabled": bool} — rfkill wifi
   POST /system/shutdown  {"restart": bool} — graceful poweroff/reboot
+  POST /wifi/scan     list nearby networks (ssid/signal/secured/known)
+  POST /wifi/connect  {"ssid", "password"?} — join a network (nmcli)
+  POST /wifi/forget   {"ssid"} — delete the saved profile
   GET  /bt         known/paired/connected speakers + the configured one
   POST /bt/scan    scan ~20s, list nearby devices (pick one -> /bt/connect)
   POST /bt/pair    {"name"?} — one-button flow: auto-pair the single audio
@@ -445,6 +448,109 @@ def set_wifi(enabled):
     log(f"wifi {cmd}ed")
     en, ssid, ip = wifi_state()
     return {"enabled": en, "ssid": ssid, "ip": ip}
+
+
+# --- wifi management (nmcli — Bookworm's NetworkManager) --------------------------
+
+WIFI_LOCK = threading.Lock()  # one scan/connect at a time
+
+
+def _nmcli(*args, timeout=60):
+    try:
+        r = subprocess.run(["nmcli", *args], capture_output=True, text=True,
+                           timeout=timeout)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except FileNotFoundError:
+        return 127, "nmcli not found — this box does not use NetworkManager"
+    except subprocess.TimeoutExpired:
+        return 1, "nmcli timed out"
+
+
+def _nm_unescape(s):
+    """nmcli -t escapes ':' and '\\' in field values."""
+    return s.replace("\\\\", "\0").replace("\\:", ":").replace("\0", "\\")
+
+
+def _known_wifi_names():
+    _code, out = _nmcli("-t", "-f", "NAME,TYPE", "connection", "show",
+                        timeout=10)
+    known = set()
+    for line in out.splitlines():
+        name, _, ctype = line.rpartition(":")
+        if ctype == "802-11-wireless":
+            known.add(_nm_unescape(name))
+    return known
+
+
+def wifi_scan():
+    """Nearby networks, strongest first. None = busy."""
+    if not WIFI_LOCK.acquire(blocking=False):
+        return None
+    try:
+        code, out = _nmcli("-t", "-f", "IN-USE,SIGNAL,SECURITY,SSID",
+                           "dev", "wifi", "list", "--rescan", "yes",
+                           timeout=30)
+        if code != 0:
+            return {"ok": False, "networks": [],
+                    "output": out.splitlines()[-1] if out else "scan failed"}
+        nets = {}
+        for line in out.splitlines():
+            parts = line.split(":", 3)  # SSID last -> its colons survive
+            if len(parts) != 4:
+                continue
+            in_use, signal, security, ssid = parts
+            ssid = _nm_unescape(ssid)
+            if not ssid:
+                continue  # hidden network
+            entry = {"ssid": ssid,
+                     "signal": int(signal) if signal.isdigit() else 0,
+                     "secured": bool(security and security != "--"),
+                     "in_use": in_use == "*"}
+            cur = nets.get(ssid)  # several BSSIDs -> keep the strongest
+            if cur is None or entry["signal"] > cur["signal"]:
+                if cur and cur["in_use"]:
+                    entry["in_use"] = True
+                nets[ssid] = entry
+        known = _known_wifi_names()
+        for n in nets.values():
+            n["known"] = n["ssid"] in known
+        return {"ok": True,
+                "networks": sorted(nets.values(),
+                                   key=lambda n: (-n["in_use"], -n["signal"]))}
+    finally:
+        WIFI_LOCK.release()
+
+
+def wifi_connect(ssid, password=None):
+    """Join a network (uses the saved profile when one exists). None = busy."""
+    if not WIFI_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if password:
+            code, out = _nmcli("dev", "wifi", "connect", ssid,
+                               "password", password, timeout=75)
+        elif ssid in _known_wifi_names():
+            code, out = _nmcli("connection", "up", "id", ssid, timeout=75)
+        else:
+            code, out = _nmcli("dev", "wifi", "connect", ssid, timeout=75)
+        tail = "\n".join(out.splitlines()[-3:])
+        log(f"wifi connect {ssid!r} -> exit {code}")
+        enabled, cur, ip = wifi_state()
+        return {"ok": code == 0, "output": tail, "ssid": cur, "ip": ip}
+    finally:
+        WIFI_LOCK.release()
+
+
+def wifi_forget(ssid):
+    if not WIFI_LOCK.acquire(blocking=False):
+        return None
+    try:
+        code, out = _nmcli("connection", "delete", "id", ssid, timeout=15)
+        log(f"wifi forget {ssid!r} -> exit {code}")
+        return {"ok": code == 0,
+                "output": "\n".join(out.splitlines()[-2:])}
+    finally:
+        WIFI_LOCK.release()
 
 
 # --- bluetooth (delegates to play.sh — the pairing logic with all the
@@ -1059,6 +1165,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, set_wifi(body["enabled"]))
             elif self.path == "/system/shutdown":
                 self._send(200, shutdown(bool(body.get("restart"))))
+            elif self.path == "/wifi/scan":
+                r = wifi_scan()
+                self._send(409 if r is None else 200,
+                           r or {"error": "wifi operation already in progress"})
+            elif self.path in ("/wifi/connect", "/wifi/forget"):
+                ssid = str(body.get("ssid") or "").strip()
+                if not ssid or len(ssid) > 32:
+                    self._send(400, {"error": "ssid required (max 32 chars)"})
+                    return
+                if self.path == "/wifi/connect":
+                    r = wifi_connect(ssid, str(body["password"])
+                                     if body.get("password") else None)
+                else:
+                    r = wifi_forget(ssid)
+                self._send(409 if r is None else 200,
+                           r or {"error": "wifi operation already in progress"})
             elif self.path == "/bt/scan":
                 r = bt_scan()
                 self._send(409 if r is None else 200,

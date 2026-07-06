@@ -319,6 +319,10 @@ async function loadSystem() {
   }
   $("#btn-wifi").textContent = sys.wifi.enabled ? "Turn Wi-Fi off" : "Turn Wi-Fi on";
   $("#btn-wifi").dataset.enabled = sys.wifi.enabled ? "1" : "";
+  $("#wifi-current").textContent = sys.wifi.enabled
+    ? (sys.wifi.ssid ? `Connected to ${sys.wifi.ssid} (${sys.wifi.ip || "no IP"})`
+                     : "On — not connected to any network")
+    : "Wi-Fi is off";
 }
 
 $("#btn-wifi").addEventListener("click", async () => {
@@ -441,6 +445,80 @@ $("#btn-scan").addEventListener("click", async () => {
   btn.disabled = false;
   btn.textContent = "Scan for new";
 });
+
+/* --- wifi join ---------------------------------------------------------------- */
+
+function signalBars(pct) {
+  return pct > 75 ? "▂▄▆█" : pct > 50 ? "▂▄▆" : pct > 25 ? "▂▄" : "▂";
+}
+
+$("#btn-wifi-scan").addEventListener("click", async () => {
+  const btn = $("#btn-wifi-scan");
+  btn.disabled = true;
+  btn.textContent = "Scanning …";
+  const wrap = $("#wifi-list");
+  wrap.textContent = "";
+  try {
+    const r = await api("/wifi/scan", { method: "POST", body: {} });
+    if (!r.ok) {
+      toast(r.output || "Scan failed", 6000);
+    } else if (!r.networks.length) {
+      wrap.innerHTML = "<p class='dim'>No networks found.</p>";
+    }
+    for (const n of r.networks) {
+      const row = document.createElement("div");
+      row.className = "entry";
+      const info = document.createElement("div");
+      info.className = "entry-info";
+      const name = document.createElement("strong");
+      name.textContent = (n.in_use ? "✓ " : "") + n.ssid + (n.secured ? " 🔒" : "");
+      const sub = document.createElement("small");
+      sub.textContent = `${signalBars(n.signal)} ${n.signal}%` +
+        (n.known ? " · saved" : "");
+      info.append(name, sub);
+      row.appendChild(info);
+      if (!n.in_use) {
+        const join = document.createElement("button");
+        join.textContent = n.known ? "Connect" : "Join";
+        join.addEventListener("click", () => wifiJoin(n));
+        row.appendChild(join);
+        if (n.known) {
+          const forget = document.createElement("button");
+          forget.textContent = "Forget";
+          forget.className = "danger";
+          forget.addEventListener("click", async () => {
+            if (!confirm(`Forget the saved network “${n.ssid}”?`)) return;
+            await api("/wifi/forget", { method: "POST", body: { ssid: n.ssid } })
+              .then((res) => toast(res.ok ? "Forgotten" : res.output, 4000))
+              .catch((e) => toast(e.message));
+          });
+          row.appendChild(forget);
+        }
+      }
+      wrap.appendChild(row);
+    }
+  } catch (e) { toast(e.message, 6000); }
+  btn.disabled = false;
+  btn.textContent = "Scan for networks";
+});
+
+async function wifiJoin(n) {
+  let password;
+  if (n.secured && !n.known) {
+    password = prompt(`Password for “${n.ssid}”:`);
+    if (!password) return;
+  }
+  toast(`Joining ${n.ssid} … the box may move networks (reconnect your phone if this page stops responding)`, 60000);
+  try {
+    const r = await api("/wifi/connect",
+      { method: "POST", body: { ssid: n.ssid, password } });
+    toast(r.ok ? `Connected to ${r.ssid} (${r.ip || "getting IP …"})`
+               : (r.output || "Failed").split("\n").pop(), r.ok ? 4000 : 8000);
+    loadSystem();
+  } catch (e) {
+    toast("Lost contact — if the box joined the new network, reconnect your phone to it and reload.", 10000);
+  }
+}
 
 /* --- header battery pill ---------------------------------------------------- */
 
