@@ -280,6 +280,13 @@ install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || tru
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
 install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
 
+# Captive portal DNS: while the setup hotspot runs (NetworkManager shared
+# mode), resolve every hostname to the box so phone connectivity probes hit
+# tapboxd's :80 redirect and pop the portal. Inert outside hotspot mode.
+write_if_changed /etc/NetworkManager/dnsmasq-shared.d/tapbox-captive.conf <<'EOF' || true
+address=/#/10.42.0.1
+EOF
+
 # Parent PWA (served by tapbox-daemon at http://tapbox.local:3679)
 mkdir -p /usr/share/tapbox/web
 for f in "$SCRIPT_DIR"/web/*; do

@@ -75,6 +75,8 @@ async function pollStatus() {
     $("#np-dur").textContent =
       st.position != null && st.duration == null ? "live" : fmtTime(st.duration);
     $("#btn-play").textContent = st.playing ? "⏸" : "▶";
+    $("#btn-shuffle").classList.toggle("on", !!st.shuffle);
+    $("#btn-shuffle").dataset.on = st.shuffle ? "1" : "";
     const out = document.querySelector(`input[name=output][value=${st.output}]`);
     if (out) out.checked = true;
   } catch (e) { /* box offline — keep last view */ }
@@ -93,6 +95,18 @@ $("#btn-play").addEventListener("click", () => api("/playpause", { method: "POST
 $("#btn-next").addEventListener("click", () => api("/next", { method: "POST", body: {} }).catch((e) => toast(e.message)));
 $("#btn-prev").addEventListener("click", () => api("/prev", { method: "POST", body: {} }).catch((e) => toast(e.message)));
 $("#btn-stop").addEventListener("click", () => api("/stop", { method: "POST", body: {} }).then(pollStatus).catch((e) => toast(e.message)));
+$("#btn-shuffle").addEventListener("click", async () => {
+  const enable = !$("#btn-shuffle").dataset.on;
+  try {
+    const r = await api("/shuffle", { method: "POST", body: { enabled: enable } });
+    if (r.routed == null) {
+      toast("Nothing to shuffle");
+    } else {
+      toast(enable ? "Shuffle on" : "Shuffle off");
+    }
+    pollStatus();
+  } catch (e) { toast(e.message); }
+});
 
 $("#volume").addEventListener("input", () => {
   volTouched = Date.now();
@@ -319,11 +333,35 @@ async function loadSystem() {
   }
   $("#btn-wifi").textContent = sys.wifi.enabled ? "Turn Wi-Fi off" : "Turn Wi-Fi on";
   $("#btn-wifi").dataset.enabled = sys.wifi.enabled ? "1" : "";
-  $("#wifi-current").textContent = sys.wifi.enabled
-    ? (sys.wifi.ssid ? `Connected to ${sys.wifi.ssid} (${sys.wifi.ip || "no IP"})`
-                     : "On — not connected to any network")
-    : "Wi-Fi is off";
+  $("#wifi-current").textContent = sys.wifi.hotspot
+    ? `Setup hotspot active: ${sys.wifi.hotspot_ssid}`
+    : sys.wifi.enabled
+      ? (sys.wifi.ssid ? `Connected to ${sys.wifi.ssid} (${sys.wifi.ip || "no IP"})`
+                       : "On — not connected to any network")
+      : "Wi-Fi is off";
+  $("#btn-hotspot").textContent = sys.wifi.hotspot
+    ? "Stop hotspot" : "Setup hotspot";
+  $("#btn-hotspot").dataset.on = sys.wifi.hotspot ? "1" : "";
 }
+
+$("#btn-hotspot").addEventListener("click", async () => {
+  const enable = !$("#btn-hotspot").dataset.on;
+  if (enable && !confirm(
+    "Start the setup hotspot? The box LEAVES the current network — connect "
+    + "your phone to the hotspot (see the name/password in the next toast) "
+    + "to reach this page again.")) return;
+  try {
+    const r = await api("/wifi/hotspot", { method: "POST", body: { enabled: enable } });
+    toast(enable && r.ok
+      ? `Hotspot: ${r.ssid} — password: ${r.password}` : enable
+        ? (r.output || "Hotspot failed") : "Hotspot stopped", 15000);
+    loadSystem();
+  } catch (e) {
+    toast(enable
+      ? "Lost contact — the box is now the hotspot; join it and reload."
+      : e.message, 10000);
+  }
+});
 
 $("#btn-wifi").addEventListener("click", async () => {
   const enable = !$("#btn-wifi").dataset.enabled;

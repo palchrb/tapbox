@@ -8,6 +8,8 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /play       {"target": <any link/path>, "fresh": bool,
                     "episode": <id>}  episode = start the queue there
   POST /playpause  |  /pause  |  /next  |  /prev  |  /stop
+  POST /shuffle    {"enabled": bool} — mpv reshuffles the playlist,
+                   Spotify toggles shuffle_context
   POST /volume     {"volume": 0-100} or {"delta": +/-n} — routes to the
                    active source (mpv softvol / go-librespot volume)
   GET  /volume     current volume of the active source (0-100)
@@ -25,8 +27,14 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /system/wifi      {"enabled": bool} — rfkill wifi
   POST /system/shutdown  {"restart": bool} — graceful poweroff/reboot
   POST /wifi/scan     list nearby networks (ssid/signal/secured/known)
-  POST /wifi/connect  {"ssid", "password"?} — join a network (nmcli)
+  POST /wifi/connect  {"ssid", "password"?} — join a network (nmcli);
+                      leaves the setup hotspot first, restores it on failure
   POST /wifi/forget   {"ssid"} — delete the saved profile
+  POST /wifi/hotspot  {"enabled": bool} — the setup hotspot (TapBox-<host>).
+                      Also auto-starts on fresh boxes: no saved wifi network
+                      and nothing connected. A :80 redirect server + wildcard
+                      DNS (dnsmasq-shared.d) pops the phone's captive portal
+                      straight into the PWA.
   GET  /bt         known/paired/connected speakers + the configured one
   POST /bt/scan    scan ~20s, list nearby devices (pick one -> /bt/connect)
   POST /bt/pair    {"name"?} — one-button flow: auto-pair the single audio
@@ -435,7 +443,9 @@ def system_status():
     return {"battery": _safe_pct(batt),
             "plugged": plugged == "true",
             "disk": disk, "caches": caches, "cpu_temp": temp,
-            "wifi": {"enabled": enabled, "ssid": ssid, "ip": ip},
+            "wifi": {"enabled": enabled, "ssid": ssid, "ip": ip,
+                     "hotspot": hotspot_active(),
+                     "hotspot_ssid": HOTSPOT_SSID},
             "hostname": socket.gethostname()}
 
 
@@ -453,6 +463,13 @@ def set_wifi(enabled):
 # --- wifi management (nmcli — Bookworm's NetworkManager) --------------------------
 
 WIFI_LOCK = threading.Lock()  # one scan/connect at a time
+HOTSPOT_CON = "tapbox-hotspot"
+HOTSPOT_SSID = os.environ.get("TAPBOX_HOTSPOT_SSID") \
+    or f"TapBox-{socket.gethostname()}"
+HOTSPOT_PSK = os.environ.get("TAPBOX_HOTSPOT_PSK", "tapbox123")
+PORTAL_PORT = int(os.environ.get("TAPBOX_PORTAL_PORT", "80"))
+WATCHDOG_DELAY_S = int(os.environ.get("TAPBOX_WIFI_WATCHDOG_DELAY", "45"))
+_last_scan = {"networks": [], "at": 0.0}  # wlan0 can't scan while in AP mode
 
 
 def _nmcli(*args, timeout=60):
@@ -482,11 +499,57 @@ def _known_wifi_names():
     return known
 
 
+def hotspot_active():
+    _code, out = _nmcli("-t", "-f", "NAME", "connection", "show", "--active",
+                        timeout=10)
+    return HOTSPOT_CON in [_nm_unescape(x) for x in out.splitlines()]
+
+
+def start_hotspot():
+    """Bring up the setup AP. Scans first — the radio can't scan in AP mode,
+    so the portal's network picker serves this cached list."""
+    sc = wifi_scan()
+    if sc and sc.get("ok") and sc.get("networks"):
+        _last_scan.update(networks=sc["networks"], at=time.time())
+    code, out = _nmcli("dev", "wifi", "hotspot", "ifname", "wlan0",
+                       "con-name", HOTSPOT_CON, "ssid", HOTSPOT_SSID,
+                       "password", HOTSPOT_PSK, timeout=30)
+    log(f"hotspot {HOTSPOT_SSID}: {'up' if code == 0 else 'FAILED: ' + out.splitlines()[-1] if out else 'FAILED'}")
+    return code == 0
+
+
+def stop_hotspot():
+    _nmcli("connection", "down", HOTSPOT_CON, timeout=15)
+    _nmcli("connection", "delete", "id", HOTSPOT_CON, timeout=15)
+    log("hotspot stopped")
+
+
+def _wifi_watchdog():
+    """Fresh-box onboarding: no saved wifi network and nothing connected
+    -> start the setup hotspot. Boxes WITH saved networks never auto-AP
+    (a cabin trip must not burn battery on a pointless hotspot) — there
+    the PWA/screen button starts it explicitly."""
+    time.sleep(WATCHDOG_DELAY_S)
+    while True:
+        try:
+            enabled, ssid, _ip = wifi_state()
+            if (enabled and not ssid and not hotspot_active()
+                    and not _known_wifi_names()):
+                log("no saved wifi + not connected — starting setup hotspot")
+                start_hotspot()
+        except Exception as e:
+            log(f"wifi watchdog error: {e!r}")
+        time.sleep(30)
+
+
 def wifi_scan():
     """Nearby networks, strongest first. None = busy."""
     if not WIFI_LOCK.acquire(blocking=False):
         return None
     try:
+        if hotspot_active():  # AP mode: serve the pre-hotspot scan
+            return {"ok": True, "cached": True, "hotspot": True,
+                    "networks": _last_scan["networks"]}
         code, out = _nmcli("-t", "-f", "IN-USE,SIGNAL,SECURITY,SSID",
                            "dev", "wifi", "list", "--rescan", "yes",
                            timeout=30)
@@ -526,6 +589,10 @@ def wifi_connect(ssid, password=None):
     if not WIFI_LOCK.acquire(blocking=False):
         return None
     try:
+        was_hotspot = hotspot_active()
+        if was_hotspot:
+            log("leaving the setup hotspot to join a network...")
+            _nmcli("connection", "down", HOTSPOT_CON, timeout=15)
         if password:
             code, out = _nmcli("dev", "wifi", "connect", ssid,
                                "password", password, timeout=75)
@@ -535,10 +602,20 @@ def wifi_connect(ssid, password=None):
             code, out = _nmcli("dev", "wifi", "connect", ssid, timeout=75)
         tail = "\n".join(out.splitlines()[-3:])
         log(f"wifi connect {ssid!r} -> exit {code}")
+        if code != 0 and was_hotspot:
+            # Let the user retry from the portal instead of stranding them
+            _nmcli("connection", "up", HOTSPOT_CON, timeout=30) \
+                if _hotspot_profile_exists() else start_hotspot()
+            tail += "\nsetup hotspot restored — reconnect and retry"
         enabled, cur, ip = wifi_state()
         return {"ok": code == 0, "output": tail, "ssid": cur, "ip": ip}
     finally:
         WIFI_LOCK.release()
+
+
+def _hotspot_profile_exists():
+    _c, out = _nmcli("-t", "-f", "NAME", "connection", "show", timeout=10)
+    return HOTSPOT_CON in [_nm_unescape(x) for x in out.splitlines()]
 
 
 def wifi_forget(ssid):
@@ -709,6 +786,7 @@ class Orchestrator:
         self.target = None
         self.source = None
         self.reverse = False
+        self.mpv_shuffle = False  # mpv has no queryable shuffle state
         try:
             with open(LAST_FILE) as f:
                 d = json.load(f)
@@ -797,6 +875,7 @@ class Orchestrator:
                     pass  # IPC gone but child alive? fall through to respawn
             self._stop_child()
             self._spawn(target, fresh, episode, reverse, cache)
+            self.mpv_shuffle = False  # fresh queue plays in order
             self.target = target
             self.reverse = reverse
             self.source = "spotify" if is_spotify(target) else "mpv"
@@ -887,6 +966,27 @@ class Orchestrator:
                     "mpv_switched": mpv_switched,
                     "spotify_restarted": restarted}
 
+    def shuffle(self, enabled):
+        """mpv: reshuffle/restore the playlist order (current track keeps
+        playing). Spotify: shuffle_context — enabling BEFORE /play makes
+        playback start on a random track, so the PWA can pre-arm it."""
+        with self.lock:
+            if self._mpv_alive() and self.source == "mpv":
+                cmd = ["playlist-shuffle"] if enabled else ["playlist-unshuffle"]
+                try:
+                    if mpv_ipc(cmd).get("error") == "success":
+                        self.mpv_shuffle = enabled
+                        log(f"shuffle {enabled} -> mpv")
+                        return {"routed": "mpv", "shuffle": enabled}
+                except OSError:
+                    pass
+            try:
+                go("/player/shuffle_context", body={"shuffle_context": enabled})
+                log(f"shuffle {enabled} -> spotify")
+                return {"routed": "spotify", "shuffle": enabled}
+            except OSError:
+                return {"routed": None, "shuffle": None}
+
     def pause(self):
         """Pause (never toggle) whatever is audible. Used by the card-slot
         switch on card removal: player stays loaded, so re-inserting the
@@ -960,9 +1060,10 @@ class Orchestrator:
             target, source = self.target, self.source
         out = {"source": source, "target": target, "playing": False,
                "title": None, "position": None, "duration": None,
-               "artwork": None, "episode_id": None,
+               "artwork": None, "episode_id": None, "shuffle": False,
                "output": current_output()["output"]}
         if mpv_alive:
+            out["shuffle"] = self.mpv_shuffle
             out["playing"] = mpv_get("pause") is False
             out["title"] = mpv_get("media-title")
             out["position"] = mpv_get("playback-time")
@@ -988,6 +1089,7 @@ class Orchestrator:
         # (title/artwork/position) with playing=False, like the mpv side does.
         if not mpv_alive and track and not st.get("stopped"):
             out["playing"] = sp_playing
+            out["shuffle"] = bool(st.get("shuffle_context"))
             out["source"] = "spotify"
             out["title"] = track.get("name")
             out["duration"] = (track.get("duration") or 0) / 1000 or None
@@ -1145,6 +1247,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, ORCH.command(self.path[1:]))
             elif self.path == "/pause":
                 self._send(200, ORCH.pause())
+            elif self.path == "/shuffle":
+                if not isinstance(body.get("enabled"), bool):
+                    self._send(400, {"error": "enabled (bool) required"})
+                    return
+                self._send(200, ORCH.shuffle(body["enabled"]))
             elif self.path == "/volume":
                 if body.get("volume") is None and body.get("delta") is None:
                     self._send(400, {"error": "volume or delta required"})
@@ -1165,6 +1272,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, set_wifi(body["enabled"]))
             elif self.path == "/system/shutdown":
                 self._send(200, shutdown(bool(body.get("restart"))))
+            elif self.path == "/wifi/hotspot":
+                if not isinstance(body.get("enabled"), bool):
+                    self._send(400, {"error": "enabled (bool) required"})
+                    return
+                if body["enabled"]:
+                    ok = start_hotspot()
+                    self._send(200, {"ok": ok, "ssid": HOTSPOT_SSID,
+                                     "password": HOTSPOT_PSK})
+                else:
+                    stop_hotspot()
+                    self._send(200, {"ok": True})
             elif self.path == "/wifi/scan":
                 r = wifi_scan()
                 self._send(409 if r is None else 200,
@@ -1210,8 +1328,40 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
 
+class PortalHandler(BaseHTTPRequestHandler):
+    """Port-80 helper: redirects everything to the PWA. On the setup
+    hotspot, wildcard DNS (dnsmasq-shared.d) sends the phone's captive
+    probes here — a redirect instead of the expected 204/Success makes
+    the phone pop its 'sign in to network' sheet with the PWA in it.
+    On the home LAN it doubles as http://tapbox.local -> the PWA."""
+
+    def log_message(self, *args):
+        pass
+
+    def _redirect(self):
+        host = self.request.getsockname()[0]  # our address on that network
+        self.send_response(302)
+        self.send_header("Location", f"http://{host}:{PORT}/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_POST = do_HEAD = _redirect
+
+
+def _portal_server():
+    try:
+        srv = ThreadingHTTPServer((BIND, PORTAL_PORT), PortalHandler)
+    except OSError as e:
+        log(f"portal on :{PORTAL_PORT} not started ({e}) — captive portal off")
+        return
+    log(f"portal redirect on :{PORTAL_PORT}")
+    srv.serve_forever()
+
+
 def main():
     threading.Thread(target=_cache_sweeper, daemon=True).start()
+    threading.Thread(target=_wifi_watchdog, daemon=True).start()
+    threading.Thread(target=_portal_server, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")
     server.serve_forever()

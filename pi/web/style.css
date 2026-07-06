@@ -69,6 +69,7 @@ button {
 button:active { background: #333340; }
 button.danger { color: var(--danger); }
 button.big { font-size: 1.5rem; padding: 0.55rem 1.3rem; }
+button.on { outline: 2px solid var(--hilite); }
 
 /* now playing */
 .nowplaying { text-align: center; }
