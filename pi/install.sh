@@ -280,6 +280,16 @@ install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || tru
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
 install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
 
+# PiSugar battery curve: apply the calibrated TapBox curve (measured on a
+# full discharge run; percent = remaining playtime) — but only when the
+# config has NO curve yet, so a hand-tuned one is never overwritten.
+# Re-apply/overwrite explicitly with: sudo tapbox-power curve
+if [[ -f /etc/pisugar-server/config.json ]] \
+    && ! grep -q battery_curve /etc/pisugar-server/config.json; then
+  bash "$SCRIPT_DIR/power.sh" curve && echo "    applied calibrated battery curve" \
+    || echo "    battery curve not applied (see: sudo tapbox-power curve)"
+fi
+
 # Captive portal DNS: while the setup hotspot runs (NetworkManager shared
 # mode), resolve every hostname to the box so phone connectivity probes hit
 # tapboxd's :80 redirect and pop the portal. Inert outside hotspot mode.
