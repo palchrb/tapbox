@@ -176,6 +176,7 @@ important idea here). Contents:
 | Battery | % + charging + **estimated playtime left** (the calibrated curve is literally remaining-playtime — show "~2.5 h igjen") | GET /system |
 | Power | shutdown / restart | POST /system/shutdown |
 | Later | backlight dimming (PWM on BCM13), language NO/EN, About page | |
+| Later | **box name** (onboarding + settings): one name sets avahi host-name (`emmas-boks.local`), Spotify Connect device_name and the hotspot SSID. Needed for multi-box homes — bare `tapbox.local` collides and avahi's auto-rename (`tapbox-2.local`) is boot-order-dependent | |
 
 **Status:** 1-3 implemented and tested (2026-07-06): `GET /system`,
 `POST /system/wifi`, `POST /system/shutdown`, `GET/PUT /settings` (volume
