@@ -240,8 +240,9 @@ def expand_target(target, order="auto", name=None):
     if is_spotify(target):
         # Not expandable without the Web API: a leaf "play all" entry.
         return {"kind": "spotify", "name": name, "target": target,
-                "order": "auto", "episodes": []}
-    entries = _nrk().expand_entries(target)
+                "order": "auto", "image": None, "episodes": []}
+    nrk = _nrk()
+    entries = nrk.expand_entries(target)
     if order != "auto" and order != _natural_order(target):
         entries = list(reversed(entries))
     stems = _cached_stems()
@@ -252,9 +253,13 @@ def expand_target(target, order="auto", name=None):
         cached = (not url.startswith("http") and os.path.exists(url)) or \
                  (eid is not None and os.path.splitext(str(eid))[0] in stems)
         episodes.append({"id": eid, "title": e.get("title"), "url": url,
-                         "cached": bool(cached)})
+                         "image": e.get("image"), "cached": bool(cached)})
+    try:  # show-level artwork (local cover file when synced -> works offline)
+        image = nrk.collection_image(target)
+    except Exception:
+        image = None
     return {"kind": "list", "name": name, "target": target, "order": order,
-            "episodes": episodes}
+            "image": image, "episodes": episodes}
 
 
 # --- the orchestrator ----------------------------------------------------------

@@ -64,18 +64,48 @@ def _get_json(url):
     return json.loads(_get(url))
 
 
-def _feed_enclosures(feed_bytes):
-    """[(url, title)] for every enclosure in an RSS feed."""
-    pairs = []
+_ITUNES = "{http://www.itunes.com/dtds/podcast-1.0.dtd}"
+
+
+def _parse_feed(feed_bytes):
+    """(channel_image, [(url, title, image)]) for an RSS feed."""
     root = ET.fromstring(feed_bytes)
+    chan = root.find("./channel")
+    chan_img = None
+    if chan is not None:
+        it = chan.find(f"{_ITUNES}image")
+        if it is not None and it.get("href"):
+            chan_img = it.get("href")
+        else:
+            classic = chan.find("./image/url")
+            if classic is not None and classic.text:
+                chan_img = classic.text.strip()
+    items = []
     for item in root.findall("./channel/item"):
         enc = item.find("enclosure")
         if enc is None or "url" not in enc.attrib:
             continue
         t = item.find("title")
         title = t.text.strip() if t is not None and t.text else None
-        pairs.append((enc.attrib["url"], title))
-    return pairs
+        it = item.find(f"{_ITUNES}image")
+        img = it.get("href") if it is not None and it.get("href") else None
+        items.append((enc.attrib["url"], title, img))
+    return chan_img, items
+
+
+def _pick_image(images, want=300):
+    """A single URL from a psapi image list [{url, width}, ...]: the
+    smallest variant that is at least `want` px wide (240x240 screen +
+    PWA thumbnails — no reason to pull the 960px one)."""
+    if not isinstance(images, list):
+        return None
+    cands = sorted((im for im in images
+                    if isinstance(im, dict) and im.get("url")),
+                   key=lambda im: im.get("width") or 0)
+    for im in cands:  # smallest variant that is big enough
+        if (im.get("width") or 0) >= want:
+            return im["url"]
+    return cands[-1]["url"] if cands else None
 
 
 def _manifest_url(episode_id, kind="podcast"):
@@ -96,7 +126,18 @@ def _episode_stub(ep):
     self_href = ((ep.get("_links") or {}).get("self") or {}).get("href", "")
     eid = self_href.rstrip("/").split("/")[-1]
     title = (ep.get("titles") or {}).get("title") or ""
-    return {"id": eid, "title": title} if eid else None
+    image = _pick_image(ep.get("squareImage") or ep.get("image"))
+    return {"id": eid, "title": title, "image": image} if eid else None
+
+
+def _series_image(slug, kind="podcast"):
+    """The show-level artwork from the catalog root (series.squareImage)."""
+    try:
+        d = _get_json(f"{PSAPI}/radio/catalog/{kind}/{slug}")
+        s = d.get("series") or {}
+        return _pick_image(s.get("squareImage") or s.get("image"))
+    except (OSError, ValueError):
+        return None
 
 
 def _psapi_episodes(slug, kind="podcast"):
@@ -158,14 +199,19 @@ def _catalog(slug, kind="podcast"):
             cached = json.load(f)
     except (OSError, ValueError):
         pass
-    needs_titles = bool(cached) and any(
-        not ep.get("title") for ep in cached.get("episodes", []))
-    if (cached and not needs_titles
+    # Old cache formats lack titles/images ("image" key absent, not None) —
+    # backfill once from the catalog stubs, no manifest calls needed.
+    needs_backfill = bool(cached) and (
+        "image" not in cached
+        or any(not ep.get("title") or "image" not in ep
+               for ep in cached.get("episodes", [])))
+    if (cached and not needs_backfill
             and time.time() - cached.get("fetched_at", 0) < CATALOG_TTL_S):
         age_h = (time.time() - cached["fetched_at"]) / 3600
         _log(f"{slug}: catalog cache fresh ({len(cached['episodes'])} episodes, {age_h:.1f}h old) — no API calls")
         return cached["episodes"]
 
+    image = (cached or {}).get("image")
     try:
         if cached and cached.get("episodes"):
             known = {ep["id"] for ep in cached["episodes"]}
@@ -177,21 +223,27 @@ def _catalog(slug, kind="podcast"):
                 _log(f"{slug}: catalog re-checked — nothing new")
             episodes = cached["episodes"] + _resolve_manifests(fresh, kind)
             episodes = episodes[-MAX_EPISODES:]
-            if needs_titles:  # old cache format — cheap backfill, no manifest calls
-                stubs = {s["id"]: s.get("title") for s in _psapi_episodes(slug, kind)}
+            if needs_backfill:
+                stubs = {s["id"]: s for s in _psapi_episodes(slug, kind)}
                 for ep in episodes:
+                    stub = stubs.get(ep["id"]) or {}
                     if not ep.get("title"):
-                        ep["title"] = stubs.get(ep["id"])
-                _log(f"{slug}: backfilled episode titles into the catalog cache")
+                        ep["title"] = stub.get("title")
+                    if "image" not in ep:
+                        ep["image"] = stub.get("image")
+                _log(f"{slug}: backfilled titles/images into the catalog cache")
         else:
             _log(f"{slug}: first fetch — walking full psapi {kind} catalog...")
             episodes = _resolve_manifests(_psapi_episodes(slug, kind), kind)
             _log(f"{slug}: catalog has {len(episodes)} playable episodes")
+        if "image" not in (cached or {}):
+            image = _series_image(slug, kind)
         if episodes:
             os.makedirs(CACHE_DIR, exist_ok=True)
             tmp = path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"fetched_at": time.time(), "episodes": episodes}, f)
+                json.dump({"fetched_at": time.time(), "image": image,
+                           "episodes": episodes}, f)
             os.replace(tmp, path)
             return episodes
     except OSError as e:
@@ -202,28 +254,68 @@ def _catalog(slug, kind="podcast"):
     return []
 
 
+def _catalog_image(slug, kind="podcast"):
+    """Show-level artwork: the locally cached cover file when downloaded
+    (works offline), else the URL remembered in the catalog cache."""
+    local = os.path.join(CACHE_DIR, slug, "cover.jpg")
+    if os.path.exists(local):
+        return local
+    prefix = "catalog" if kind == "podcast" else f"catalog-{kind}"
+    try:
+        with open(os.path.join(CACHE_DIR, f"{prefix}-{slug}.json")) as f:
+            return json.load(f).get("image")
+    except (OSError, ValueError):
+        return None
+
+
+# Channel image of the last RSS feed expanded in this process, keyed by
+# target URL — lets collection_image() answer for feeds without refetching.
+_FEED_IMAGES = {}
+
+
+def collection_image(target):
+    """Artwork for the collection a link points at (menu icon for the
+    screen UI / PWA). Call after expand_entries(target). None when unknown."""
+    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
+    if m:
+        return _catalog_image(m.group(1), "podcast")
+    m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
+    if m:
+        return _catalog_image(m.group(1), "series")
+    if os.path.isdir(target):
+        for name in ("cover.jpg", "cover.jpeg", "cover.png", "folder.jpg"):
+            p = os.path.join(target, name)
+            if os.path.exists(p):
+                return p
+        return None
+    return _FEED_IMAGES.get(target)
+
+
 def _local_or_remote(slug, ep, kind="podcast"):
     local = _episode_file(slug, ep["id"], kind)
     return local if os.path.exists(local) else ep["url"]
 
 
-def _catalog_title(slug, episode_id, kind="podcast"):
+def _catalog_entry(slug, episode_id, kind="podcast"):
     try:
-        return next((ep.get("title") for ep in _catalog(slug, kind)
-                     if ep["id"] == episode_id), None)
+        return next((ep for ep in _catalog(slug, kind)
+                     if ep["id"] == episode_id), {})
     except Exception:
-        return None
+        return {}
 
 
 def _podcast(slug, episode_id=None):
     if episode_id:
-        title = _catalog_title(slug, episode_id)
+        cat = _catalog_entry(slug, episode_id)
+        title, image = cat.get("title"), cat.get("image")
         local = _episode_file(slug, episode_id)
         if os.path.exists(local):
-            return [{"url": local, "title": title, "id": episode_id}]
+            return [{"url": local, "title": title, "id": episode_id,
+                     "image": image}]
         url = _manifest_url(episode_id, "podcast")
         if url:
-            return [{"url": url, "title": title, "id": episode_id}]
+            return [{"url": url, "title": title, "id": episode_id,
+                     "image": image}]
         # fallback: match the episode id in the official RSS
         root = ET.fromstring(_get(f"https://podkast.nrk.no/program/{slug}.rss"))
         for item in root.findall("./channel/item"):
@@ -231,7 +323,7 @@ def _podcast(slug, episode_id=None):
                 enc = item.find("enclosure")
                 if enc is not None and "url" in enc.attrib:
                     return [{"url": enc.attrib["url"], "title": title,
-                             "id": episode_id}]
+                             "id": episode_id, "image": image}]
         return []
 
     # Whole podcast: the official RSS is often truncated, so use the full
@@ -241,8 +333,9 @@ def _podcast(slug, episode_id=None):
         return entries
     _log(f"{slug}: psapi gave nothing — falling back to official RSS "
          "(often truncated to the last few episodes!)")
-    return [{"url": u, "title": t, "id": None}
-            for u, t in _feed_enclosures(_get(f"https://podkast.nrk.no/program/{slug}.rss"))]
+    chan_img, items = _parse_feed(_get(f"https://podkast.nrk.no/program/{slug}.rss"))
+    return [{"url": u, "title": t, "id": None, "image": img or chan_img}
+            for u, t, img in items]
 
 
 def _queue(slug, kind, newest_first):
@@ -260,7 +353,8 @@ def _queue(slug, kind, newest_first):
     for i, (ep, u) in enumerate(zip(episodes, urls), 1):
         mark = "  [cached]" if u.startswith("/") else ""
         _log(f"  {i:3d}. {ep.get('title') or ep['id']}{mark}")
-    return [{"url": u, "title": ep.get("title"), "id": ep["id"]}
+    return [{"url": u, "title": ep.get("title"), "id": ep["id"],
+             "image": ep.get("image")}
             for ep, u in zip(episodes, urls)]
 
 
@@ -281,6 +375,17 @@ def sync(slug, count=SYNC_COUNT, kind="podcast"):
     _log(f"{slug}: sync ({kind}) — {len(wanted)} newest wanted, {have} already "
          f"cached, {len(wanted) - have} to download")
     os.makedirs(os.path.join(CACHE_DIR, slug), exist_ok=True)
+    # Show artwork for offline menus: one small jpg next to the episodes
+    cover = os.path.join(CACHE_DIR, slug, "cover.jpg")
+    img_url = _catalog_image(slug, kind)
+    if not os.path.exists(cover) and img_url and img_url.startswith("http"):
+        try:
+            with open(cover + ".part", "wb") as f:
+                f.write(_get(img_url, timeout=30))
+            os.replace(cover + ".part", cover)
+            _log(f"{slug}: downloaded cover art")
+        except OSError:
+            pass
     for ep in reversed(wanted):  # newest first
         dest = _episode_file(slug, ep["id"], kind)
         if os.path.exists(dest):
@@ -319,7 +424,8 @@ def _series(first_program_id):
             manifest = _get_json(f"{PSAPI}/playback/manifest/program/{pid}")
             assets = (manifest.get("playable") or {}).get("assets") or []
             if assets and assets[0].get("url"):
-                entries.append({"url": assets[0]["url"], "title": None, "id": pid})
+                entries.append({"url": assets[0]["url"], "title": None,
+                                "id": pid, "image": None})
         except OSError:
             pass  # episode not playable (geo block, expired) — skip it
         try:
@@ -344,7 +450,7 @@ def expand_titled(target):
 
 
 def expand_entries(target):
-    """Turn an NRK/feed link into [{'url', 'title', 'id'}] for playback.
+    """Turn an NRK/feed link into [{'url', 'title', 'id', 'image'}].
 
     'id' is the stable episode id when known (None otherwise) — playback
     state should key on it, since the same episode can be a stream URL one
@@ -352,18 +458,19 @@ def expand_entries(target):
     entry when the link is not NRK/RSS or lookup fails, so the caller can
     always just play whatever comes back.
     """
-    passthrough = [{"url": target, "title": None, "id": None}]
+    passthrough = [{"url": target, "title": None, "id": None, "image": None}]
     if os.path.isdir(target):
         # Local folder (e.g. a DRM-free audiobook): sorted playlist of audio
         # files, each keyed on its filename so resume survives moves/renames
-        # of the parent folder.
+        # of the parent folder. A cover.jpg in the folder becomes the art.
         exts = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav")
         files = sorted(f for f in os.listdir(target)
                        if f.lower().endswith(exts))
         if files:
             _log(f"folder with {len(files)} audio files: {target}")
+            cover = collection_image(target)
             return [{"url": os.path.join(target, f),
-                     "title": os.path.splitext(f)[0], "id": f}
+                     "title": os.path.splitext(f)[0], "id": f, "image": cover}
                     for f in files]
         return passthrough
     try:
@@ -385,7 +492,7 @@ def expand_entries(target):
                 if assets and assets[0].get("url"):
                     _log(f"live radio: {chan}")
                     return [{"url": assets[0]["url"], "title": f"NRK {chan}",
-                             "id": None}]
+                             "id": None, "image": None}]
             except (OSError, ValueError):
                 pass
             return passthrough
@@ -403,10 +510,13 @@ def expand_entries(target):
     if target.startswith(("http://", "https://")):
         try:
             if target.lower().split("?")[0].endswith((".rss", ".xml")) or _sniffs_like_feed(target):
-                pairs = _feed_enclosures(_get(target))
-                if pairs:
-                    _log(f"RSS feed with {len(pairs)} episodes: {target}")
-                    return [{"url": u, "title": t, "id": None} for u, t in pairs]
+                chan_img, items = _parse_feed(_get(target))
+                if items:
+                    _log(f"RSS feed with {len(items)} episodes: {target}")
+                    if chan_img:
+                        _FEED_IMAGES[target] = chan_img
+                    return [{"url": u, "title": t, "id": None,
+                             "image": img or chan_img} for u, t, img in items]
         except (OSError, ET.ParseError) as e:
             _log(f"feed parse failed ({e!r}) — passing link to mpv: {target}")
     return passthrough
