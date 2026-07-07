@@ -2,6 +2,7 @@
 the setup hotspot with its fresh-box watchdog, and the rfkill on/off toggle.
 Extracted verbatim from daemon.py."""
 
+import json
 import os
 import re
 import socket
@@ -22,10 +23,24 @@ def _run_out(args):
         return ""
 
 
+def _wifi_blocked():
+    """rfkill state via its JSON interface (made for scripts and stable);
+    the human text layout is only the fallback."""
+    out = _run_out(["rfkill", "-J"])
+    try:
+        devices = next(iter(json.loads(out).values()))
+        for d in devices:
+            if d.get("type") == "wlan":
+                return "blocked" in (d.get("soft"), d.get("hard"))
+    except (ValueError, StopIteration, AttributeError, TypeError):
+        pass
+    out = _run_out(["rfkill", "list", "wifi"]).lower()
+    return "blocked: yes" in out
+
+
 def wifi_state():
     """(enabled, ssid, ip) — enabled means not rfkill-blocked."""
-    out = _run_out(["rfkill", "list", "wifi"]).lower()
-    enabled = "blocked: yes" not in out  # soft or hard block = off
+    enabled = not _wifi_blocked()
     ssid = None
     for line in _run_out(["iw", "dev", "wlan0", "link"]).splitlines():
         if line.strip().startswith("SSID:"):
