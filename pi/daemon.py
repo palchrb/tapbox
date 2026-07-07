@@ -30,6 +30,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /wifi/connect  {"ssid", "password"?} — join a network (nmcli);
                       leaves the setup hotspot first, restores it on failure
   POST /wifi/forget   {"ssid"} — delete the saved profile
+  POST /wifi/add      {"ssid", "password"?} — save a profile WITHOUT the
+                      network in range (pre-provision the cabin wifi);
+                      auto-joins when first seen
   POST /spotify/logout   forget the Spotify login (drop credentials +
                          restart go-librespot) — the new account then picks
                          the box under Devices in the Spotify app
@@ -136,8 +139,8 @@ from tapbox.library import (  # noqa: E402
     _natural_order, _sync_wake)
 from tapbox.netmgmt import (  # noqa: E402
     HOTSPOT_PSK, HOTSPOT_SSID, hotspot_active, set_wifi, start_hotspot,
-    stop_hotspot, wifi_connect, wifi_forget, wifi_scan, wifi_state,
-    _wifi_watchdog)
+    stop_hotspot, wifi_add, wifi_connect, wifi_forget, wifi_scan,
+    wifi_state, _wifi_watchdog)
 from tapbox.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
     _retarget_go_librespot)
@@ -793,14 +796,17 @@ class Handler(BaseHTTPRequestHandler):
                 r = wifi_scan()
                 self._send(409 if r is None else 200,
                            r or {"error": "wifi operation already in progress"})
-            elif self.path in ("/wifi/connect", "/wifi/forget"):
+            elif self.path in ("/wifi/connect", "/wifi/forget",
+                               "/wifi/add"):
                 ssid = str(body.get("ssid") or "").strip()
                 if not ssid or len(ssid) > 32:
                     self._send(400, {"error": "ssid required (max 32 chars)"})
                     return
+                pw = str(body["password"]) if body.get("password") else None
                 if self.path == "/wifi/connect":
-                    r = wifi_connect(ssid, str(body["password"])
-                                     if body.get("password") else None)
+                    r = wifi_connect(ssid, pw)
+                elif self.path == "/wifi/add":
+                    r = wifi_add(ssid, pw)
                 else:
                     r = wifi_forget(ssid)
                 self._send(409 if r is None else 200,

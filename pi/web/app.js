@@ -400,6 +400,21 @@ $("#btn-wifi").addEventListener("click", async () => {
   } catch (e) { toast(e.message); }
 });
 
+$("#wifi-add-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const ssid = $("#wifi-add-ssid").value.trim();
+  const pass = $("#wifi-add-pass").value;
+  if (pass && (pass.length < 8 || pass.length > 63)) {
+    toast("WPA password must be 8-63 characters"); return;
+  }
+  try {
+    const r = await api("/wifi/add",
+      { method: "POST", body: { ssid, password: pass || undefined } });
+    toast(r.output || (r.ok ? "Saved" : "Failed"), 6000);
+    if (r.ok) { $("#wifi-add-ssid").value = ""; $("#wifi-add-pass").value = ""; }
+  } catch (e) { toast(e.message); }
+});
+
 $("#btn-wifi-reconnect").addEventListener("click", async () => {
   try {
     await api("/system/wifi", { method: "POST", body: { enabled: true } });

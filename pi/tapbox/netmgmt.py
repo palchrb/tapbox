@@ -279,6 +279,45 @@ def _hotspot_profile_exists():
     return HOTSPOT_CON in [_nm_unescape(x) for x in out.splitlines()]
 
 
+def wifi_add(ssid, password=None):
+    """Save a network profile WITHOUT the network being in range —
+    pre-provision the cabin/grandparent wifi before travelling there.
+    NetworkManager auto-joins when it first sees it (and the auto-off
+    prober finds it too). None = busy."""
+    if not WIFI_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if password is not None and not 8 <= len(password) <= 63:
+            return {"ok": False,
+                    "output": "WPA password must be 8-63 characters"}
+        known = ssid in _known_wifi_names()
+        if known and password:
+            code, out = _nmcli("connection", "modify", "id", ssid,
+                               "802-11-wireless-security.key-mgmt", "wpa-psk",
+                               "802-11-wireless-security.psk", password,
+                               timeout=15)
+            action = "password updated"
+        elif known:
+            return {"ok": False, "output": f"{ssid!r} is already saved"}
+        else:
+            args = ["connection", "add", "type", "wifi", "ifname", "wlan0",
+                    "con-name", ssid, "ssid", ssid]
+            if password:
+                args += ["802-11-wireless-security.key-mgmt", "wpa-psk",
+                         "802-11-wireless-security.psk", password]
+            code, out = _nmcli(*args, timeout=15)
+            action = "saved"
+        log(f"wifi add {ssid!r} -> exit {code}")
+        if code != 0:
+            return {"ok": False,
+                    "output": out.splitlines()[-1] if out else "nmcli failed"}
+        return {"ok": True,
+                "output": f"{action} — the box joins it automatically "
+                          f"when in range"}
+    finally:
+        WIFI_LOCK.release()
+
+
 def wifi_forget(ssid):
     if not WIFI_LOCK.acquire(blocking=False):
         return None

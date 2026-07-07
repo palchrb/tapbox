@@ -153,7 +153,17 @@
       <button id="btn-hotspot">Setup hotspot</button>
     </div>
     <div id="wifi-list"></div>
-    <p class="dim small">Joining another network moves the box: reconnect your
+    <form id="wifi-add-form">
+      <input id="wifi-add-ssid" placeholder="Add network by name (SSID)"
+             maxlength="32" required>
+      <input id="wifi-add-pass" type="password"
+             placeholder="Password (blank = open network)">
+      <button type="submit">Save network</button>
+    </form>
+    <p class="dim small">“Save network” stores it without needing it in
+    range — pre-add the cabin or grandparent Wi-Fi before travelling, and
+    the box joins it by itself on arrival.
+    Joining another network moves the box: reconnect your
     phone to that network and reopen this page (tapbox.local or the new IP).
     “Reconnect” turns the radio back on and restarts the auto-off timer —
     same as toggling Wi-Fi on from the box’s screen.</p>
