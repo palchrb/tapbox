@@ -958,6 +958,15 @@ def _spotify_bookmarker():
             track = st.get("track") or {}
             if not track or st.get("paused") or st.get("stopped"):
                 continue
+            if ORCH.source != "mpv" or not ORCH._mpv_alive():
+                pass  # spotify owns playback (or nothing does) — bookkeep
+            else:
+                # mpv owns playback but spotify still reports playing: this
+                # is the switch race — /play set target+source to the mpv
+                # target instantly, while player.py takes a moment to pause
+                # spotify. Writing now would stamp context None over a
+                # perfectly resumable bookmark. Skip the tick.
+                continue
             context = None
             if ORCH.source == "spotify" and ORCH.target \
                     and is_spotify(ORCH.target):
