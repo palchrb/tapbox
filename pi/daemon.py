@@ -495,12 +495,19 @@ class Orchestrator:
                 self._persist()
                 log(f"{action} -> spotify (active)")
                 return {"routed": "spotify"}
-            # 3) last thing used was Spotify -> resume/skip there
+            # 3) last thing used was Spotify -> resume/skip there — but only
+            # when a track is actually loaded. After a reboot go-librespot
+            # is logged in with an EMPTY session; a playpause into that void
+            # "succeeds" silently and the button feels dead. Fall through to
+            # rule 4 instead: replay the target, which resumes exactly.
             if self.source == "spotify":
                 try:
-                    spotify_command(action)
-                    log(f"{action} -> spotify (last)")
-                    return {"routed": "spotify"}
+                    st = go_status()
+                    if (st.get("track") or {}) and not st.get("stopped"):
+                        spotify_command(action)
+                        log(f"{action} -> spotify (last)")
+                        return {"routed": "spotify"}
+                    log("spotify session is empty — replaying last target")
                 except OSError:
                     pass
             # 4) dead session + remembered target -> bring it back (resumes)
