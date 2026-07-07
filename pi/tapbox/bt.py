@@ -69,6 +69,15 @@ def bt_up():
     btctl("pairable", "on")  # bonding pairing — see module docstring
 
 
+def _hci_crashed():
+    """The crash leaves bluez believing the adapter is fine ('Powered:
+    yes' is stale state), so ask the kernel: the firmware crash has an
+    unmistakable signature in the log."""
+    _c, out = _run(["dmesg"], timeout=10)
+    tail = "\n".join(out.splitlines()[-80:])
+    return "hci0: hardware error" in tail or "Opcode 0x0c03 failed" in tail
+
+
 def controller_ok():
     _c, out = btctl("show", timeout=10)
     return "Powered: yes" in out
@@ -91,6 +100,18 @@ def recover():
     _run(["rfkill", "unblock", "bluetooth"], timeout=10)
     btctl("power", "on")
     ok = controller_ok()
+    if not ok:
+        # stubborn wedge (field log: bluez restart alone leaves the kernel
+        # looping 'hardware error 0x00' every 2s): power-cycle the radio
+        # via rfkill around a second firmware re-attach
+        log("==> Still down — radio power-cycle + second re-attach...")
+        _run(["rfkill", "block", "bluetooth"], timeout=10)
+        time.sleep(2)
+        _run(["systemctl", "restart", "hciuart"], timeout=60)
+        _run(["rfkill", "unblock", "bluetooth"], timeout=10)
+        time.sleep(3)
+        btctl("power", "on")
+        ok = controller_ok()
     log("==> Controller is back." if ok
         else "==> Controller still down — a power cycle may be needed.")
     return ok
@@ -180,6 +201,13 @@ def connect(mac):
             ok = True
             break
         time.sleep(3)
+    if not ok and _hci_crashed():
+        # the connect attempt itself can crash the controller firmware
+        # (A2DP + paging coexistence) — re-attach and try once more
+        if recover():
+            code, out = btctl("connect", mac, timeout=30)
+            log(out.strip())
+            ok = code == 0
     if not ok:
         log("Could not connect. If pairing keeps failing, try interactively:")
         log(f"  bluetoothctl  ->  scan on / pair {mac} / trust {mac} / connect {mac}")

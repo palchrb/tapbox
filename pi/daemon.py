@@ -643,6 +643,15 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code, obj):
+        """Client may hang up while waiting on a long operation (bt pair
+        can take a minute) — a dead socket is not an error worth a
+        journal traceback."""
+        try:
+            self._send_unsafe(code, obj)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_unsafe(self, code, obj):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -859,7 +868,9 @@ class Handler(BaseHTTPRequestHandler):
                 args = ["connect"]
                 if body.get("name"):
                     args.append(str(body["name"]))
+                resume = _bt_quiesce()
                 r = bt_action(args, timeout=120)
+                _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
             elif self.path in ("/bt/connect", "/bt/forget"):
@@ -868,7 +879,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(400, {"error": "valid mac required"})
                     return
                 cmd = "use" if self.path == "/bt/connect" else "forget"
+                resume = _bt_quiesce() if cmd == "use" else False
                 r = bt_action([cmd, mac], timeout=90 if cmd == "use" else 30)
+                if cmd == "use":
+                    _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
             elif self.path == "/stop":
@@ -878,6 +892,36 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # never let one request kill the daemon
             log(f"error on {self.path}: {e!r}")
             self._send(500, {"error": str(e)})
+
+
+def _bt_quiesce():
+    """Connecting/pairing WHILE A2DP streams crashes the Zero 2 W's BT
+    firmware outright (kernel: 'hardware error 0x00' — seen in the field
+    when adding headset #2 mid-play). Silence the radio first; the caller
+    resumes afterwards and the bookmark makes it seamless."""
+    resume = False
+    with ORCH.lock:
+        if ORCH._mpv_alive():
+            resume = True
+            log("bt connect: stopping playback first (firmware safety)")
+            ORCH._stop_child()  # bookmark survives; we resume after
+    try:
+        if spotify_playing():
+            resume = True
+            go("/player/pause")
+    except OSError:
+        pass
+    return resume
+
+
+def _bt_resume(resume):
+    if not resume:
+        return
+    with ORCH.lock:
+        target, reverse = ORCH.target, ORCH.reverse
+        if target and not ORCH._mpv_alive():
+            log("bt connect done — resuming playback on the new output")
+            ORCH._spawn(target, reverse=reverse)
 
 
 def _wifi_boot_reenable():
