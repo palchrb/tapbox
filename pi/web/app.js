@@ -538,21 +538,31 @@ async function loadBt() {
     mac.textContent = d.mac + (d.paired ? " · paired" : "");
     info.append(name, mac);
 
+    const isActive = d.connected && d.mac === bt.configured;
     const use = document.createElement("button");
-    use.textContent = d.connected ? "Connected" : "Connect";
-    use.disabled = d.connected;
+    use.textContent = isActive ? "Active" : "Connect";
+    use.disabled = isActive;
     use.addEventListener("click", () => btAction("/bt/connect", { mac: d.mac },
       `Connecting to ${d.name} …`));
 
+    row.append(info, use);
+    if (d.connected && d.mac !== bt.configured) {
+      // a device that connected on its own — hang up without forgetting
+      const disc = document.createElement("button");
+      disc.textContent = "Disconnect";
+      disc.addEventListener("click", () =>
+        btAction("/bt/disconnect", { mac: d.mac }, "Disconnecting …"));
+      row.append(disc);
+    }
     const forget = document.createElement("button");
     forget.textContent = "Forget";
     forget.className = "danger";
     forget.addEventListener("click", () => {
-      if (confirm(`Forget “${d.name}”?`)) {
+      if (confirm(`Forget “${d.name}”? This removes the pairing.`)) {
         btAction("/bt/forget", { mac: d.mac }, "Forgetting …");
       }
     });
-    row.append(info, use, forget);
+    row.append(forget);
     wrap.appendChild(row);
   }
   $("#btn-pair").disabled = bt.pairing;

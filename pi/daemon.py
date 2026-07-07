@@ -47,7 +47,8 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
                    device in pairing mode (play.sh's validated flow)
   POST /bt/connect {"mac"}  — connect a speaker; pairs first when the mac
                    is new (picked from a scan), routes audio to it
-  POST /bt/forget  {"mac"}  — drop the bond
+  POST /bt/forget  {"mac"}  — drop the bond (permanent)
+  POST /bt/disconnect {"mac"} — hang up without forgetting
 
 The library lives in /etc/tapbox/library.json ON THE BOX — menus must
 render (and cached content must play) with no internet at all. A future
@@ -861,7 +862,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(409 if r is None else 200,
                            r or {"error": "wifi operation already in progress"})
             elif self.path == "/bt/scan":
+                resume = _bt_quiesce()  # discovery makes A2DP stutter badly
                 r = bt_scan()
+                _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
             elif self.path == "/bt/pair":
@@ -873,12 +876,14 @@ class Handler(BaseHTTPRequestHandler):
                 _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
-            elif self.path in ("/bt/connect", "/bt/forget"):
+            elif self.path in ("/bt/connect", "/bt/forget",
+                               "/bt/disconnect"):
                 mac = str(body.get("mac") or "")
                 if not MAC_RE.match(mac):
                     self._send(400, {"error": "valid mac required"})
                     return
-                cmd = "use" if self.path == "/bt/connect" else "forget"
+                cmd = {"/bt/connect": "use", "/bt/forget": "forget",
+                       "/bt/disconnect": "disconnect"}[self.path]
                 resume = _bt_quiesce() if cmd == "use" else False
                 r = bt_action([cmd, mac], timeout=90 if cmd == "use" else 30)
                 if cmd == "use":

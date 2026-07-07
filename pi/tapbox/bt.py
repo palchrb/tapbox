@@ -232,7 +232,22 @@ def connect(mac):
     with open(MAC_FILE, "w") as f:
         f.write(mac + "\n")
     _route_alsa(mac)
+    _disconnect_others(mac)
     return True
+
+
+def _disconnect_others(mac):
+    """One output at a time. Headsets connect back on their own when
+    powered on, so after switching, the old device would sit 'connected'
+    next to the new one while audio follows only the configured device —
+    confusing, and two live A2DP links strain the radio for nothing."""
+    for line in _out(["devices", "Connected"]).splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) >= 2 and parts[0] == "Device" \
+                and parts[1].upper() != mac.upper():
+            log(f"==> Disconnecting {parts[2] if len(parts) > 2 else parts[1]}"
+                f" (one output at a time)")
+            btctl("disconnect", parts[1], timeout=15)
 
 
 def _route_alsa(mac):
@@ -426,10 +441,14 @@ def main():
         return 0
     if cmd == "connect":
         return 0 if pair_auto(args[1] if len(args) > 1 else None) else 1
-    if cmd in ("use", "forget"):
+    if cmd in ("use", "forget", "disconnect"):
         if len(args) < 2 or not MAC_RE.match(args[1]):
             print(f"usage: bt.py {cmd} <MAC>", file=sys.stderr)
             return 1
+        if cmd == "disconnect":
+            code, out = btctl("disconnect", args[1], timeout=15)
+            log(out.strip().splitlines()[-1] if out.strip() else "")
+            return 0 if code == 0 else 1
         fn = connect if cmd == "use" else forget
         return 0 if fn(args[1]) else 1
     if cmd == "ensure":
