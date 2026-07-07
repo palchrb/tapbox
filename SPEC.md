@@ -87,6 +87,36 @@ Explicitly **not** trying to be:
 - **Backlog idea — WiFi auto-off away from known networks (designed 2026-07-06, not built):** a disconnected wpa_supplicant scan-loops constantly (~10-20mA, 5-10% of playback draw); a small `tapbox-wifi` daemon would fix it. Design: always unblock wifi at boot (systemd-rfkill persists blocks across reboots — same gotcha as BT); while associated, do nothing; after 15 min without a known network, `rfkill block wifi`; then probe every 10 min with a tight ~20s window (one scan sweep, check results against known SSIDs, associate only on match — costs ~0.2-0.3mAh per probe ≈ ~1.5mA average, so ~99% of the saving is kept and a parent's hotspot is found within max 10 min). Manual override + opt-in via tapbox-power (`wifi-on/off`, `wifi-auto-on/off`), intervals in an env file. Never triggers during active streaming by construction (trigger condition is "not associated"). Payoff: whole-trip flights/cabin playback of cached/local content without the scan tax; measure the real saving with the battery logger before shipping claims.
 - **Battery life:** validate all marketing numbers with the CSV logger on real hardware (discharge run in progress on the rig).
 
+### v2 architecture direction (decided 2026-07-07): cloud-first ADMIN, local-first PLAYBACK
+
+The split that resolves the box-off editing problem without sacrificing the
+offline story:
+
+- **Cloud service owns the library/settings documents and serves the PWA**
+  (real HTTPS -> installable PWA + service worker with no local-cert circus;
+  one stable URL, no mDNS/Android-.local issues; multi-box and multi-parent
+  accounts; config backup for free). Editing works whenever the *phone* is
+  online — the box syncs later.
+- **The box stays fully autonomous at runtime:** tapboxd, screen UI, cards,
+  buttons, cached content and menus work identically with zero internet
+  (flight/cabin is sacred). The cloud is a sync source for configuration,
+  never a runtime dependency.
+- **Sync transport:** the box keeps an *outbound* WebSocket to the cloud
+  while online (NAT-friendly): library/settings changes push instantly (plus
+  a pull on boot/reconnect), and the same channel can carry remote control +
+  now-playing for away-from-home use.
+- **Honest downsides, accepted:** remote control rides the cloud path
+  (100-300ms latency; home-ISP outage kills PWA control even on the same
+  sofa — physical buttons/cards/screen still work, which is the mitigation);
+  service uptime becomes our problem; privacy positioning requires storing
+  config only (no listening logs, or opt-in) and EU hosting.
+- **Migration is cheap by design:** the tapboxd API is the whole contract —
+  the cloud agent is a thin client of it, and today's PWA code is reused
+  with a different base URL. Nothing built so far is discarded; the current
+  box-served PWA remains the self-builder/offline-LAN path.
+- For the rig today, Tailscale (below) covers personal remote access minus
+  box-off editing.
+
 ### Remote access (decided for the rig, 2026-07-07)
 - **Tailscale is the recommended remote-admin path for self-builders:** the
   PWA binds 0.0.0.0, so with tailscaled up the box is reachable at
