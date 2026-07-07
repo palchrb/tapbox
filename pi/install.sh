@@ -269,6 +269,12 @@ while true; do
       || bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes" \
       || bluetoothctl connect "$mac" >/dev/null 2>&1; then
     delay=20   # connected (or nothing configured): stay responsive
+  elif (( SECONDS < 120 )); then
+    # boot window: the stack (adapter power, bluealsa A2DP endpoint) may
+    # not be ready yet — a failure here means "too early", not "speaker
+    # away", so retry fast instead of backing off
+    bluetoothctl power on >/dev/null 2>&1 || true
+    delay=5
   else
     delay=$(( delay * 2 )); (( delay > 300 )) && delay=300
   fi
@@ -280,7 +286,7 @@ chmod 755 /usr/local/bin/tapbox-bt-reconnect
 write_if_changed /etc/systemd/system/tapbox-bt-reconnect.service <<'EOF' && RECON_CHANGED=1
 [Unit]
 Description=TapBox bluetooth headset auto-reconnect
-After=bluetooth.service
+After=bluetooth.service bluealsa.service bluealsad.service
 Wants=bluetooth.service
 
 [Service]
