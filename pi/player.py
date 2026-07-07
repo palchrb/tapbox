@@ -181,6 +181,17 @@ def play_spotify(target, fresh=False):
                     f" is below the resume threshold — clean start")
                 bm = None
 
+    # go-librespot may have JUST been restarted (an output switch rewrites
+    # asound.conf and bounces the service) — wait for the session before
+    # playing, or the play request races the Spotify login and times out.
+    for _ in range(30):
+        if spotify.status().get("username"):
+            break
+        time.sleep(1)
+    else:
+        log("go-librespot session never came up — check: journalctl -u go-librespot")
+        sys.exit(1)
+
     body = {"uri": uri}
     if bm:
         body["skip_to_uri"] = bm["uri"]
@@ -188,10 +199,21 @@ def play_spotify(target, fresh=False):
         # first 1-2s of the track play audibly from 0:00 while we wait
         # for it to load.
         body["paused"] = True
-    try:
-        spotify.go("/player/play", timeout=10, body=body)
-    except OSError as e:
-        log(f"go-librespot API unreachable ({e}) — check: journalctl -u go-librespot")
+    # Even with the session up, the FIRST request after a restart can be
+    # slow server-side (dealer/audio-key fetch still warming: 'context
+    # deadline exceeded' in go-librespot's log) — retry instead of dying.
+    last_err = None
+    for attempt in range(3):
+        try:
+            spotify.go("/player/play", timeout=15, body=body)
+            last_err = None
+            break
+        except OSError as e:
+            last_err = e
+            log(f"play attempt {attempt + 1} failed ({e}) — retrying in 3s")
+            time.sleep(3)
+    if last_err is not None:
+        log(f"go-librespot API unreachable ({last_err}) — check: journalctl -u go-librespot")
         sys.exit(1)
     log(f"spotify: playing {uri}"
         + (f" (resuming {bm['uri']} at {bm['position'] // 1000}s)" if bm else ""))
