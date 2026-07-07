@@ -966,11 +966,17 @@ def _spotify_bookmarker():
     bookkeep like we do for mpv: while Spotify plays, snapshot the track,
     position and (when the box started it) the context every few seconds.
     play {uri, skip_to_uri} + seek replays it exactly, queue intact."""
+    interval = 5
     while True:
-        time.sleep(5)
+        time.sleep(interval)
         try:
             st = go_status()
             track = st.get("track") or {}
+            # power hygiene: with no session at all there is nothing to
+            # bookkeep — drop to a 30s heartbeat instead of waking the CPU
+            # 12x/min around the clock. A live (even paused) session keeps
+            # the 5s cadence so resume stays accurate.
+            interval = 30 if (not track or st.get("stopped")) else 5
             if not track or st.get("paused") or st.get("stopped"):
                 continue
             if ORCH.source != "mpv" or not ORCH._mpv_alive():

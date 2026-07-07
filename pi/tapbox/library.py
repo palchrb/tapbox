@@ -125,9 +125,23 @@ def _sync_args_for(target, n):
     return None  # spotify (global cache) / local folders (already offline)
 
 
+def _on_battery():
+    from tapbox.sysinfo import pisugar_get  # deferred: avoids an import cycle
+    return pisugar_get("battery_power_plugged") == "false"
+
+
 def _cache_sweeper():
     time.sleep(SYNC_DELAY_S)  # let wifi come up after boot
+    deliberate = False  # True when a library save woke us (sync now)
     while True:
+        if not deliberate and _on_battery():
+            # scheduled sweeps can wait for the charger: downloading new
+            # episodes is exactly the kind of background work that should
+            # not spend battery (or hotspot data) on a trip
+            log("cache sweep skipped — on battery (runs when charging)")
+            deliberate = _sync_wake.wait(SYNC_INTERVAL_S)
+            _sync_wake.clear()
+            continue
         for s in load_library()["sections"]:
             for e in s["entries"]:
                 n = e.get("cache") or 0
@@ -143,7 +157,7 @@ def _cache_sweeper():
                         preexec_fn=lambda: os.nice(19))
                 except (OSError, subprocess.TimeoutExpired) as exc:
                     log(f"cache sweep failed for {e['name']}: {exc!r}")
-        _sync_wake.wait(SYNC_INTERVAL_S)
+        deliberate = _sync_wake.wait(SYNC_INTERVAL_S)
         _sync_wake.clear()
 
 

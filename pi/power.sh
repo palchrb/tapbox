@@ -29,6 +29,10 @@
 set -euo pipefail
 
 WIFI_POWERSAVE=1
+# Tailscale's keepalives (DERP pings, STUN, netmap polls) wake the wifi
+# radio around the clock and defeat its power-save naps. Set to 1 to stop
+# tailscaled in save mode (loses remote ssh until 'normal' or reboot).
+STOP_TAILSCALE=0
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run with sudo: sudo $0 $*" >&2
@@ -115,11 +119,16 @@ case "${1:-}" in
     if [[ $WIFI_POWERSAVE -eq 1 ]]; then
       iw dev wlan0 set power_save on 2>/dev/null || true
     fi
+    if [[ $STOP_TAILSCALE -eq 1 ]]; then
+      systemctl stop tailscaled 2>/dev/null || true
+      echo "tailscaled stopped (STOP_TAILSCALE=1) — no remote ssh until 'normal'"
+    fi
     echo "Power save ON — resulting state:"
     status_report
     ;;
   perf)
     set_cores 1
+    systemctl start tailscaled 2>/dev/null || true
     set_governor ondemand
     set_leds mmc0 1
     vcgencmd display_power 1 >/dev/null 2>&1 || true

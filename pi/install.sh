@@ -270,9 +270,10 @@ delay=20
 while true; do
   mac="$(cat "$MAC_FILE" 2>/dev/null || true)"
   if [[ -z $mac ]] \
-      || bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes" \
-      || bluetoothctl connect "$mac" >/dev/null 2>&1; then
-    delay=20   # connected (or nothing configured): stay responsive
+      || bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
+    delay=60   # steady state: just confirming — no need to fork 3x/min
+  elif bluetoothctl connect "$mac" >/dev/null 2>&1; then
+    delay=20   # just (re)connected: watch a little closer while it settles
   elif (( SECONDS < 120 )); then
     # boot window: the stack (adapter power, bluealsa A2DP endpoint) may
     # not be ready yet — a failure here means "too early", not "speaker
