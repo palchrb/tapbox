@@ -235,10 +235,24 @@ class Orchestrator:
                 with self.lock:
                     self._stop_child()  # bookmark survives (terminated flag)
                 ready = False
-                for _ in range(12):  # give a rebooting speaker ≤60s
+                healed = False
+                for i in range(12):  # give a rebooting speaker ≤60s
                     ready = _audio_ready()
                     if ready:
                         break
+                    # same self-heal as the player's racing guard: crash
+                    # signature in the kernel log -> recover immediately,
+                    # otherwise give a plain speaker dropout 20s first
+                    if not healed and (i >= 4 or _bt._hci_crashed()):
+                        healed = True
+                        log("audio missing — running bluetooth recovery")
+                        try:
+                            subprocess.run(
+                                [sys.executable, _bt.__file__, "ensure"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=240)
+                        except (OSError, subprocess.TimeoutExpired) as e:
+                            log(f"bluetooth recovery failed: {e!r}")
                     time.sleep(5)
                 if not ready:
                     # speaker still gone: don't restart into a void — the
