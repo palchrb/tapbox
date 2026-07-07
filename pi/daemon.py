@@ -146,7 +146,8 @@ from tapbox.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
     _retarget_go_librespot)
 from tapbox.sysinfo import (  # noqa: E402
-    load_settings, shutdown, system_status, update_settings)
+    load_settings, shutdown, system_status, update_settings,
+    _battery_runtime_tracker)
 
 MAC_RE = _bt.MAC_RE
 bt_status = _bt.bt_status
@@ -1120,6 +1121,7 @@ def main():
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
     _wifi_boot_reenable()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
+    threading.Thread(target=_battery_runtime_tracker, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")

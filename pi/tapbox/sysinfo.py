@@ -144,36 +144,47 @@ def _safe_pct(raw):
     return round(v, 1) if -1 <= v <= 200 else None  # nan/inf fail the compare
 
 
-BATT_SINCE_FILE = os.path.join(STATE_DIR, "on-battery-since.json")
+BATT_RUNTIME_FILE = os.path.join(STATE_DIR, "on-battery-runtime.json")
 
 
-def _on_battery_since(plugged):
-    """Wall-clock timestamp of the last charger disconnect, persisted so
-    it survives daemon restarts (and reboots on battery). None while on
-    the charger. Granularity is whoever polls /system — the PWA battery
-    pill every 60s — which is plenty for an hours-scale display."""
+def _battery_runtime():
+    """Accumulated POWERED-ON seconds since the last charge, or None while
+    on the charger / without a PiSugar. The box can be switched off in
+    between — wall-clock would count sleep as usage, so a daemon thread
+    accumulates actual uptime instead (persisted across restarts)."""
     try:
-        with open(BATT_SINCE_FILE) as f:
-            since = json.load(f).get("since")
-    except (OSError, ValueError):
-        since = None
-    if plugged:
-        if since is not None:
-            try:
-                os.remove(BATT_SINCE_FILE)
-            except OSError:
-                pass
+        with open(BATT_RUNTIME_FILE) as f:
+            return max(0, int(json.load(f)["accum"]))
+    except (OSError, ValueError, KeyError, TypeError):
         return None
-    if since is None:
-        since = time.time()
+
+
+def _battery_runtime_tracker():
+    """60s ticks: while unplugged, add the elapsed powered-on time to the
+    persisted counter; back on the charger clears it. Cheap — two tiny
+    queries per minute over the persistent pisugar connection."""
+    last = time.monotonic()
+    while True:
+        time.sleep(60)
         try:
+            now = time.monotonic()
+            delta, last = now - last, now
+            plugged = pisugar_get("battery_power_plugged")
+            if plugged is None:
+                continue  # no pisugar on this box
+            if plugged == "true":
+                try:
+                    os.remove(BATT_RUNTIME_FILE)
+                except OSError:
+                    pass
+                continue
+            accum = (_battery_runtime() or 0) + delta
             os.makedirs(STATE_DIR, exist_ok=True)
-            with open(BATT_SINCE_FILE + ".tmp", "w") as f:
-                json.dump({"since": since}, f)
-            os.replace(BATT_SINCE_FILE + ".tmp", BATT_SINCE_FILE)
-        except OSError:
-            pass
-    return since
+            with open(BATT_RUNTIME_FILE + ".tmp", "w") as f:
+                json.dump({"accum": int(accum)}, f)
+            os.replace(BATT_RUNTIME_FILE + ".tmp", BATT_RUNTIME_FILE)
+        except Exception as e:
+            log(f"battery runtime tracker error: {e!r}")
 
 
 def _dir_size(path):
@@ -213,10 +224,8 @@ def system_status():
         pass
     enabled, ssid, ip = netmgmt.wifi_state()
     on_battery_s = None
-    if batt is not None:  # only meaningful with a PiSugar present
-        since = _on_battery_since(plugged == "true")
-        if since is not None:
-            on_battery_s = max(0, int(time.time() - since))
+    if batt is not None and plugged != "true":
+        on_battery_s = _battery_runtime()
     return {"battery": _safe_pct(batt),
             "battery_v": _safe_volts(volts),
             "on_battery_s": on_battery_s,
