@@ -346,6 +346,9 @@ async function loadSystem() {
   rows.push(["Wi-Fi", sys.wifi.enabled ? (sys.wifi.ssid || "on (not connected)") : "off"]);
   rows.push(["IP", sys.wifi.ip || "–"]);
   if (sys.cpu_temp != null) rows.push(["CPU temp", `${sys.cpu_temp}°C`]);
+  $("#spotify-current").textContent = sys.spotify_user
+    ? `Logged in as ${sys.spotify_user}`
+    : "Not logged in — pick the box under Devices in the Spotify app";
   rows.push(["Box", sys.hostname]);
   const dl = $("#sysinfo");
   dl.textContent = "";
@@ -401,6 +404,17 @@ $("#btn-wifi-reconnect").addEventListener("click", async () => {
   try {
     await api("/system/wifi", { method: "POST", body: { enabled: true } });
     toast("Wi-Fi on — reconnecting…");
+    setTimeout(loadSystem, 4000);
+  } catch (e) { toast(e.message); }
+});
+
+$("#btn-spotify-logout").addEventListener("click", async () => {
+  if (!confirm(
+    "Log the box out of Spotify? Afterwards, pick the box under Devices " +
+    "in the Spotify app with the account you want.")) return;
+  try {
+    await api("/spotify/logout", { method: "POST", body: {} });
+    toast("Logged out — pick the box in the Spotify app", 6000);
     setTimeout(loadSystem, 4000);
   } catch (e) { toast(e.message); }
 });

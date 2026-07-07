@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import re
 import time
 import urllib.request
@@ -38,6 +39,31 @@ def go(path, timeout=5, body=None):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
+
+
+def logout():
+    """Forget the Spotify login so ANOTHER account can take the box:
+    stop go-librespot, delete the persisted zeroconf credentials, start
+    it again — the box reappears as a fresh Spotify Connect device that
+    the new account claims from the Spotify app (same wifi)."""
+    conf_dir = os.path.dirname(os.environ.get("TAPBOX_GO_CONFIG", ""))
+    if not conf_dir or not os.path.isdir(conf_dir):
+        return {"ok": False, "error": "go-librespot config dir not found"}
+    def _ctl(verb):
+        try:
+            subprocess.run(["systemctl", verb, "go-librespot"], timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    _ctl("stop")
+    removed = []
+    for name in ("credentials.json", "state.json"):
+        try:
+            os.remove(os.path.join(conf_dir, name))
+            removed.append(name)
+        except OSError:
+            pass
+    _ctl("start")
+    return {"ok": True, "removed": removed}
 
 
 def status(timeout=5):

@@ -30,6 +30,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /wifi/connect  {"ssid", "password"?} — join a network (nmcli);
                       leaves the setup hotspot first, restores it on failure
   POST /wifi/forget   {"ssid"} — delete the saved profile
+  POST /spotify/logout   forget the Spotify login (drop credentials +
+                         restart go-librespot) — the new account then picks
+                         the box under Devices in the Spotify app
   POST /wifi/hotspot  {"enabled": bool} — the setup hotspot (TapBox-<host>).
                       Also auto-starts on fresh boxes: no saved wifi network
                       and nothing connected. A :80 redirect server + wildcard
@@ -643,7 +646,12 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/settings":
             self._send(200, load_settings())
         elif url.path == "/system":
-            self._send(200, system_status())
+            st = system_status()
+            try:
+                st["spotify_user"] = go_status().get("username")
+            except OSError:
+                st["spotify_user"] = None
+            self._send(200, st)
         elif url.path == "/bt":
             self._send(200, bt_status())
         elif url.path == "/expand":
@@ -763,6 +771,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, set_wifi(body["enabled"]))
             elif self.path == "/system/shutdown":
                 self._send(200, shutdown(bool(body.get("restart"))))
+            elif self.path == "/spotify/logout":
+                try:  # the bookmark belongs to the old account
+                    os.remove(SPOT_BM_FILE)
+                except OSError:
+                    pass
+                r = _spotify.logout()
+                self._send(200 if r.get("ok") else 500, r)
             elif self.path == "/wifi/hotspot":
                 if not isinstance(body.get("enabled"), bool):
                     self._send(400, {"error": "enabled (bool) required"})
