@@ -164,10 +164,22 @@ def play_spotify(target, fresh=False):
             with open(SPOT_BM_FILE) as f:
                 bm = json.load(f)
         except (OSError, ValueError):
+            log("no spotify bookmark on disk — starting from the top")
             bm = None
-        if not (bm and bm.get("context_uri") == uri and bm.get("uri")
-                and (bm.get("position") or 0) > SPOT_RESUME_MIN_MS):
-            bm = None
+        if bm is not None:
+            # say WHY a bookmark is rejected — invaluable when 'it started
+            # over' reports come in from the field
+            if bm.get("context_uri") != uri:
+                log(f"bookmark is for another context "
+                    f"({bm.get('context_uri')!r} != {uri!r}) — clean start")
+                bm = None
+            elif not bm.get("uri"):
+                log("bookmark has no track uri — clean start")
+                bm = None
+            elif (bm.get("position") or 0) <= SPOT_RESUME_MIN_MS:
+                log(f"bookmark position {int((bm.get('position') or 0) / 1000)}s"
+                    f" is below the resume threshold — clean start")
+                bm = None
 
     body = {"uri": uri}
     if bm:
