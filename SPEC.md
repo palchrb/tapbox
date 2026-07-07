@@ -87,6 +87,21 @@ Explicitly **not** trying to be:
 - **Backlog idea — WiFi auto-off away from known networks (designed 2026-07-06, not built):** a disconnected wpa_supplicant scan-loops constantly (~10-20mA, 5-10% of playback draw); a small `tapbox-wifi` daemon would fix it. Design: always unblock wifi at boot (systemd-rfkill persists blocks across reboots — same gotcha as BT); while associated, do nothing; after 15 min without a known network, `rfkill block wifi`; then probe every 10 min with a tight ~20s window (one scan sweep, check results against known SSIDs, associate only on match — costs ~0.2-0.3mAh per probe ≈ ~1.5mA average, so ~99% of the saving is kept and a parent's hotspot is found within max 10 min). Manual override + opt-in via tapbox-power (`wifi-on/off`, `wifi-auto-on/off`), intervals in an env file. Never triggers during active streaming by construction (trigger condition is "not associated"). Payoff: whole-trip flights/cabin playback of cached/local content without the scan tax; measure the real saving with the battery logger before shipping claims.
 - **Battery life:** validate all marketing numbers with the CSV logger on real hardware (discharge run in progress on the rig).
 
+### Remote access (decided for the rig, 2026-07-07)
+- **Tailscale is the recommended remote-admin path for self-builders:** the
+  PWA binds 0.0.0.0, so with tailscaled up the box is reachable at
+  `http://tapbox.<tailnet>.ts.net` from anywhere — authenticated and
+  encrypted, without exposing the deliberately auth-less :3679 to the
+  internet, and regardless of which physical network the box is on
+  (MagicDNS replaces mDNS off-LAN). ~15-20MB RAM, negligible idle power.
+  Install is interactive (`tailscale up`) so it stays out of install.sh.
+- For the product (non-technical parents), the v2 cloud-relay remains the
+  plan; Tailscale's embeddable `tsnet` library is a candidate transport.
+- Note: travel mode / wifi-off obviously suspends remote access; and a
+  powered-off box is unreachable either way (library editing while off is
+  deliberately unsolved for now — the phone-side edit queue rides on the
+  future TLS/installability work).
+
 ## 7. Reference Prior Art
 
 - **Phoniebox / RPi-Jukebox-RFID v3** (MIT) — reference for RFID+GPIO+audio patterns (reader ABC, place-not-swipe, same_id_delay). Cherry-pick, do not fork.
