@@ -252,16 +252,26 @@ write_if_changed /usr/local/bin/tapbox-bt-reconnect <<'EOF' && RECON_CHANGED=1
 # powered on near the box, so turning the headset on is all it takes.
 # Cheap poll loop for the test rig; the product version will be D-Bus
 # event-driven inside the orchestration daemon.
+#
+# Backoff while the speaker stays away: each failed attempt is radio time
+# plus a bluetoothd 'Host is down' journal line, and most speakers connect
+# back to us BY THEMSELVES when powered on (the box stays connectable) —
+# the poll only needs to catch the stragglers.
 MAC_FILE=/etc/tapbox/bt-headset
 rfkill unblock bluetooth 2>/dev/null || true
 bluetoothctl power on >/dev/null 2>&1 || true
 bluetoothctl pairable on >/dev/null 2>&1 || true
+delay=20
 while true; do
   mac="$(cat "$MAC_FILE" 2>/dev/null || true)"
-  if [[ -n $mac ]] && ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
-    bluetoothctl connect "$mac" >/dev/null 2>&1 || true
+  if [[ -z $mac ]] \
+      || bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes" \
+      || bluetoothctl connect "$mac" >/dev/null 2>&1; then
+    delay=20   # connected (or nothing configured): stay responsive
+  else
+    delay=$(( delay * 2 )); (( delay > 300 )) && delay=300
   fi
-  sleep 20
+  sleep "$delay"
 done
 EOF
 chmod 755 /usr/local/bin/tapbox-bt-reconnect
