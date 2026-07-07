@@ -735,7 +735,8 @@ def _flag_was_playing():
                 # for exactly this moment.
                 try:
                     with open(NOW_FILE) as f:
-                        playing = json.load(f).get("paused") is False
+                        # missing key (file from an older player) = playing
+                        playing = not json.load(f).get("paused", False)
                 except (OSError, ValueError):
                     playing = True  # child alive, no info: assume playing
         if not playing:

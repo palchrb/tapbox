@@ -271,7 +271,12 @@ def main():
          f"--volume={volume}",
          f"--audio-device=alsa/{output_pcm()}",
          f"--input-ipc-server={sock}"] + urls)
-    signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
+    terminated = []  # set when WE are told to stop (reboot/daemon restart)
+
+    def _stop(*_args):
+        terminated.append(True)
+        proc.terminate()
+    signal.signal(signal.SIGTERM, _stop)
 
     # Background episode caching. A library entry's cache setting (--cache N,
     # passed by tapboxd) decides: 0 = never sync, N = keep the newest N.
@@ -362,7 +367,11 @@ def main():
             pass
         time.sleep(POLL_S)
 
-    if proc.returncode == 0:
+    # Clear the bookmark ONLY when the queue truly finished by itself.
+    # mpv exits 0 on a clean SIGTERM quit too (reboot, daemon restart,
+    # /stop) — clearing there wiped the resume position, so "restart the
+    # box" looked like "the audiobook is over".
+    if proc.returncode == 0 and not terminated:
         clear_state(key)  # whole queue finished — next tap starts fresh
     sys.exit(proc.returncode or 0)
 
