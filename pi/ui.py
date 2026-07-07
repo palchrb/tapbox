@@ -8,8 +8,9 @@ Views:  Home (sections) -> Entries -> Episodes -> Now Playing
 
 Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
   menus:        A=select  B=back   X=up      Y=down
-  now playing:  A: 1x=play/pause  2x=next  hold=previous
-                B=back  X=vol+  Y=vol-
+  now playing:  A: press=play/pause, hold=back to menu
+                X: volume mode (then B=down, Y=up; closes after 3s)
+                B=previous  Y=next  (instant single presses)
 
 The battery indicator is drawn in the top-right corner of every view.
 The screen blanks after settings.screen_timeout_s (0 = never; always on
@@ -18,8 +19,8 @@ while charging); the waking button press is swallowed.
 Dev mode (no HAT needed):
   TAPBOX_UI_PNG=/tmp/frame.png   render frames to a PNG instead of SPI
   TAPBOX_UI_INPUT=/tmp/ui-fifo   read button events from a fifo: one char
-                                 per event: a/b/x/y = press, d = double-A,
-                                 l = long-A, s = settings
+                                 per event: a/b/x/y = press, l = long-A,
+                                 s = settings
 """
 
 import os
@@ -116,8 +117,8 @@ def make_display():
 # --- input backends ---------------------------------------------------------------
 
 class FifoInput:
-    """Dev input: one char per event on a fifo (a/b/x/y press, d=double-A,
-    l=long-A, s=settings)."""
+    """Dev input: one char per event on a fifo (a/b/x/y press, l=long-A,
+    s=settings)."""
 
     def __init__(self, path):
         if not os.path.exists(path):
@@ -134,8 +135,6 @@ class FifoInput:
         for ch in os.read(self.fd, 64).decode(errors="ignore"):
             if ch in "abxy":
                 events.append(ch)
-            elif ch == "d":
-                events.append("a_double")
             elif ch == "l":
                 events.append("a_long")
             elif ch == "s":
@@ -145,13 +144,14 @@ class FifoInput:
 
 class GpioInput:
     """Pirate Audio buttons via gpiozero. Hold A+B ~2s -> settings.
-    In gesture_mode (the now-playing view) the A button resolves gestures:
-    single press = 'a', double press = 'a_double', hold = 'a_long'."""
+    In gesture_mode (the now-playing view) the A button resolves
+    short-vs-hold: release before LONG_S -> 'a' (fires instantly on
+    release), held LONG_S -> 'a_long' (fires while still held). All
+    other buttons are instant single presses."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
     HOLD_S = 2.0      # A+B settings combo
-    LONG_S = 0.8      # A held this long = previous track
-    DOUBLE_S = 0.35   # second A press within this window = next track
+    LONG_S = 0.8      # A held this long = back to menu
 
     def __init__(self):
         from gpiozero import Button
@@ -162,7 +162,6 @@ class GpioInput:
         self.combo_since = None
         self._a_down = None      # press timestamp while A is held
         self._a_long_sent = False
-        self._a_pending = None   # release timestamp awaiting the double window
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
         self.buttons["a"].when_released = self._a_released
@@ -172,13 +171,8 @@ class GpioInput:
         if name != "a" or not self.gesture_mode:
             self.queue.append(name)
             return
-        now = time.monotonic()
-        if self._a_pending is not None and now - self._a_pending <= self.DOUBLE_S:
-            self._a_pending = None
-            self.queue.append("a_double")
-        else:
-            self._a_down = now
-            self._a_long_sent = False
+        self._a_down = time.monotonic()
+        self._a_long_sent = False
 
     def _a_released(self):
         if not self.gesture_mode or self._a_down is None:
@@ -186,7 +180,7 @@ class GpioInput:
         held = time.monotonic() - self._a_down
         self._a_down = None
         if not self._a_long_sent and held < self.LONG_S:
-            self._a_pending = time.monotonic()  # single, unless doubled soon
+            self.queue.append("a")  # short press — fires right on release
 
     def poll(self, timeout):
         time.sleep(timeout)
@@ -197,11 +191,6 @@ class GpioInput:
                 and now - self._a_down >= self.LONG_S):
             self._a_long_sent = True
             self.queue.append("a_long")
-        # a pending single resolves once the double window has passed
-        if (self._a_pending is not None
-                and now - self._a_pending > self.DOUBLE_S):
-            self._a_pending = None
-            self.queue.append("a")
         a, b = self.buttons["a"].is_pressed, self.buttons["b"].is_pressed
         if a and b:
             if self.combo_since is None:
@@ -209,7 +198,7 @@ class GpioInput:
             elif time.monotonic() - self.combo_since >= self.HOLD_S:
                 self.combo_since = None
                 self.queue.clear()  # eat the presses that formed the combo
-                self._a_down = self._a_pending = None
+                self._a_down = None
                 return ["settings"]
         else:
             self.combo_since = None
@@ -306,6 +295,7 @@ class App:
                          "volume_cap": 100}
         self.volume_flash = 0.0     # show volume overlay until this time
         self.volume_shown = None
+        self.vol_mode_until = 0.0   # while set: B/Y adjust volume (X opened it)
         self.last_status = 0.0
         self.last_system = 0.0
         self.last_input = time.monotonic()
@@ -379,8 +369,8 @@ class App:
         if self.view == "now":
             self.handle_now(ev)
             return
-        if ev in ("a_double", "a_long"):
-            ev = "a"  # gestures only mean something while playing
+        if ev == "a_long":
+            ev = "a"  # the hold gesture only means something while playing
         items = self.current_items()
         if ev == "x":
             self.sel = (self.sel - 1) % max(1, len(items))
@@ -392,24 +382,34 @@ class App:
             self.select()
 
     def handle_now(self, ev):
+        in_vol = time.monotonic() < self.vol_mode_until
         try:
             if ev == "a":
                 api_post("/playpause")
                 self.last_status = 0  # poll immediately
-            elif ev == "a_double":
-                api_post("/next")
-                self.last_status = 0
             elif ev == "a_long":
-                api_post("/prev")
-                self.last_status = 0
-            elif ev == "b":
                 self.back()
-            elif ev in ("x", "y"):
-                r = api_post("/volume", {"delta": 5 if ev == "x" else -5})
-                self.volume_shown = r.get("volume")
-                self.volume_flash = time.monotonic() + 1.5
+            elif ev == "x":
+                self._volume_mode(delta=None)  # open/extend the volume card
+            elif ev in ("b", "y"):
+                if in_vol:
+                    self._volume_mode(delta=-5 if ev == "b" else 5)
+                else:
+                    api_post("/prev" if ev == "b" else "/next")
+                    self.last_status = 0
         except OSError as e:
             log(f"control failed: {e}")
+
+    def _volume_mode(self, delta):
+        """The volume card: X opens it, then B/Y adjust while it shows."""
+        try:
+            r = api_get("/volume") if delta is None                 else api_post("/volume", {"delta": delta})
+        except OSError as e:
+            log(f"volume failed: {e}")
+            return
+        self.volume_shown = r.get("volume")
+        self.vol_mode_until = time.monotonic() + 3.0
+        self.volume_flash = self.vol_mode_until
 
     def current_items(self):
         if self.view == "home":
@@ -668,10 +668,17 @@ class App:
         else:
             d.polygon([(W // 2 - 6, cy - 8), (W // 2 - 6, cy + 8),
                        (W // 2 + 8, cy)], fill=FG)
-        if time.monotonic() < self.volume_flash and self.volume_shown is not None:
-            d.rounded_rectangle([60, 90, 180, 130], radius=8, fill=(30, 30, 45))
-            d.text((W // 2, 100), f"Volume {self.volume_shown}", font=F_MED,
+        # volume-button hint: a small speaker by the X button (top right,
+        # below the battery pill)
+        d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
+                   (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
+        if time.monotonic() < self.volume_flash:
+            d.rounded_rectangle([50, 84, 190, 136], radius=8, fill=(30, 30, 45))
+            shown = "–" if self.volume_shown is None else self.volume_shown
+            d.text((W // 2, 92), f"Volume {shown}", font=F_MED,
                    fill=HILITE, anchor="ma")
+            d.text((60, 116), "B  -", font=F_SMALL, fill=DIM)
+            d.text((W - 60, 116), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
 
     # -- main loop -------------------------------------------------------------------
 
