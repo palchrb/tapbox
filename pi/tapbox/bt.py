@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Bluetooth speaker management — play.sh's hard-won BlueZ workarounds,
-ported verbatim (step 1 of the bt refactor; step 2 will swap the
-bluetoothctl text-parsing internals for the BlueZ D-Bus API).
+"""Bluetooth speaker management — play.sh's hard-won BlueZ workarounds.
+
+Step 2 of the bt refactor (PLAN-bt-dbus.md): all transport (which tool
+or bus answers a question) lives in tapbox/btbus.py behind a narrow
+primitive surface with cli|dbus backends. This module owns the FLOW:
+pairing retries, stale-key handling, crash recovery, one-output policy,
+MAC_FILE/ASOUND routing — in exactly one copy, backend-agnostic.
 
 The workarounds this preserves, all learned on real hardware:
 - rfkill soft-block persists across reboots on fresh installs -> unblock
 - without `pairable on`, BlueZ does a NON-BONDING pairing (new_link_key
   with store_hint 0): "Pairing successful" but the key is thrown away,
   so the bond is gone after a power cycle
-- `bluetoothctl info` can intermittently return nothing (D-Bus hiccup)
+- device info can intermittently come back empty (D-Bus hiccup)
   -> retry before concluding the device is unpaired
 - pair failures are classified: AlreadyExists = fine, continue;
   AuthenticationFailed = stale key on the device, and ONLY then is it
@@ -26,6 +30,7 @@ CLI (used by play.sh and tapboxd's /bt endpoints):
   bt.py ensure          connect the remembered device, else auto-pair
 """
 
+import fcntl
 import os
 import re
 import subprocess
@@ -33,40 +38,53 @@ import sys
 import threading
 import time
 
+# The tapbox package sits next to this script in the repo, or under
+# /usr/local/lib/tapbox-py when installed (this file doubles as a CLI).
+_here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_here, "/usr/local/lib/tapbox-py"):
+    if os.path.isdir(os.path.join(_p, "tapbox")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        break
+from tapbox import btbus  # noqa: E402
+from tapbox.btbus import _run, log  # noqa: E402 — shared helpers
+
 MAC_FILE = os.environ.get("TAPBOX_BT_FILE", "/etc/tapbox/bt-headset")
 ASOUND = os.environ.get("TAPBOX_ASOUND", "/etc/asound.conf")
 SCAN_SECS = int(os.environ.get("TAPBOX_SCAN_SECS", "20"))
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
-_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# One radio-touching operation across ALL processes: BlueZ serializes per
+# device only — it will happily start an A2DP connect while another
+# process is mid-pair, which is the documented firmware crasher on the
+# Zero 2 W. flock auto-releases on process death (no stale-lock cleanup).
+LOCK_FILE = os.environ.get("TAPBOX_BT_LOCKFILE") or (
+    "/run/tapbox/bt.lock" if os.access("/run", os.W_OK)
+    else "/tmp/tapbox-bt.lock")
 
 
-def log(msg):
-    print(msg, flush=True)
-
-
-def _run(args, timeout=30):
+def acquire_process_lock(blocking=True):
+    """Returns the open lock file (keep the reference!) or None."""
     try:
-        r = subprocess.run(args, capture_output=True, text=True,
-                           timeout=timeout)
-        return r.returncode, _ANSI.sub("", r.stdout + r.stderr)
-    except subprocess.TimeoutExpired:
-        return 1, "(timed out)"
-    except FileNotFoundError as e:
-        return 127, str(e)
-
-
-def btctl(*args, timeout=30):
-    return _run(["bluetoothctl", *args], timeout=timeout)
+        os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+        f = open(LOCK_FILE, "w")
+        fcntl.flock(f, fcntl.LOCK_EX if blocking else
+                    fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        return None
 
 
 def bt_up():
     """Radio can be rfkill-blocked (persists across reboots on a fresh
-    install), which makes every scan come up empty."""
+    install), which makes every scan come up empty. rfkill and the crash
+    check run BEFORE any bus traffic — bluez can't answer while the
+    controller is blocked or the firmware is down."""
     _run(["rfkill", "unblock", "bluetooth"], timeout=10)
-    btctl("power", "on")
+    btbus.adapter_power_on()
     if not controller_ok():
         recover()
-    btctl("pairable", "on")  # bonding pairing — see module docstring
+    btbus.adapter_pairable_on()  # bonding pairing — see module docstring
 
 
 def _hci_up():
@@ -95,8 +113,7 @@ def _hci_crashed():
 
 
 def controller_ok():
-    _c, out = btctl("show", timeout=10)
-    return "Powered: yes" in out
+    return btbus.adapter_powered()
 
 
 _SERDEV_DRIVERS = "/sys/bus/serdev/drivers"
@@ -153,7 +170,7 @@ def recover():
         _run(["systemctl", "try-restart", unit], timeout=30)
     time.sleep(3)
     _run(["rfkill", "unblock", "bluetooth"], timeout=10)
-    btctl("power", "on")
+    btbus.adapter_power_on()
     ok = controller_ok()
     if not ok:
         # stubborn wedge (field log: bluez restart alone leaves the kernel
@@ -165,7 +182,7 @@ def recover():
         _reattach_firmware()
         _run(["rfkill", "unblock", "bluetooth"], timeout=10)
         time.sleep(3)
-        btctl("power", "on")
+        btbus.adapter_power_on()
         ok = controller_ok()
     log("==> Controller is back." if ok
         else "==> Controller still down — a power cycle may be needed.")
@@ -173,24 +190,14 @@ def recover():
 
 
 def discover(scan_secs=None):
-    """Scan and return [{mac, name, audio}] for every device actually seen.
-    'audio': False just means "could not confirm audio" — RSSI/UUID info is
-    unreliable for unpaired devices."""
+    """Scan and return [{mac, name, audio, rssi}] for devices actually
+    seen. 'audio': False just means "could not confirm audio" — UUID info
+    is unreliable for unpaired devices. rssi (dbus backend only) is for
+    sorting/display, never for pairing decisions."""
     bt_up()
     secs = scan_secs or SCAN_SECS
     log(f"Scanning {secs}s — put the speaker/headset in pairing mode now...")
-    _c, out = btctl("--timeout", str(secs), "scan", "on", timeout=secs + 15)
-    # Every device seen produces "[NEW] Device MAC ..." or "[CHG] Device ..."
-    macs = sorted({m.group(1).upper() for m in re.finditer(
-        r"Device ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})", out)})
-    found = []
-    for mac in macs:
-        _c, info = btctl("info", mac, timeout=10)
-        m = re.search(r"^\s*Name: (.+)$", info, re.M)
-        name = m.group(1).strip() if m else "(no name)"
-        audio = bool(re.search(r"Icon: audio|Audio Sink|0000110b", info, re.I))
-        found.append({"mac": mac, "name": name, "audio": audio})
-    return found
+    return btbus.discover(secs)
 
 
 def _print_devices(devices):
@@ -198,15 +205,15 @@ def _print_devices(devices):
         log(f"  {d['mac']}  {d['name']}" + ("   [audio]" if d["audio"] else ""))
 
 
-def _info_retry(mac):
-    """bluetoothctl info can intermittently return nothing (D-Bus hiccup) —
+def _paired_after_retry(mac):
+    """Device info can intermittently come back empty (D-Bus hiccup) —
     retry before concluding the device is unpaired."""
     for _ in range(3):
-        _c, info = btctl("info", mac, timeout=10)
-        if info.strip():
-            return info
+        info = btbus.device_info(mac)
+        if info["present"]:
+            return info["paired"]
         time.sleep(1)
-    return ""
+    return False
 
 
 def connect(mac):
@@ -217,56 +224,53 @@ def connect(mac):
         # each hang toward their timeout — this is the recovery latency
         recover()
     bt_up()
-    info = _info_retry(mac)
 
-    if "Paired: yes" not in info:
+    if not _paired_after_retry(mac):
         # Unknown/unpaired device: BlueZ must discover it before pairing works
         log(f"==> {mac} is not paired — scanning for it (pairing mode helps)...")
-        btctl("--timeout", "12", "scan", "on", timeout=27)
-        code, pair_out = btctl("pair", mac, timeout=45)
+        btbus.populate_cache(12)
+        verdict, pair_out = btbus.pair(mac)
         log(pair_out.strip())
-        if code != 0:
-            if re.search("AlreadyExists", pair_out, re.I):
-                # The bond exists after all (the info check lied) — continue
-                log("==> Already paired — continuing.")
-            elif re.search("AuthenticationFailed|AuthenticationCanceled",
-                           pair_out, re.I):
-                # Auth failure = the device holds a stale key. ONLY here is
-                # it right to clear our bond and pair fresh.
-                log("==> Stale key on the device — clearing bond and retrying once...")
-                btctl("remove", mac, timeout=15)
-                time.sleep(2)
-                btctl("--timeout", "10", "scan", "on", timeout=25)
-                code2, out2 = btctl("pair", mac, timeout=45)
-                log(out2.strip())
-                if code2 != 0:
-                    return False
-            elif re.search("not available", pair_out, re.I):
-                log("Device not seen during scan. Is it powered on, close to "
-                    "the Pi, and in pairing mode? Then retry the pairing.")
+        if verdict == btbus.PAIR_ALREADY:
+            # The bond exists after all (the info check lied) — continue
+            log("==> Already paired — continuing.")
+        elif verdict == btbus.PAIR_AUTH_FAILED:
+            # Auth failure = the device holds a stale key. ONLY here is
+            # it right to clear our bond and pair fresh.
+            log("==> Stale key on the device — clearing bond and retrying once...")
+            btbus.remove_device(mac)
+            time.sleep(2)
+            btbus.populate_cache(10)
+            verdict2, out2 = btbus.pair(mac)
+            log(out2.strip())
+            if verdict2 not in (btbus.PAIR_OK, btbus.PAIR_ALREADY):
                 return False
-            else:
-                return False
-        btctl("trust", mac, timeout=15)
+        elif verdict == btbus.PAIR_NOT_AVAILABLE:
+            log("Device not seen during scan. Is it powered on, close to "
+                "the Pi, and in pairing mode? Then retry the pairing.")
+            return False
+        elif verdict != btbus.PAIR_OK:
+            return False
+        # trust on every successful path — incl. AlreadyExists, where the
+        # old code skipped it (speaker-initiated reconnects need Trusted)
+        btbus.trust(mac)
 
     # Always request a profile connect: right after pairing the device shows
     # "Connected: yes" from the pairing link itself, but A2DP is not up yet.
     log(f"==> Connecting (A2DP) to {mac}...")
     ok = False
     for _ in range(3):
-        code, out = btctl("connect", mac, timeout=30)
+        ok, out = btbus.connect_device(mac)
         log(out.strip())
-        if code == 0:
-            ok = True
+        if ok:
             break
         time.sleep(3)
     if not ok and _hci_crashed():
         # the connect attempt itself can crash the controller firmware
         # (A2DP + paging coexistence) — re-attach and try once more
         if recover():
-            code, out = btctl("connect", mac, timeout=30)
+            ok, out = btbus.connect_device(mac)
             log(out.strip())
-            ok = code == 0
     if not ok:
         log("Could not connect. If pairing keeps failing, try interactively:")
         log(f"  bluetoothctl  ->  scan on / pair {mac} / trust {mac} / connect {mac}")
@@ -276,8 +280,7 @@ def connect(mac):
     log("==> Waiting for audio transport...")
     ready = False
     for _ in range(15):
-        _c, pcm = _run(["bluealsa-aplay", "-L"], timeout=10)
-        if mac.lower() in pcm.lower():
+        if btbus.a2dp_pcm_present(mac):
             ready = True
             break
         time.sleep(1)
@@ -300,13 +303,10 @@ def _disconnect_others(mac):
     powered on, so after switching, the old device would sit 'connected'
     next to the new one while audio follows only the configured device —
     confusing, and two live A2DP links strain the radio for nothing."""
-    for line in _out(["devices", "Connected"]).splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) >= 2 and parts[0] == "Device" \
-                and parts[1].upper() != mac.upper():
-            log(f"==> Disconnecting {parts[2] if len(parts) > 2 else parts[1]}"
-                f" (one output at a time)")
-            btctl("disconnect", parts[1], timeout=15)
+    for d in btbus.connected_devices():
+        if d["mac"].upper() != mac.upper():
+            log(f"==> Disconnecting {d['name']} (one output at a time)")
+            btbus.disconnect_device(d["mac"])
 
 
 def _route_alsa(mac):
@@ -340,7 +340,9 @@ pcm.tapbox_local {{
 
 
 def pair_auto(name_filter=None):
-    """Find a device automatically (optionally filtered by name), connect."""
+    """Find a device automatically (optionally filtered by name), connect.
+    Safety rule: auto-pair only when there is EXACTLY ONE candidate —
+    never pick by signal strength (a neighbour's speaker can be closer)."""
     seen = discover()
     if not seen:
         log("No bluetooth devices seen at all. Check that the device is in "
@@ -372,9 +374,9 @@ def pair_auto(name_filter=None):
 
 def forget(mac):
     bt_up()  # a wedged controller made remove fail silently
-    btctl("disconnect", mac, timeout=15)
-    code, out = btctl("remove", mac, timeout=15)
-    if code != 0 and "not available" not in out.lower():
+    btbus.disconnect_device(mac)
+    verdict, out = btbus.remove_device(mac)
+    if verdict == btbus.REMOVE_ERROR:
         tail = out.strip().splitlines()[-1] if out.strip() else "unknown error"
         log(f"Could not remove {mac}: {tail}")
         return False
@@ -398,17 +400,9 @@ def ensure():
     return connect(mac) if mac else pair_auto()
 
 
-
-
 # --- daemon-facing API (tapboxd's /bt endpoints call these) ----------------------
 
 BT_LOCK = threading.Lock()  # one pairing/connect operation at a time
-
-
-def _out(args, timeout=10):
-    """bluetoothctl stdout (stripped), '' on any failure."""
-    _code, out = btctl(*args, timeout=timeout)
-    return out
 
 
 def bt_cli():
@@ -428,18 +422,12 @@ def bt_status():
     except OSError:
         pass
     devices = {}
-    out = _out(["devices", "Paired"])
-    if "Invalid" in out or "Unknown" in out:
-        out = _out(["paired-devices"])  # older bluez
-    for line in out.splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) == 3 and parts[0] == "Device":
-            devices[parts[1]] = {"mac": parts[1], "name": parts[2],
-                                 "paired": True, "connected": False}
-    for line in _out(["devices", "Connected"]).splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) >= 2 and parts[0] == "Device" and parts[1] in devices:
-            devices[parts[1]]["connected"] = True
+    for d in btbus.paired_devices():
+        devices[d["mac"]] = {"mac": d["mac"], "name": d["name"],
+                             "paired": True, "connected": False}
+    for d in btbus.connected_devices():
+        if d["mac"] in devices:
+            devices[d["mac"]]["connected"] = True
     return {"configured": configured, "pairing": BT_LOCK.locked(),
             "devices": sorted(devices.values(),
                               key=lambda d: d["name"].lower())}
@@ -486,9 +474,15 @@ def bt_scan():
         BT_LOCK.release()
 
 
+# commands that touch the radio hold the cross-process lock
+_RADIO_CMDS = {"connect", "use", "forget", "disconnect", "ensure",
+               "recover", "scan", "scan-raw"}
+
+
 def main():
     args = sys.argv[1:]
     cmd = args[0] if args else ""
+    lock = acquire_process_lock() if cmd in _RADIO_CMDS else None  # noqa: F841
     if cmd == "scan":
         devices = discover()
         log("Devices seen during scan:")
@@ -505,9 +499,9 @@ def main():
             print(f"usage: bt.py {cmd} <MAC>", file=sys.stderr)
             return 1
         if cmd == "disconnect":
-            code, out = btctl("disconnect", args[1], timeout=15)
+            ok, out = btbus.disconnect_device(args[1])
             log(out.strip().splitlines()[-1] if out.strip() else "")
-            return 0 if code == 0 else 1
+            return 0 if ok else 1
         fn = connect if cmd == "use" else forget
         return 0 if fn(args[1]) else 1
     if cmd == "ensure":

@@ -96,16 +96,11 @@ def audio_ready():
     drop out and reconnect; nobody should play into a void."""
     if current_output()["output"] == "local":
         return _i2s_card_present()
-    from tapbox import bt as _bt
+    from tapbox import bt as _bt, btbus
     try:
         mac = open(_bt.MAC_FILE).read().strip()
     except OSError:
         return True  # no speaker configured — nothing to wait for
     if not mac:
         return True
-    try:
-        r = subprocess.run(["bluealsa-aplay", "-L"], capture_output=True,
-                           text=True, timeout=10)
-        return mac.lower() in r.stdout.lower()
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    return btbus.a2dp_pcm_present(mac)
