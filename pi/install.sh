@@ -409,6 +409,8 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
+# RFID daemon service (PN532). Installed but NOT enabled — enable it when
+# the reader is wired:  sudo systemctl enable --now tapbox-rfid
 write_if_changed /etc/systemd/system/tapbox-rfid.service <<'EOF' && RFID_CHANGED=1
 [Unit]
 Description=TapBox RFID daemon
@@ -452,10 +454,22 @@ fi
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
-  tapbox-rfid.service tapbox-buttons.service tapbox-daemon.service
+  tapbox-buttons.service tapbox-daemon.service
+# One-time migration: earlier installs enabled tapbox-rfid before the PN532
+# existed. Switch it to the same opt-in contract as tapbox-ui — but only
+# once, so an enable after wiring the reader sticks across installs.
+if [[ ! -f /var/lib/tapbox/.rfid-opt-in ]]; then
+  mkdir -p /var/lib/tapbox && touch /var/lib/tapbox/.rfid-opt-in
+  if systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null; then
+    systemctl disable --now tapbox-rfid.service
+    echo "    tapbox-rfid disabled (no reader yet) — enable when the PN532 is wired:"
+    echo "      sudo systemctl enable --now tapbox-rfid"
+  fi
+fi
 [[ $GO_CHANGED -eq 1 || ${GO_RESTART_NEEDED:-0} -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
-[[ $RFID_CHANGED  -eq 1 ]] && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
+[[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null \
+  && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
 [[ $DAEMON_CHANGED -eq 1 ]] && { echo "    orchestration daemon changed — restarting"; systemctl restart tapbox-daemon.service; }
 
