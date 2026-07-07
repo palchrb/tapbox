@@ -33,6 +33,7 @@ SETTING_SPECS = {
     "idle_shutdown_min": (30, 0, 240),
     "volume_cap": (100, 30, 100),
     "spotify_cache_gb": (20, 1, 100),
+    "resume_on_boot": (1, 0, 1),
 }
 
 

@@ -66,6 +66,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import signal
 import re
 import socket
 import subprocess
@@ -699,6 +700,83 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
 
+def _audio_ready():
+    """Is the active output able to make sound yet? BT speakers reconnect
+    a little while after boot; don't start playback into a void."""
+    if current_output()["output"] == "local":
+        return _i2s_card_present()
+    try:
+        mac = open(_bt.MAC_FILE).read().strip()
+    except OSError:
+        return True  # no speaker configured — nothing to wait for
+    if not mac:
+        return True
+    try:
+        r = subprocess.run(["bluealsa-aplay", "-L"], capture_output=True,
+                           text=True, timeout=10)
+        return mac.lower() in r.stdout.lower()
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _flag_was_playing():
+    """At shutdown (SIGTERM from systemd), record whether something was
+    audibly playing — boot resume only continues in that case, so a box
+    that was OFF/paused never surprises anyone by blasting on power-on."""
+    try:
+        playing = False
+        if ORCH.child is not None and ORCH.child.poll() is None:
+            playing = mpv_get("pause") is False
+        if not playing:
+            playing = spotify_playing()
+        with open(LAST_FILE) as f:
+            last = json.load(f)
+        last["was_playing"] = bool(playing)
+        with open(LAST_FILE + ".tmp", "w") as f:
+            json.dump(last, f)
+        os.replace(LAST_FILE + ".tmp", LAST_FILE)
+    except Exception:
+        pass
+
+
+def _on_term(*_args):
+    _flag_was_playing()
+    os._exit(0)
+
+
+def _boot_resume():
+    """Power on -> the story continues where it stopped (setting-gated).
+    mpv content resumes at the exact second via the bookmark; a Spotify
+    context restarts from its beginning (positional resume needs the Web
+    API context — documented limitation)."""
+    if not load_settings().get("resume_on_boot"):
+        return
+    try:
+        with open(LAST_FILE) as f:
+            last = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not last.get("was_playing") or not last.get("target"):
+        return
+    last["was_playing"] = False  # one attempt per shutdown
+    try:
+        with open(LAST_FILE + ".tmp", "w") as f:
+            json.dump(last, f)
+        os.replace(LAST_FILE + ".tmp", LAST_FILE)
+    except OSError:
+        return
+    target = last["target"]
+    log(f"boot resume: waiting for the audio path, then continuing {target}")
+    for _ in range(45):  # up to ~90s for the BT speaker to reconnect
+        if _audio_ready():
+            break
+        time.sleep(2)
+    else:
+        log("boot resume: audio path never came up — press play to resume")
+        return
+    ORCH.play(target, reverse=bool(last.get("reverse")))
+
+
 class PortalHandler(BaseHTTPRequestHandler):
     """Port-80 helper: redirects everything to the PWA. On the setup
     hotspot, wildcard DNS (dnsmasq-shared.d) sends the phone's captive
@@ -730,6 +808,8 @@ def _portal_server():
 
 
 def main():
+    signal.signal(signal.SIGTERM, _on_term)
+    threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
