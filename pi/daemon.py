@@ -808,7 +808,10 @@ def _portal_server():
 
 
 def main():
-    signal.signal(signal.SIGTERM, _on_term)
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+    except ValueError:
+        pass  # not the main thread (tests run main() in a thread)
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
