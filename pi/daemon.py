@@ -133,7 +133,8 @@ from tapbox.library import (  # noqa: E402
     _natural_order, _sync_wake)
 from tapbox.netmgmt import (  # noqa: E402
     HOTSPOT_PSK, HOTSPOT_SSID, hotspot_active, set_wifi, start_hotspot,
-    stop_hotspot, wifi_connect, wifi_forget, wifi_scan, _wifi_watchdog)
+    stop_hotspot, wifi_connect, wifi_forget, wifi_scan, wifi_state,
+    _wifi_watchdog)
 from tapbox.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, current_output, _i2s_card_present,
     _retarget_go_librespot)
@@ -818,6 +819,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
 
+def _wifi_boot_reenable():
+    """'Wifi off' in the PWA rfkill-blocks the radio, and systemd-rfkill
+    restores that block across reboots — a headless box would stay dark
+    and unreachable forever. Make the switch session-only: a power cycle
+    always brings wifi (and with it the PWA) back."""
+    try:
+        enabled, _ssid, _ip = wifi_state()
+        if not enabled:
+            log("wifi was left off — re-enabling on startup")
+            set_wifi(True)
+    except Exception as e:
+        log(f"wifi boot re-enable failed: {e!r}")
+
+
 def _spotify_bookmarker():
     """Spotify's cloud remembers positions for ITS clients only — so we
     bookkeep like we do for mpv: while Spotify plays, snapshot the track,
@@ -996,6 +1011,7 @@ def main():
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
+    _wifi_boot_reenable()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
