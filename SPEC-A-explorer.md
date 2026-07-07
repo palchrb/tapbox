@@ -87,19 +87,23 @@ v1 — per-track browsing inside Spotify collections is a later addition).
 
 ## 3. Controls (4 buttons: A/B/X/Y on BCM 5, 6, 16, 24)
 
-| Context | X (upper right) | Y (lower right) | A (upper left) | B (lower left) |
+| Context | A (upper left) | X (upper right) | B (lower left) | Y (lower right) |
 |---|---|---|---|---|
-| Menu | up | down | select | back |
-| Now playing | volume + | volume − | 1x play/pause · 2x next · hold previous | back to menu |
+| Menu | select | up | back | down |
+| Now playing | press: play/pause · hold: back to menu | volume card | previous | next |
+| Volume card (3s, opened by X) | — | extend | volume − | volume + |
 
-DECIDED + BUILT (2026-07-07): the A-button gestures mirror the PiSugar
-button (short=play/pause, double=next, long=previous) — one muscle memory
-across the box. Gestures resolve only on the now-playing view, so menu
-selects stay instant. Hold A+B = settings (parental lock). Everything
-routes through tapboxd; the UI daemon never talks to go-librespot or mpv
-directly. Also built: ▶ marker on the playing episode in the episode list,
-and Bluetooth pages in settings (pair nearest / scan-and-pick / switch
-between known speakers, over the /bt endpoints).
+DECIDED + BUILT (2026-07-07, second iteration with user): all three
+transport actions (pause/prev/next) are INSTANT single presses — no
+double-press gestures anywhere, so no disambiguation latency. Pause gets
+the easiest button because it is the most urgent action; "back" is the
+rarest mid-playback action and lives on hold-A. Volume sits behind a
+mode (X shows a small speaker hint on screen) so a kid can't nudge it
+accidentally; the card auto-closes after 3s. Hold A+B = settings
+(parental lock). Everything routes through tapboxd. Also built: ▶ marker
+on the playing episode in the episode list, and Bluetooth pages in
+settings (pair nearest / scan-and-pick / switch between known speakers,
+over the /bt endpoints).
 
 ## 4. Audio output: BT headset default, HAT speaker fallback
 
