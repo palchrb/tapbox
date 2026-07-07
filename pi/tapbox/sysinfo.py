@@ -76,22 +76,52 @@ def update_settings(changes):
 
 # --- system status (battery, disk, wifi) ----------------------------------------
 
+_PISUGAR_SOCK = [None]  # persistent connection (guarded by the lock)
+_PISUGAR_LOCK = threading.Lock()
+
+
+def _pisugar_drop():
+    s, _PISUGAR_SOCK[0] = _PISUGAR_SOCK[0], None
+    if s is not None:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
 def pisugar_get(prop):
-    """Query pisugar-server's TCP API, e.g. pisugar_get('battery') -> '84.2'."""
-    try:
-        with socket.create_connection(("127.0.0.1", 8423), timeout=2) as s:
-            s.sendall(f"get {prop}\n".encode())
-            s.settimeout(2)
-            data = b""
-            while b"\n" not in data:  # reply format: "battery: 84.2\n"
-                chunk = s.recv(256)
-                if not chunk:
-                    break
-                data += chunk
-        text = data.decode(errors="ignore")
-        return text.split(":", 1)[1].strip() if ":" in text else None
-    except (OSError, IndexError):
-        return None
+    """Query pisugar-server's TCP API, e.g. pisugar_get('battery') -> '84.2'.
+
+    One persistent connection: pisugar-server logs every connect (2x INFO)
+    and treats every disconnect as an error ('Response error: Stream
+    closed' WARN) — with the PWA battery pill polling, per-request
+    connections flooded the journal with 6 lines per refresh."""
+    with _PISUGAR_LOCK:
+        for attempt in (1, 2):  # second try = fresh connection
+            try:
+                s = _PISUGAR_SOCK[0]
+                if s is None:
+                    s = socket.create_connection(("127.0.0.1", 8423),
+                                                 timeout=2)
+                    _PISUGAR_SOCK[0] = s
+                s.settimeout(2)
+                s.sendall(f"get {prop}\n".encode())
+                data = b""
+                while b"\n" not in data:  # reply: "battery: 84.2\n"
+                    chunk = s.recv(256)
+                    if not chunk:
+                        raise OSError("pisugar closed the connection")
+                    data += chunk
+                text = data.decode(errors="ignore").strip()
+                if not text.startswith(prop):
+                    # desynced (a stale reply from an earlier timeout) —
+                    # drop the connection rather than mismatch answers
+                    raise OSError(f"unexpected reply {text[:40]!r}")
+                return text.split(":", 1)[1].strip() if ":" in text else None
+            except (OSError, IndexError):
+                _pisugar_drop()
+                if attempt == 2:
+                    return None
 
 
 def _safe_pct(raw):
