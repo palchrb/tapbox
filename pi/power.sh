@@ -270,8 +270,15 @@ PY
     ;;
   _logloop)  # internal: run by tapbox-batlog.service
     [[ -f $LOG_FILE ]] || echo "time,volt,amp,percent,plugged" > "$LOG_FILE"
+    # one connection for all four values — pisugar-server logs every
+    # connect (2x INFO) and close (WARN), so per-value nc calls put
+    # 12 journal lines in every 60s tick
+    val() { awk -v k="$1:" '$1==k{print $2; exit}' <<<"$vals"; }
     while true; do
-      echo "$(date +'%F %T'),$(pisugar_get battery_v),$(pisugar_get battery_i),$(pisugar_get battery),$(pisugar_get battery_power_plugged)" >> "$LOG_FILE"
+      vals="$( (for p in battery_v battery_i battery battery_power_plugged; do
+                  echo "get $p"; sleep 0.2
+                done) | nc -q1 127.0.0.1 8423 2>/dev/null )"
+      echo "$(date +'%F %T'),$(val battery_v),$(val battery_i),$(val battery),$(val battery_power_plugged)" >> "$LOG_FILE"
       sleep 60
     done
     ;;

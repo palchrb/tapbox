@@ -368,6 +368,21 @@ if [[ -f /etc/pisugar-server/config.json ]] \
     || echo "    battery curve not applied (see: sudo tapbox-power curve)"
 fi
 
+# pisugar-server logs 2 INFO lines per TCP connect and a WARN for every
+# normal client close ("Response error: Stream closed") — pure journal
+# noise with anything polling the battery. Real errors still get logged.
+if systemctl cat pisugar-server.service &>/dev/null; then
+  if write_if_changed /etc/systemd/system/pisugar-server.service.d/quiet.conf <<'EOF'
+[Service]
+Environment=RUST_LOG=error
+EOF
+  then
+    systemctl daemon-reload
+    systemctl restart pisugar-server || true
+    echo "    pisugar-server journal chatter silenced (RUST_LOG=error)"
+  fi
+fi
+
 # Captive portal DNS: while the setup hotspot runs (NetworkManager shared
 # mode), resolve every hostname to the box so phone connectivity probes hit
 # tapboxd's :80 redirect and pop the portal. Inert outside hotspot mode.
