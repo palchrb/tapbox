@@ -266,6 +266,8 @@ EOF
 
 echo "==> [5/8] RFID reader support (PN532 over I2C) + tools..."
 raspi-config nonint do_i2c 0 2>/dev/null || true
+# SPI drives the Pirate Audio display (tapbox-ui); harmless when unused
+raspi-config nonint do_spi 0 2>/dev/null || true
 if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
   python3 -m venv /opt/tapbox/venv
 fi

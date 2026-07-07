@@ -241,12 +241,19 @@ PY
       if grep -q '^dtoverlay=hifiberry-dac' "$boot"; then
         echo "hifiberry-dac overlay already enabled in $boot"
       else
-        printf '\n# TapBox HAT speaker (MAX98357A I2S)\ndtoverlay=hifiberry-dac\n' >> "$boot"
-        echo "Enabled hifiberry-dac in $boot — reboot to activate."
+        # gpio=25=op,dh: the Pirate Audio amp has an enable pin on BCM 25
+        # that must be driven high, or the DAC stays muted (silence).
+        printf '\n# TapBox HAT speaker (MAX98357A I2S)\ndtoverlay=hifiberry-dac\ngpio=25=op,dh\n' >> "$boot"
+        echo "Enabled hifiberry-dac + amp-enable (BCM25) in $boot — reboot to activate."
         echo "After the reboot: pick 'Built-in' in the PWA (or POST /output)."
       fi
+      # older runs of this command lacked the amp-enable line
+      if ! grep -q '^gpio=25=op,dh' "$boot"; then
+        sed -i '/^dtoverlay=hifiberry-dac/a gpio=25=op,dh' "$boot"
+        echo "Added the missing amp-enable line (gpio=25=op,dh) — reboot to apply."
+      fi
     else
-      sed -i '/^# TapBox HAT speaker/d; /^dtoverlay=hifiberry-dac/d' "$boot"
+      sed -i '/^# TapBox HAT speaker/d; /^dtoverlay=hifiberry-dac/d; /^gpio=25=op,dh/d' "$boot"
       echo "Disabled the HAT audio overlay — reboot to apply."
     fi
     ;;
