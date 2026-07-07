@@ -718,17 +718,25 @@ class App:
         log("ready")
         while True:
             self.inputs.gesture_mode = (self.view == "now")
-            events = self.inputs.poll(TICK_S)
+            # Screen off = deep idle: slower ticks (presses are queued by
+            # gpio interrupts, so nothing is lost — wake latency <=0.6s)
+            events = self.inputs.poll(TICK_S if self.display.on else 0.6)
             if events:
                 woke = not self.display.on
                 self.last_input = time.monotonic()
                 if woke:
                     self.display.set_backlight(True)
+                    self.last_system = 0.0   # refetch battery/system now
+                    self.last_status = 0.0
                     self.dirty = True  # swallow the waking press
                 else:
                     for ev in events:
                         self.handle(ev)
-            self.refresh()
+            if self.display.on:
+                # No data polling while the screen is dark — there is
+                # nothing to update, and 1/s status HTTP all night is
+                # pure battery waste.
+                self.refresh()
             if self.display.on and self.screen_should_sleep():
                 self.display.set_backlight(False)
                 if PNG_PATH:  # dev: make the blanking visible
