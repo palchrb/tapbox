@@ -473,6 +473,11 @@ EOF
 fi
 
 echo "==> [6/8] Enabling services (restarting only what changed)..."
+# Normalize modes on units written by older installs (mktemp made them 600
+# and unchanged files are never rewritten) — silences systemd's
+# 'world-inaccessible' warning on every daemon-reload.
+chmod 644 /etc/systemd/system/tapbox-*.service \
+  /etc/systemd/system/go-librespot.service 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
   tapbox-buttons.service tapbox-daemon.service
