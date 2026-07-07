@@ -192,10 +192,10 @@ EOF
     echo "tapbox-idle enabled — timeout follows the PWA setting (0 = never)."
     ;;
   idle-off)
+    # prefer setting 'Auto-off when idle: never' in the PWA — this stops
+    # the daemon outright (install.sh re-enables it on the next run)
     systemctl disable --now tapbox-idle.service 2>/dev/null || true
-    rm -f /etc/systemd/system/tapbox-idle.service
-    systemctl daemon-reload
-    echo "Auto-shutdown disabled."
+    echo "tapbox-idle stopped. Tip: the PWA setting 'never' is permanent."
     ;;
   taps-on|taps-off)
     cfg=/etc/pisugar-server/config.json
