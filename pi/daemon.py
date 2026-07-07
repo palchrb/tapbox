@@ -554,8 +554,12 @@ class Orchestrator:
         # Gate on "mpv supplied nothing" rather than "child dead": while a
         # spawn is starting up the socket answers nothing, and blanking the
         # card to 'Nothing playing' for those seconds looks broken.
+        # Only when Spotify is actually in charge though (current source, or
+        # audibly playing right now): a track parked paused in go-librespot
+        # from an EARLIER session must not hijack the card — the play button
+        # routes to the current source, and card and button must agree.
         if (out["title"] is None and track and not st.get("stopped")
-                and (not mpv_alive or source == "spotify")):
+                and (sp_playing or source == "spotify")):
             out["playing"] = sp_playing
             out["shuffle"] = bool(st.get("shuffle_context"))
             out["source"] = "spotify"
