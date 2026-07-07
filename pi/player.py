@@ -507,7 +507,9 @@ def main():
                 now_m = time.monotonic()
                 if now_m - last_beat > 30:
                     last_beat = now_m
-                    log("...playing (live)" if live else f"...playing, {int(pos)}s")
+                    state = "paused at" if paused else "playing,"
+                    log("...playing (live)" if live
+                        else f"...{state} {int(pos)}s")
             # Prefer the catalog title (NRK mp3s lack ID3, so mpv's
             # media-title falls back to an unhelpful filename)
             title = (titles.get(path) if path else None) or ipc_get(sock, "media-title")
