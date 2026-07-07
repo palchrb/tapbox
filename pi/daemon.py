@@ -107,6 +107,8 @@ PORTAL_PORT = int(os.environ.get("TAPBOX_PORTAL_PORT", "80"))
 # port firewalled from the internet — the API is deliberately auth-less on
 # the home network (a PIN gate is a product-phase addition).
 BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
+# restart playback when it claims to play but makes no progress this long
+STALL_S = int(os.environ.get("TAPBOX_STALL_S", "30"))
 WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/tapbox/web")
@@ -165,6 +167,7 @@ class Orchestrator:
             pass
         self.child_started = 0.0
         threading.Thread(target=self._arbiter, daemon=True).start()
+        threading.Thread(target=self._stall_watchdog, daemon=True).start()
 
     def _arbiter(self):
         """The box stays Spotify Connect-discoverable while mpv plays; if the
@@ -173,20 +176,74 @@ class Orchestrator:
         bookmark is saved, so the card resumes later)."""
         while True:
             time.sleep(4)
-            with self.lock:
-                alive = self._mpv_alive()
-                age = time.monotonic() - self.child_started
-            # grace period: player.py pauses spotify right after starting,
-            # don't mistake that brief overlap for a takeover
-            if not alive or age < 10:
-                continue
-            if spotify_playing():
+            try:
                 with self.lock:
-                    if self._mpv_alive():
-                        log("spotify took over (phone) — yielding mpv")
-                        self._stop_child()
-                        self.source = "spotify"
-                        self._persist()
+                    alive = self._mpv_alive()
+                    age = time.monotonic() - self.child_started
+                # grace period: player.py pauses spotify right after starting,
+                # don't mistake that brief overlap for a takeover
+                if not alive or age < 10:
+                    continue
+                if spotify_playing():
+                    with self.lock:
+                        if self._mpv_alive():
+                            log("spotify took over (phone) — yielding mpv")
+                            self._stop_child()
+                            self.source = "spotify"
+                            self._persist()
+            except Exception as e:  # a dead arbiter = silent feature loss
+                log(f"arbiter error: {e!r}")
+
+    def _stall_watchdog(self):
+        """A dropped BT speaker can wedge mpv: the process stays alive but
+        audio writes block, the position freezes, and every button press
+        routes into a wall — the box looks hung until someone reboots it.
+        Watch for 'claims to be playing but no progress for STALL_S', then
+        restart playback (the 3s bookmark resumes it in place) once the
+        output is able to make sound again."""
+        last_pos, last_change = None, time.monotonic()
+        while True:
+            time.sleep(5)
+            try:
+                with self.lock:
+                    alive = self._mpv_alive()
+                    age = time.monotonic() - self.child_started
+                if not alive or age < 30:  # startup grace: file/stream open
+                    last_pos, last_change = None, time.monotonic()
+                    continue
+                paused = mpv_get("pause")
+                pos = mpv_get("playback-time")
+                # deliberate pause is not a stall; an unresponsive IPC
+                # (both None) is treated the same as a frozen position
+                if paused is True or (pos is not None and pos != last_pos):
+                    last_pos, last_change = pos, time.monotonic()
+                    continue
+                stalled = time.monotonic() - last_change
+                if stalled < STALL_S:
+                    continue
+                log(f"playback stalled {int(stalled)}s (position frozen) "
+                    f"— restarting player")
+                with self.lock:
+                    self._stop_child()  # bookmark survives (terminated flag)
+                ready = False
+                for _ in range(12):  # give a rebooting speaker ≤60s
+                    ready = _audio_ready()
+                    if ready:
+                        break
+                    time.sleep(5)
+                if not ready:
+                    # speaker still gone: don't restart into a void — the
+                    # bookmark is saved, any button press resumes later
+                    log("output still not ready — leaving playback stopped")
+                    last_pos, last_change = None, time.monotonic()
+                    continue
+                with self.lock:
+                    if (self.target and self.source == "mpv"
+                            and not self._mpv_alive()):
+                        self._spawn(self.target, reverse=self.reverse)
+                last_pos, last_change = None, time.monotonic()
+            except Exception as e:
+                log(f"stall watchdog error: {e!r}")
 
     def _persist(self):
         os.makedirs(STATE_DIR, exist_ok=True)
