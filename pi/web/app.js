@@ -67,6 +67,7 @@ function renderProgress() {
 }
 
 let queueTarget;   // undefined = never loaded; null = no queue
+let currentTarget = null;  // what /status says is (or would be) playing
 
 async function loadQueue(target) {
   queueTarget = target;
@@ -155,6 +156,7 @@ async function pollStatus() {
            playing: !!st.playing, at: Date.now() };
     renderProgress();
     $("#btn-play").textContent = st.playing ? "⏸" : "▶";
+    currentTarget = st.target || null;
     if (st.target !== queueTarget) loadQueue(st.target);
     markQueuePlaying(st.episode_id);
     $("#btn-shuffle").classList.toggle("on", !!st.shuffle);
@@ -176,6 +178,17 @@ async function pollStatus() {
 $("#btn-play").addEventListener("click", () => api("/playpause", { method: "POST", body: {} }).then(pollStatus).catch((e) => toast(e.message)));
 $("#btn-next").addEventListener("click", () => api("/next", { method: "POST", body: {} }).catch((e) => toast(e.message)));
 $("#btn-prev").addEventListener("click", () => api("/prev", { method: "POST", body: {} }).catch((e) => toast(e.message)));
+$("#btn-fresh").addEventListener("click", async () => {
+  if (!currentTarget) { toast("Nothing to restart"); return; }
+  if (!confirm(
+    "Play from the beginning? The saved position is cleared.")) return;
+  try {
+    await api("/play", { method: "POST",
+      body: { target: currentTarget, fresh: true } });
+    toast("Starting from the beginning …");
+  } catch (e) { toast(e.message); }
+});
+
 $("#btn-stop").addEventListener("click", () => api("/stop", { method: "POST", body: {} }).then(pollStatus).catch((e) => toast(e.message)));
 $("#btn-shuffle").addEventListener("click", async () => {
   const enable = !$("#btn-shuffle").dataset.on;

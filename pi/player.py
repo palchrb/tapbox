@@ -127,6 +127,23 @@ SPOT_BM_FILE = os.path.join(STATE_DIR, "spotify-bookmark.json")
 SPOT_RESUME_MIN_MS = 20000
 
 
+def _apply_box_volume():
+    """One volume knob across sources: mpv reads volume.json at every
+    start — give go-librespot the same treatment, else it keeps whatever
+    its previous session used and Spotify plays louder/softer than NRK."""
+    try:
+        with open(os.path.join(STATE_DIR, "volume.json")) as f:
+            v = max(0, min(100, round(json.load(f)["volume"])))
+    except (OSError, ValueError, KeyError, TypeError):
+        return  # never set through the box yet — leave as is
+    try:
+        steps = spotify.status().get("volume_steps") or 65535
+        spotify.go("/player/volume", body={"volume": round(v * steps / 100)})
+        log(f"volume set to {v} (box level)")
+    except OSError:
+        pass
+
+
 def play_spotify(target, fresh=False):
     uri = spotify.to_uri(target)
     if not uri:
@@ -166,6 +183,7 @@ def play_spotify(target, fresh=False):
         sys.exit(1)
     log(f"spotify: playing {uri}"
         + (f" (resuming {bm['uri']} at {bm['position'] // 1000}s)" if bm else ""))
+    _apply_box_volume()
 
     if bm:
         # seek once the right track has actually loaded
