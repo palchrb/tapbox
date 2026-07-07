@@ -7,9 +7,10 @@ import os
 import socket
 import subprocess
 import threading
+import time
 
 from tapbox import netmgmt, output
-from tapbox.paths import CACHE_DIR, SETTINGS_FILE
+from tapbox.paths import CACHE_DIR, SETTINGS_FILE, STATE_DIR
 
 
 def log(msg):
@@ -143,6 +144,38 @@ def _safe_pct(raw):
     return round(v, 1) if -1 <= v <= 200 else None  # nan/inf fail the compare
 
 
+BATT_SINCE_FILE = os.path.join(STATE_DIR, "on-battery-since.json")
+
+
+def _on_battery_since(plugged):
+    """Wall-clock timestamp of the last charger disconnect, persisted so
+    it survives daemon restarts (and reboots on battery). None while on
+    the charger. Granularity is whoever polls /system — the PWA battery
+    pill every 60s — which is plenty for an hours-scale display."""
+    try:
+        with open(BATT_SINCE_FILE) as f:
+            since = json.load(f).get("since")
+    except (OSError, ValueError):
+        since = None
+    if plugged:
+        if since is not None:
+            try:
+                os.remove(BATT_SINCE_FILE)
+            except OSError:
+                pass
+        return None
+    if since is None:
+        since = time.time()
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            with open(BATT_SINCE_FILE + ".tmp", "w") as f:
+                json.dump({"since": since}, f)
+            os.replace(BATT_SINCE_FILE + ".tmp", BATT_SINCE_FILE)
+        except OSError:
+            pass
+    return since
+
+
 def _dir_size(path):
     total = 0
     for root, _dirs, files in os.walk(path):
@@ -179,8 +212,14 @@ def system_status():
     except (OSError, ValueError):
         pass
     enabled, ssid, ip = netmgmt.wifi_state()
+    on_battery_s = None
+    if batt is not None:  # only meaningful with a PiSugar present
+        since = _on_battery_since(plugged == "true")
+        if since is not None:
+            on_battery_s = max(0, int(time.time() - since))
     return {"battery": _safe_pct(batt),
             "battery_v": _safe_volts(volts),
+            "on_battery_s": on_battery_s,
             "plugged": plugged == "true",
             "disk": disk, "caches": caches, "cpu_temp": temp,
             "wifi": {"enabled": enabled, "ssid": ssid, "ip": ip,

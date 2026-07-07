@@ -420,6 +420,11 @@ async function loadSystem() {
   if (sys.battery_v != null) {
     rows.push(["Battery voltage", `${sys.battery_v.toFixed(2)} V`]);
   }
+  if (sys.on_battery_s != null) {
+    const h = Math.floor(sys.on_battery_s / 3600);
+    const m = Math.floor((sys.on_battery_s % 3600) / 60);
+    rows.push(["On battery", h ? `${h} h ${m} min` : `${m} min`]);
+  }
   if (sys.disk) {
     rows.push(["SD card free", `${fmtBytes(sys.disk.free)} of ${fmtBytes(sys.disk.total)}`]);
   }
