@@ -382,23 +382,44 @@ class Orchestrator:
             return {"paused": acted}
 
     def stop(self):
+        """Stop = done: also clear the resume bookmarks, so the next play
+        starts from the top. (Pause / power-off keep the position.)"""
         with self.lock:
             self._stop_child()
             try:
                 go("/player/pause")
             except OSError:
                 pass
-            log("stop")
+            if self.target and not is_spotify(self.target):
+                try:
+                    os.remove(os.path.join(STATE_DIR,
+                                           state_key(self.target) + ".json"))
+                except OSError:
+                    pass
+            try:
+                os.remove(SPOT_BM_FILE)
+            except OSError:
+                pass
+            log("stop (bookmarks cleared)")
             return {"stopped": True}
 
     def command(self, action):
         with self.lock:
             # 1) a running mpv session owns the controls
             if self._mpv_alive() and self.source == "mpv":
-                cmds = {"playpause": ["cycle", "pause"],
-                        "next": ["playlist-next"], "prev": ["playlist-prev"]}
                 try:
-                    if mpv_ipc(cmds[action]).get("error") == "success":
+                    if action == "prev":
+                        # >5s into the episode: restart it (standard player
+                        # semantics — also fixes prev being a no-op after a
+                        # resume, which rotates the episode to queue slot 0)
+                        pos = mpv_get("playback-time")
+                        cmd = ["seek", 0, "absolute"] \
+                            if isinstance(pos, (int, float)) and pos > 5 \
+                            else ["playlist-prev"]
+                    else:
+                        cmd = {"playpause": ["cycle", "pause"],
+                               "next": ["playlist-next"]}[action]
+                    if mpv_ipc(cmd).get("error") == "success":
                         log(f"{action} -> mpv")
                         return {"routed": "mpv"}
                 except OSError:
