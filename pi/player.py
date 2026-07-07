@@ -155,6 +155,10 @@ def play_spotify(target, fresh=False):
     body = {"uri": uri}
     if bm:
         body["skip_to_uri"] = bm["uri"]
+        # Load silently and unpause only after the seek — otherwise the
+        # first 1-2s of the track play audibly from 0:00 while we wait
+        # for it to load.
+        body["paused"] = True
     try:
         spotify.go("/player/play", timeout=10, body=body)
     except OSError as e:
@@ -177,6 +181,10 @@ def play_spotify(target, fresh=False):
                 break
         else:
             log("resume track never loaded — playing the context from start")
+        try:
+            spotify.go("/player/resume")
+        except OSError:
+            log("resume call failed — press play to start audio")
 
     time.sleep(2)
     track = spotify.status().get("track") or {}
