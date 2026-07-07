@@ -607,6 +607,31 @@ class Orchestrator:
                     out["duration"] = now.get("duration")
                 if not out["title"]:
                     out["title"] = os.path.basename(target.rstrip("/"))
+        # Stopped-but-remembered: no bookmark (stop cleared it), yet play
+        # WILL start this target from the top — say so ("ready at 0:00")
+        # instead of pretending nothing exists. Card and button must agree.
+        if out["title"] is None and target:
+            name = None
+            for sec in load_library().get("sections", []):
+                for e in sec.get("entries", []):
+                    if e.get("target") == target:
+                        name = e.get("name")
+                        break
+                if name:
+                    break
+            try:
+                with open(NOW_FILE) as f:
+                    now = json.load(f)
+            except (OSError, ValueError):
+                now = {}
+            if now.get("target") == target:
+                name = name or now.get("title")
+                out["artwork"] = now.get("image")
+            if name:
+                out["source"] = "spotify" if is_spotify(target) else "mpv"
+                out["title"] = name
+                out["position"] = 0
+                out["playing"] = mpv_alive  # a spawn in flight IS starting
         return out
 
 

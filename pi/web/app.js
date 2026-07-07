@@ -66,6 +66,63 @@ function renderProgress() {
     np.position != null && np.duration == null ? "live" : fmtTime(np.duration);
 }
 
+let queueTarget;   // undefined = never loaded; null = no queue
+
+async function loadQueue(target) {
+  queueTarget = target;
+  const card = $("#queue-card");
+  const wrap = $("#queue");
+  wrap.textContent = "";
+  if (!target || target.includes("spotify")) {  // spotify = leaf, no listing
+    card.hidden = true;
+    return;
+  }
+  try {
+    // Prefer the library entry: /expand?id applies its play order,
+    // which is the order the box actually queues in.
+    let url = `/expand?target=${encodeURIComponent(target)}`;
+    try {
+      const lib = await api("/library");
+      for (const s of lib.sections) for (const e of s.entries) {
+        if (e.target === target) url = `/expand?id=${encodeURIComponent(e.id)}`;
+      }
+    } catch (e) { /* no library — fall back to target expand */ }
+    const r = await api(url);
+    const eps = r.episodes || [];
+    for (const ep of eps) {
+      const row = document.createElement("div");
+      row.className = "entry queue-ep";
+      row.dataset.episode = ep.id || "";
+      const info = document.createElement("div");
+      info.className = "entry-info";
+      const name = document.createElement("strong");
+      name.textContent = ep.title || ep.id || "?";
+      const sub = document.createElement("small");
+      sub.textContent = ep.cached ? "✓ offline" : "";
+      info.append(name, sub);
+      row.appendChild(info);
+      row.addEventListener("click", async () => {
+        try {
+          await api("/play", { method: "POST",
+            body: { target, episode: ep.id } });
+          toast(`Starting ${ep.title || "episode"} …`);
+        } catch (e) { toast(e.message); }
+      });
+      wrap.appendChild(row);
+    }
+    card.hidden = eps.length === 0;
+  } catch (e) {
+    card.hidden = true;
+  }
+}
+
+function markQueuePlaying(episodeId) {
+  for (const row of document.querySelectorAll(".queue-ep")) {
+    row.classList.toggle("playing",
+      !!episodeId && row.dataset.episode === episodeId);
+  }
+}
+
 async function pollStatus() {
   try {
     const st = await api("/status");
@@ -87,6 +144,8 @@ async function pollStatus() {
            playing: !!st.playing, at: Date.now() };
     renderProgress();
     $("#btn-play").textContent = st.playing ? "⏸" : "▶";
+    if (st.target !== queueTarget) loadQueue(st.target);
+    markQueuePlaying(st.episode_id);
     $("#btn-shuffle").classList.toggle("on", !!st.shuffle);
     $("#btn-shuffle").dataset.on = st.shuffle ? "1" : "";
     const out = document.querySelector(`input[name=output][value=${st.output}]`);

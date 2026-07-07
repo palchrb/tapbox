@@ -185,3 +185,7 @@ dd { margin: 0; text-align: right; }
   font-weight: 600;
   max-width: 90vw;
 }
+
+.queue-ep { cursor: pointer; }
+.queue-ep.playing strong::before { content: "▶ "; color: var(--accent, #6bf); }
+.queue-ep.playing { outline: 1px solid var(--accent, #6bf); border-radius: 8px; }
