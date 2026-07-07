@@ -1,6 +1,6 @@
 # Plan: bt.py step 2 — BlueZ D-Bus port
 
-Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py (run on the rig before install). Pairing stays cli until B2. Next after B1 verification: C (event reconnect daemon). Drafted 2026-07-07 and refined by three
+Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py, field-verified (speaker switching over dbus). C implemented (pi/btwatchd.py event daemon replaces the bash poll loop; bash kept as tapbox-bt-reconnect-poll fallback) — gate with tests/bt_reconnect.py ON THE RIG before relying on it. Pairing stays cli until B2. Remaining: rig-run the C gate + <5s power-on reconnect check, then B2 (Agent1), then D (cleanup). Drafted 2026-07-07 and refined by three
 review passes (architecture, implementation, test) against the codebase
 as of commit `c379b01`. This document is the implementation bible; the
 reviews' full findings are folded in below.

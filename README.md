@@ -78,7 +78,9 @@ Bluetooth speaker**:
   *Connect* on one to make it the active output.
 
 From now on, turning the speaker on is enough; the box reconnects by
-itself.
+itself within seconds (btwatchd listens for BlueZ D-Bus events; set
+`TAPBOX_BT_BACKEND=cli` on the tapbox-bt-reconnect service to fall
+back to the old 60s poll loop).
 
 ### 4. Build the library
 

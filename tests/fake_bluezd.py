@@ -39,8 +39,10 @@ _ADDR = os.environ.get("DBUS_SYSTEM_BUS_ADDRESS")
 BUS = dbus.bus.BusConnection(_ADDR) if _ADDR else dbus.SystemBus()
 
 DEVICES = {}   # mac -> {name, paired, connected, rssi}
+DEVICE_OBJS = {}  # mac -> Device (needed to emit PropertiesChanged)
 PCMS = {}      # mac -> bool
 DISCOVERING = [False]
+ROOT = [None]  # BluezRoot instance (emits InterfacesAdded)
 
 
 def dev_path(mac):
@@ -72,6 +74,11 @@ class BluezRoot(dbus.service.Object):
         for mac in DEVICES:
             objs[dev_path(mac)] = {"org.bluez.Device1": device_props(mac)}
         return objs
+
+    @dbus.service.signal("org.freedesktop.DBus.ObjectManager",
+                         signature="oa{sa{sv}}")
+    def InterfacesAdded(self, path, ifaces):
+        pass
 
 
 class Adapter(dbus.service.Object):
@@ -123,16 +130,32 @@ class Device(dbus.service.Object):
         return device_props(self.mac)
 
     @dbus.service.method("org.freedesktop.DBus.Properties",
+                         in_signature="ss", out_signature="v")
+    def Get(self, iface, prop):
+        return device_props(self.mac).get(prop, dbus.Boolean(False))
+
+    @dbus.service.method("org.freedesktop.DBus.Properties",
                          in_signature="ssv")
     def Set(self, iface, prop, value):
         if prop == "Trusted":
             DEVICES[self.mac]["trusted"] = bool(value)
 
+    @dbus.service.signal("org.freedesktop.DBus.Properties",
+                         signature="sa{sv}as")
+    def PropertiesChanged(self, iface, changed, invalidated):
+        pass
+
+    def set_connected(self, connected):
+        DEVICES[self.mac]["connected"] = connected
+        self.PropertiesChanged("org.bluez.Device1",
+                               {"Connected": dbus.Boolean(connected)}, [])
+
     @dbus.service.method("org.bluez.Device1")
     def Connect(self):
+        DEVICES[self.mac]["connects"] = DEVICES[self.mac].get("connects", 0) + 1
         result = DEVICES[self.mac].get("connect_result", "ok")
         if result == "ok":
-            DEVICES[self.mac]["connected"] = True
+            self.set_connected(True)
             return
         if result == "already-connected":
             raise _bluez_error("AlreadyConnected", "Already Connected")
@@ -142,7 +165,7 @@ class Device(dbus.service.Object):
     def Disconnect(self):
         if not DEVICES[self.mac]["connected"]:
             raise _bluez_error("NotConnected", "Not Connected")
-        DEVICES[self.mac]["connected"] = False
+        self.set_connected(False)
 
 
 class BluealsaRoot(dbus.service.Object):
@@ -167,11 +190,14 @@ class Mock(dbus.service.Object):
         DEVICES[mac] = {"name": str(name), "paired": bool(paired),
                         "connected": bool(connected),
                         "rssi": int(rssi) if int(rssi) != 0 else None}
-        Device(mac)
+        DEVICE_OBJS[mac] = Device(mac)
+        ROOT[0].InterfacesAdded(dbus.ObjectPath(dev_path(mac)),
+                                {"org.bluez.Device1": device_props(mac)})
 
     @dbus.service.method("org.tapbox.Mock", in_signature="sb")
     def SetConnected(self, mac, connected):
-        DEVICES[str(mac).upper()]["connected"] = bool(connected)
+        # state change + PropertiesChanged, like real bluez
+        DEVICE_OBJS[str(mac).upper()].set_connected(bool(connected))
 
     @dbus.service.method("org.tapbox.Mock", in_signature="sb")
     def SetPcm(self, mac, present):
@@ -191,6 +217,16 @@ class Mock(dbus.service.Object):
     def GetTrusted(self, mac):
         return bool(DEVICES[str(mac).upper()].get("trusted", False))
 
+    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+                         out_signature="b")
+    def GetConnected(self, mac):
+        return bool(DEVICES[str(mac).upper()]["connected"])
+
+    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+                         out_signature="i")
+    def GetConnectCount(self, mac):
+        return int(DEVICES[str(mac).upper()].get("connects", 0))
+
 
 _NAMES = []  # keep references — dbus-python RELEASES a bus name when
              # its BusName object is garbage-collected
@@ -199,7 +235,7 @@ _NAMES = []  # keep references — dbus-python RELEASES a bus name when
 def main():
     for name in ("org.bluez", "org.bluealsa"):
         _NAMES.append(dbus.service.BusName(name, BUS))
-    BluezRoot(BUS, "/")  # real bluez exports ObjectManager at the root
+    ROOT[0] = BluezRoot(BUS, "/")  # real bluez: ObjectManager at the root
     Adapter(BUS, "/org/bluez/hci0")
     BluealsaRoot(BUS, "/org/bluealsa")
     Mock(BUS, "/org/tapbox/mock")

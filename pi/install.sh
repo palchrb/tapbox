@@ -252,12 +252,14 @@ WantedBy=multi-user.target
 EOF
 
 RECON_CHANGED=0
-write_if_changed /usr/local/bin/tapbox-bt-reconnect <<'EOF' && RECON_CHANGED=1
+write_if_changed /usr/local/bin/tapbox-bt-reconnect-poll <<'EOF' && RECON_CHANGED=1
 #!/usr/bin/env bash
 # Reconnects the remembered BT headset (written by play.sh) whenever it is
 # powered on near the box, so turning the headset on is all it takes.
-# Cheap poll loop for the test rig; the product version will be D-Bus
-# event-driven inside the orchestration daemon.
+# FALLBACK poll loop: btwatchd (the D-Bus event daemon, phase C of
+# PLAN-bt-dbus.md) exec's this when TAPBOX_BT_BACKEND=cli or the dbus
+# bindings are missing. Worst case 60s to notice the speaker vs the
+# daemon's seconds — keep for one release, then reevaluate.
 #
 # Backoff while the speaker stays away: each failed attempt is radio time
 # plus a bluetoothd 'Host is down' journal line, and most speakers connect
@@ -287,16 +289,21 @@ while true; do
   sleep "$delay"
 done
 EOF
-chmod 755 /usr/local/bin/tapbox-bt-reconnect
+chmod 755 /usr/local/bin/tapbox-bt-reconnect-poll
+# pre-phase-C name — remove so a stale copy can never be started by hand
+rm -f /usr/local/bin/tapbox-bt-reconnect
 
+install_if_changed 755 "$SCRIPT_DIR/btwatchd.py" /usr/local/bin/tapbox-btwatchd && RECON_CHANGED=1
 write_if_changed /etc/systemd/system/tapbox-bt-reconnect.service <<'EOF' && RECON_CHANGED=1
 [Unit]
-Description=TapBox bluetooth headset auto-reconnect
+Description=TapBox BT reconnect daemon (event-driven, btwatchd)
 After=bluetooth.service bluealsa.service bluealsad.service
 Wants=bluetooth.service
 
 [Service]
-ExecStart=/usr/local/bin/tapbox-bt-reconnect
+# Kill switch: systemctl edit tapbox-bt-reconnect ->
+#   [Service] Environment=TAPBOX_BT_BACKEND=cli   (poll-loop fallback)
+ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-btwatchd
 Restart=always
 RestartSec=5
 
@@ -334,6 +341,8 @@ done
 # The pre-package layout installed nrk.py loose in /usr/local/bin — remove it
 # so a stale copy can never shadow the package (we've been bitten before).
 rm -f /usr/local/bin/nrk.py
+# btwatchd imports tapbox.bt — a package change must restart it too
+[[ $PKG_CHANGED -eq 1 ]] && RECON_CHANGED=1
 
 RFID_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/tapbox-rfid   && RFID_CHANGED=1
