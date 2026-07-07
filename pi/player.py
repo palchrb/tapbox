@@ -122,17 +122,61 @@ def online():
         return False
 
 
-def play_spotify(target):
+SPOT_BM_FILE = os.path.join(STATE_DIR, "spotify-bookmark.json")
+SPOT_RESUME_MIN_MS = 20000
+
+
+def play_spotify(target, fresh=False):
     uri = spotify.to_uri(target)
     if not uri:
         log(f"could not parse spotify link: {target}")
         sys.exit(1)
+
+    # Exact resume: tapboxd bookkeeps track+position while Spotify plays
+    # (its cloud only resumes for Spotify's own clients). Same context ->
+    # play {uri, skip_to_uri} keeps the queue intact, then seek.
+    bm = None
+    if fresh:
+        try:
+            os.remove(SPOT_BM_FILE)
+        except OSError:
+            pass
+    else:
+        try:
+            with open(SPOT_BM_FILE) as f:
+                bm = json.load(f)
+        except (OSError, ValueError):
+            bm = None
+        if not (bm and bm.get("context_uri") == uri and bm.get("uri")
+                and (bm.get("position") or 0) > SPOT_RESUME_MIN_MS):
+            bm = None
+
+    body = {"uri": uri}
+    if bm:
+        body["skip_to_uri"] = bm["uri"]
     try:
-        spotify.go("/player/play", timeout=10, body={"uri": uri})
+        spotify.go("/player/play", timeout=10, body=body)
     except OSError as e:
         log(f"go-librespot API unreachable ({e}) — check: journalctl -u go-librespot")
         sys.exit(1)
-    log(f"spotify: playing {uri}")
+    log(f"spotify: playing {uri}"
+        + (f" (resuming {bm['uri']} at {bm['position'] // 1000}s)" if bm else ""))
+
+    if bm:
+        # seek once the right track has actually loaded
+        for _ in range(12):
+            time.sleep(0.5)
+            track = spotify.status().get("track") or {}
+            if track.get("uri") == bm["uri"]:
+                try:
+                    spotify.go("/player/seek",
+                               body={"position": int(bm["position"])})
+                except OSError:
+                    log("seek failed — continuing from the track start")
+                break
+        else:
+            log("resume track never loaded — playing the context from start")
+
     time.sleep(2)
     track = spotify.status().get("track") or {}
     if track.get("name"):
@@ -172,7 +216,7 @@ def main():
     target, urls = args[0], args[1:]
 
     if is_spotify(target):
-        play_spotify(target)  # resume is Spotify's own job — session remembers
+        play_spotify(target, fresh=fresh)
         return
 
     titles, ids, images = {}, {}, {}

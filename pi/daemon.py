@@ -98,6 +98,7 @@ mpv_ipc = _mpv.ipc
 mpv_get = _mpv.get
 
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
+SPOT_BM_FILE = os.path.join(STATE_DIR, "spotify-bookmark.json")
 VOL_FILE = os.path.join(STATE_DIR, "volume.json")
 NOW_FILE = os.path.join(STATE_DIR, "now-playing.json")
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
@@ -467,9 +468,22 @@ class Orchestrator:
             # position lives on the track object (ms, live-extrapolated)
             out["position"] = (track.get("position") or 0) / 1000
             out["artwork"] = out["spotify"]["artwork"]
-        # Ghost session: nothing is live, but a bookmarked target is
+        # Ghost sessions: nothing is live, but a bookmarked target is
         # remembered -> present it as paused-at-position instead of
         # "nothing playing". Pressing play resumes exactly there.
+        if (not mpv_alive and out["title"] is None and target
+                and is_spotify(target)):
+            try:
+                with open(SPOT_BM_FILE) as f:
+                    bm = json.load(f)
+            except (OSError, ValueError):
+                bm = None
+            if bm and bm.get("uri") and (bm.get("position") or 0) > 20000:
+                out["source"] = "spotify"
+                out["title"] = bm.get("name")
+                out["artwork"] = bm.get("artwork")
+                out["position"] = (bm.get("position") or 0) / 1000
+                out["duration"] = (bm.get("duration") or 0) / 1000 or None
         if (not mpv_alive and out["title"] is None and target
                 and not is_spotify(target)):
             try:
@@ -726,6 +740,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
 
+def _spotify_bookmarker():
+    """Spotify's cloud remembers positions for ITS clients only — so we
+    bookkeep like we do for mpv: while Spotify plays, snapshot the track,
+    position and (when the box started it) the context every few seconds.
+    play {uri, skip_to_uri} + seek replays it exactly, queue intact."""
+    while True:
+        time.sleep(5)
+        try:
+            st = go_status()
+            track = st.get("track") or {}
+            if not track or st.get("paused") or st.get("stopped"):
+                continue
+            context = None
+            if ORCH.source == "spotify" and ORCH.target \
+                    and is_spotify(ORCH.target):
+                context = _spotify.to_uri(ORCH.target)
+            bm = {"context_uri": context,
+                  "uri": track.get("uri"),
+                  "position": track.get("position") or 0,
+                  "duration": track.get("duration") or 0,
+                  "name": track.get("name"),
+                  "artists": track.get("artist_names") or [],
+                  "artwork": track.get("album_cover_url"),
+                  "updated": time.time()}
+            with open(SPOT_BM_FILE + ".tmp", "w") as f:
+                json.dump(bm, f)
+            os.replace(SPOT_BM_FILE + ".tmp", SPOT_BM_FILE)
+        except Exception:
+            pass
+
+
 def _audio_ready():
     """Is the active output able to make sound yet? BT speakers reconnect
     a little while after boot; don't start playback into a void."""
@@ -872,6 +917,7 @@ def main():
         pass  # not the main thread (tests run main() in a thread)
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
+    threading.Thread(target=_spotify_bookmarker, daemon=True).start()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
