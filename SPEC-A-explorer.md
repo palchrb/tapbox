@@ -90,13 +90,16 @@ v1 — per-track browsing inside Spotify collections is a later addition).
 | Context | X (upper right) | Y (lower right) | A (upper left) | B (lower left) |
 |---|---|---|---|---|
 | Menu | up | down | select | back |
-| Now playing | volume + | volume − | play/pause | back to menu |
-| Now playing (hold) | next | prev | — | home |
+| Now playing | volume + | volume − | 1x play/pause · 2x next · hold previous | back to menu |
 
-Exact mapping TBD after kid-testing; the point is that play/pause/next/prev
-and **volume** all route through tapboxd (`/playpause /next /prev /volume`),
-which the platform already implements — the UI daemon never talks to
-go-librespot or mpv directly.
+DECIDED + BUILT (2026-07-07): the A-button gestures mirror the PiSugar
+button (short=play/pause, double=next, long=previous) — one muscle memory
+across the box. Gestures resolve only on the now-playing view, so menu
+selects stay instant. Hold A+B = settings (parental lock). Everything
+routes through tapboxd; the UI daemon never talks to go-librespot or mpv
+directly. Also built: ▶ marker on the playing episode in the episode list,
+and Bluetooth pages in settings (pair nearest / scan-and-pick / switch
+between known speakers, over the /bt endpoints).
 
 ## 4. Audio output: BT headset default, HAT speaker fallback
 
