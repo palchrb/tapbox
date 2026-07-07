@@ -152,9 +152,13 @@ class Mock(dbus.service.Object):
         DEVICES.pop(str(mac).upper(), None)
 
 
+_NAMES = []  # keep references — dbus-python RELEASES a bus name when
+             # its BusName object is garbage-collected
+
+
 def main():
     for name in ("org.bluez", "org.bluealsa"):
-        dbus.service.BusName(name, BUS)
+        _NAMES.append(dbus.service.BusName(name, BUS))
     BluezRoot(BUS, "/")  # real bluez exports ObjectManager at the root
     Adapter(BUS, "/org/bluez/hci0")
     BluealsaRoot(BUS, "/org/bluealsa")
