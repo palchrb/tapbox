@@ -1,8 +1,8 @@
 """Bluetooth TRANSPORT layer — one narrow primitive surface, two backends.
 
   cli   bluetoothctl / bluealsa-aplay text parsing (the proven path)
-  dbus  direct BlueZ + bluealsa D-Bus (PLAN-bt-dbus.md; opt-in until it
-        has passed the on-rig parity gate — then `auto` will prefer it)
+  dbus  direct BlueZ + bluealsa D-Bus (PLAN-bt-dbus.md; preferred by
+        `auto` since the parity gate passed on the rig 2026-07-07)
 
 Selected once per process via TAPBOX_BT_BACKEND=cli|dbus|auto (default
 auto). Flow logic — pairing retries, stale-key handling, one-output
@@ -65,19 +65,19 @@ def backend():
     global _BACKEND
     if _BACKEND is None:
         want = os.environ.get("TAPBOX_BT_BACKEND", "auto")
-        if want == "dbus":
+        if want == "cli":
+            _BACKEND = "cli"  # explicit kill switch
+        else:
+            # auto prefers dbus since the parity gate passed on the rig
+            # (2026-07-07, tests/bt_parity.py: PARITY OK). Every dbus
+            # read still degrades to the cli path on any bus failure.
             try:
                 import dbus  # noqa: F401 — availability probe only
                 _BACKEND = "dbus"
-                log("bt backend: dbus")
+                log(f"bt backend: dbus ({want})")
             except ImportError:
                 log("bt backend: dbus unavailable — using bluetoothctl")
                 _BACKEND = "cli"
-        else:
-            # 'auto' resolves to cli until the dbus backend has passed
-            # the on-rig parity gate (PLAN-bt-dbus.md §8 build order);
-            # flip auto's preference to dbus after that.
-            _BACKEND = "cli"
     return _BACKEND
 
 
