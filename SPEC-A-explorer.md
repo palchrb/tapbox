@@ -198,6 +198,15 @@ Remaining: **4. `/bt` endpoints** + the BT settings pages (pair/known/forget).
 
 ## 8. Open questions
 
+- **Backlight dimming (do on HAT arrival):** the backlight (~20-40mA) is
+  the screen's dominant cost and today it is binary on/off. PWM on BCM13
+  (drive the pin ourselves via gpiozero PWMLED, init st7789 with
+  backlight=None) enables (a) a brightness setting (~40% is fine indoors,
+  saves over half the backlight current) and (b) a dim-stage: at half the
+  screen timeout dim to ~30%, then off — gentler UX and more savings.
+  Also worth trying: the ST7789 sleep-in command (0x10) when blanking, for
+  another ~1-2mA of panel-controller power. Both need the physical screen
+  to validate, so they wait for the HAT.
 - **Earlier boot visuals (product polish):** the app splash appears when
   systemd starts tapbox-ui (~10-15s after power-on); the first ~8-12s are
   dark by physics (firmware + kernel before SPI exists). A kernel-level
