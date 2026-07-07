@@ -424,7 +424,8 @@ def main():
                     f"{int(spos)}s")
             except OSError:
                 pass
-        for _ in range(120):  # give the output <=10 min to return
+        healed = False
+        for i in range(120):  # give the output <=10 min to return
             if audio_ready():
                 time.sleep(2)  # let the transport settle
                 try:
@@ -433,6 +434,21 @@ def main():
                     pass
                 log("audio output is back — resuming")
                 return
+            if i == 6 and not healed:
+                # ~30s without audio: the USB->battery brownout can crash
+                # the BT controller outright, and nothing else heals it
+                # while we sit paused — bt.py ensure re-attaches the
+                # firmware when the controller is dead and reconnects the
+                # speaker.
+                healed = True
+                from tapbox import bt as _bt
+                log("audio still gone — running bluetooth recovery")
+                try:
+                    subprocess.run([sys.executable, _bt.__file__, "ensure"],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=240)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    log(f"bluetooth recovery attempt failed: {e!r}")
             time.sleep(5)
         log("audio output did not come back — staying paused "
             "(position saved; any play command resumes)")

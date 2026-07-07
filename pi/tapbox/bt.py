@@ -83,6 +83,45 @@ def controller_ok():
     return "Powered: yes" in out
 
 
+_SERDEV_DRIVERS = "/sys/bus/serdev/drivers"
+
+
+def _reattach_firmware():
+    """Reload the BT controller firmware. Older Raspberry Pi OS attached
+    the chip via hciuart.service; Bookworm does it in-kernel (serdev), so
+    restarting the (nonexistent) service is a silent no-op there — seen in
+    the field as recover() 'running' while the -110 reset loop continued.
+    Re-probing the serdev device makes the hci_uart driver power-cycle the
+    chip and re-upload the firmware patchram."""
+    code, _out = _run(["systemctl", "restart", "hciuart"], timeout=60)
+    if code == 0:
+        return True
+    try:
+        drivers = os.listdir(_SERDEV_DRIVERS)
+    except OSError:
+        drivers = []
+    for drv in drivers:
+        base = os.path.join(_SERDEV_DRIVERS, drv)
+        try:
+            devs = [d for d in os.listdir(base) if d.startswith("serial")]
+        except OSError:
+            continue
+        for dev in devs:
+            try:
+                with open(os.path.join(base, "unbind"), "w") as f:
+                    f.write(dev)
+                time.sleep(1)
+                with open(os.path.join(base, "bind"), "w") as f:
+                    f.write(dev)
+                log(f"==> Re-probed BT serdev {dev} ({drv}) — firmware "
+                    f"reloaded")
+                return True
+            except OSError as e:
+                log(f"serdev re-probe of {dev} failed: {e}")
+    log("no firmware re-attach path found (no hciuart unit, no serdev)")
+    return False
+
+
 def recover():
     """The Zero 2 W's BT controller can crash outright (kernel logs
     'Bluetooth: hci0: hardware error 0x00', typically under 2.4GHz
@@ -92,7 +131,7 @@ def recover():
     hciuart re-uploads the firmware, then bluetooth + bluealsa return."""
     log("==> Bluetooth controller looks dead — re-attaching firmware...")
     _run(["systemctl", "stop", "bluetooth"], timeout=30)
-    _run(["systemctl", "restart", "hciuart"], timeout=60)
+    _reattach_firmware()
     _run(["systemctl", "start", "bluetooth"], timeout=30)
     for unit in ("bluealsa", "bluealsad"):  # name differs across releases
         _run(["systemctl", "try-restart", unit], timeout=30)
@@ -107,7 +146,7 @@ def recover():
         log("==> Still down — radio power-cycle + second re-attach...")
         _run(["rfkill", "block", "bluetooth"], timeout=10)
         time.sleep(2)
-        _run(["systemctl", "restart", "hciuart"], timeout=60)
+        _reattach_firmware()
         _run(["rfkill", "unblock", "bluetooth"], timeout=10)
         time.sleep(3)
         btctl("power", "on")
