@@ -577,6 +577,16 @@ class App:
 
     # -- rendering ----------------------------------------------------------------
 
+    def splash(self, sub="starting"):
+        """Boot screen: drawn the moment the process starts, long before
+        tapboxd (and the rest of the boot) is ready."""
+        img = Image.new("RGB", (W, H), BG)
+        d = ImageDraw.Draw(img)
+        d.text((W // 2, H // 2 - 16), "TapBox", font=F_BIG, fill=HILITE,
+               anchor="mm")
+        d.text((W // 2, H // 2 + 18), sub, font=F_SMALL, fill=DIM, anchor="mm")
+        self.display.show(img)
+
     def draw_message(self, text):
         img = Image.new("RGB", (W, H), BG)
         d = ImageDraw.Draw(img)
@@ -691,12 +701,19 @@ class App:
         return time.monotonic() - self.last_input > t
 
     def run(self):
+        # Show the splash immediately, then wait for tapboxd — during boot
+        # it is usually a few seconds behind us.
+        ticks = 0
+        while True:
+            try:
+                self.system = api_get("/system", timeout=2)
+                self.settings = api_get("/settings", timeout=2)
+                break
+            except (OSError, ValueError):
+                self.splash("starting" + "." * (ticks % 4))
+                ticks += 1
+                time.sleep(0.7)
         self.load_library()
-        try:
-            self.system = api_get("/system")
-            self.settings = api_get("/settings")
-        except OSError:
-            pass
         log("ready")
         while True:
             self.inputs.gesture_mode = (self.view == "now")
