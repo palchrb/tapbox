@@ -447,7 +447,7 @@ class Orchestrator:
             return {"paused": acted}
 
     def stop(self):
-        """Stop = done: also clear the resume bookmarks, so the next play
+        """Stop = done: also clear the resume bookmark, so the next play
         starts from the top. (Pause / power-off keep the position.)"""
         with self.lock:
             self._stop_child()
@@ -455,17 +455,20 @@ class Orchestrator:
                 go("/player/pause")
             except OSError:
                 pass
-            if self.target and not is_spotify(self.target):
+            # Clear ONLY the current target's bookmark: stopping a podcast
+            # must not wipe the Spotify playlist's position (or vice versa)
+            if self.target and is_spotify(self.target):
+                try:
+                    os.remove(SPOT_BM_FILE)
+                except OSError:
+                    pass
+            elif self.target:
                 try:
                     os.remove(os.path.join(STATE_DIR,
                                            state_key(self.target) + ".json"))
                 except OSError:
                     pass
-            try:
-                os.remove(SPOT_BM_FILE)
-            except OSError:
-                pass
-            log("stop (bookmarks cleared)")
+            log("stop (bookmark cleared)")
             return {"stopped": True}
 
     def command(self, action):
