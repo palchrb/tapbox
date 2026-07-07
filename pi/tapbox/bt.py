@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 MAC_FILE = os.environ.get("TAPBOX_BT_FILE", "/etc/tapbox/bt-headset")
@@ -259,6 +260,95 @@ def ensure():
     except OSError:
         mac = ""
     return connect(mac) if mac else pair_auto()
+
+
+
+
+# --- daemon-facing API (tapboxd's /bt endpoints call these) ----------------------
+
+BT_LOCK = threading.Lock()  # one pairing/connect operation at a time
+
+
+def _out(args, timeout=10):
+    """bluetoothctl stdout (stripped), '' on any failure."""
+    _code, out = btctl(*args, timeout=timeout)
+    return out
+
+
+def bt_cli():
+    """argv prefix for the BT helper subprocess. TAPBOX_PLAY injects a fake
+    CLI in tests; otherwise this very file is executed as a script."""
+    override = os.environ.get("TAPBOX_PLAY")
+    if override:
+        return ["bash", override]
+    return [sys.executable, os.path.abspath(__file__)]
+
+
+def bt_status():
+    configured = None
+    try:
+        with open(MAC_FILE) as f:
+            configured = f.read().strip() or None
+    except OSError:
+        pass
+    devices = {}
+    for line in _out(["devices"]).splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0] == "Device":
+            devices[parts[1]] = {"mac": parts[1], "name": parts[2],
+                                 "paired": False, "connected": False}
+    for filt, key in (("Paired", "paired"), ("Connected", "connected")):
+        out = _out(["devices", filt])
+        if filt == "Paired" and ("Invalid" in out or "Unknown" in out):
+            out = _out(["paired-devices"])  # older bluez
+        for line in out.splitlines():
+            parts = line.split(" ", 2)
+            if len(parts) >= 2 and parts[0] == "Device" and parts[1] in devices:
+                devices[parts[1]][key] = True
+    return {"configured": configured, "pairing": BT_LOCK.locked(),
+            "devices": sorted(devices.values(),
+                              key=lambda d: d["name"].lower())}
+
+
+def bt_action(args, timeout):
+    """Run a bt.py CLI command; None = another operation is in flight."""
+    if not BT_LOCK.acquire(blocking=False):
+        return None
+    try:
+        r = subprocess.run([*bt_cli(), *args], capture_output=True,
+                           text=True, timeout=timeout)
+        out = (r.stdout + "\n" + r.stderr).strip()
+        tail = "\n".join(out.splitlines()[-6:])
+        log(f"bt {' '.join(args)} -> exit {r.returncode}")
+        result = {"ok": r.returncode == 0, "output": tail}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        result = {"ok": False, "output": f"failed: {e}"}
+    finally:
+        BT_LOCK.release()
+    return {**result, **bt_status()}
+
+
+def bt_scan():
+    """~20s discovery; devices in pairing mode show up here. None = busy."""
+    if not BT_LOCK.acquire(blocking=False):
+        return None
+    try:
+        r = subprocess.run([*bt_cli(), "scan-raw"],
+                           capture_output=True, text=True, timeout=60)
+        found = []
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and MAC_RE.match(parts[0]):
+                found.append({"mac": parts[0], "name": parts[1],
+                              "audio": len(parts) > 2 and parts[2] == "yes"})
+        # audio devices first, then by name
+        found.sort(key=lambda d: (not d["audio"], d["name"].lower()))
+        log(f"bt scan -> {len(found)} device(s)")
+        return {"ok": True, "found": found}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "found": [], "output": f"failed: {e}"}
+    finally:
+        BT_LOCK.release()
 
 
 def main():
