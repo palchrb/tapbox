@@ -1,6 +1,6 @@
 # Plan: bt.py step 2 — BlueZ D-Bus port
 
-Status: **in progress** — A0 landed, A1 parity gate PASSED on the rig 2026-07-07 (`auto` now prefers dbus for reads); next: B1. Drafted 2026-07-07 and refined by three
+Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py (run on the rig before install). Pairing stays cli until B2. Next after B1 verification: C (event reconnect daemon). Drafted 2026-07-07 and refined by three
 review passes (architecture, implementation, test) against the codebase
 as of commit `c379b01`. This document is the implementation bible; the
 reviews' full findings are folded in below.

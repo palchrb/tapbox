@@ -209,12 +209,15 @@ def _cli_discover(secs):
     return found
 
 
-# --- primitives: actions (dbus versions land in phase B) -------------------------
+# --- primitives: actions ----------------------------------------------------------
+# Phase B1: connect/disconnect/trust/remove run over D-Bus (typed
+# org.bluez.Error.* names replace the regexes). Pairing stays on the cli
+# backend until phase B2 (Agent1) — bluetoothctl's built-in agent handles
+# the SSP dance for us there.
 
 def pair(mac):
-    """(classification, raw_output_for_log)."""
-    if backend() == "dbus":
-        log("bt dbus: pair via bluetoothctl until phase B")  # PLAN §3 B2
+    """(classification, raw_output_for_log). CLI in every backend until
+    phase B2 registers our own NoInputNoOutput agent."""
     code, out = _ctl("pair", mac, timeout=45)
     if code == 0:
         return PAIR_OK, out
@@ -229,27 +232,71 @@ def pair(mac):
 
 
 def trust(mac):
+    if backend() == "dbus":
+        try:
+            _dbus_trust(mac)
+            return
+        except Exception as e:
+            log(f"bt dbus trust failed ({e.__class__.__name__}) — cli")
     _ctl("trust", mac, timeout=15)
 
 
 def connect_device(mac):
     """(ok, detail) — one attempt; retries are flow logic in bt.py."""
+    if backend() == "dbus":
+        try:
+            return _dbus_connect_device(mac)
+        except Exception as e:  # non-DBus failure only; errors are the API
+            log(f"bt dbus connect failed ({e.__class__.__name__}) — cli")
     code, out = _ctl("connect", mac, timeout=30)
     return code == 0, out
 
 
 def disconnect_device(mac):
+    if backend() == "dbus":
+        try:
+            return _dbus_disconnect_device(mac)
+        except Exception as e:
+            log(f"bt dbus disconnect failed ({e.__class__.__name__}) — cli")
     code, out = _ctl("disconnect", mac, timeout=15)
     return code == 0, out
 
 
 def remove_device(mac):
+    if backend() == "dbus":
+        try:
+            return _dbus_remove_device(mac)
+        except Exception as e:
+            log(f"bt dbus remove failed ({e.__class__.__name__}) — cli")
     code, out = _ctl("remove", mac, timeout=15)
     if code == 0:
         return REMOVE_OK, out
     if "not available" in out.lower():
         return REMOVE_NOT_FOUND, out
     return REMOVE_ERROR, out
+
+
+# error-name mapping: pure functions, unit-testable without a bus --------
+
+def _map_connect_error(name, msg):
+    """AlreadyConnected IS success (matches the cli flow's tolerance);
+    everything else is a classified failure with the typed name kept for
+    the log (bluez >=5.62 puts 'br-connection-page-timeout' etc. in msg)."""
+    if name.endswith(".AlreadyConnected"):
+        return True, "already connected"
+    return False, f"{name}: {msg}"
+
+
+def _map_disconnect_error(name, msg):
+    if name.endswith(".NotConnected"):
+        return True, "not connected"
+    return False, f"{name}: {msg}"
+
+
+def _map_remove_error(name, msg):
+    if name.endswith(".DoesNotExist") or "UnknownObject" in name:
+        return REMOVE_NOT_FOUND, f"{name}: {msg}"
+    return REMOVE_ERROR, f"{name}: {msg}"
 
 
 # --- primitives: bluealsa --------------------------------------------------------
@@ -423,6 +470,51 @@ def _dbus_discover(secs):
     # pairing safety rules live in bt.py and never auto-pick by RSSI)
     return sorted(seen.values(),
                   key=lambda d: -(d["rssi"] if d["rssi"] is not None else -999))
+
+
+def _dbus_device_iface(mac):
+    import dbus
+    return dbus.Interface(_bus().get_object(_BLUEZ, _dev_path(mac)),
+                          "org.bluez.Device1")
+
+
+def _dbus_trust(mac):
+    import dbus
+    props = dbus.Interface(_bus().get_object(_BLUEZ, _dev_path(mac)),
+                           "org.freedesktop.DBus.Properties")
+    props.Set("org.bluez.Device1", "Trusted", dbus.Boolean(True), timeout=15)
+
+
+def _dbus_connect_device(mac):
+    import dbus
+    try:
+        # Device1.Connect — exactly what bluetoothctl calls (NOT
+        # ConnectProfile). Explicit timeout: dbus-python's 25s default
+        # would silently undercut the cli path's 30s budget.
+        _dbus_device_iface(mac).Connect(timeout=30)
+        return True, "Connection successful"
+    except dbus.exceptions.DBusException as e:
+        return _map_connect_error(e.get_dbus_name() or "", str(e))
+
+
+def _dbus_disconnect_device(mac):
+    import dbus
+    try:
+        _dbus_device_iface(mac).Disconnect(timeout=15)
+        return True, "Successful disconnected"
+    except dbus.exceptions.DBusException as e:
+        return _map_disconnect_error(e.get_dbus_name() or "", str(e))
+
+
+def _dbus_remove_device(mac):
+    import dbus
+    adapter = dbus.Interface(_bus().get_object(_BLUEZ, _ADAPTER_PATH),
+                             "org.bluez.Adapter1")
+    try:
+        adapter.RemoveDevice(dbus.ObjectPath(_dev_path(mac)), timeout=15)
+        return REMOVE_OK, "Device has been removed"
+    except dbus.exceptions.DBusException as e:
+        return _map_remove_error(e.get_dbus_name() or "", str(e))
 
 
 def _dbus_a2dp_pcm_present(mac):

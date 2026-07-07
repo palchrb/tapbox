@@ -102,6 +102,14 @@ class Adapter(dbus.service.Object):
         for mac in list(DEVICES):
             if dev_path(mac) == str(path):
                 del DEVICES[mac]
+                return
+        raise _bluez_error("DoesNotExist", "Does Not Exist")
+
+
+def _bluez_error(name, msg):
+    e = dbus.exceptions.DBusException(msg)
+    e._dbus_error_name = "org.bluez.Error." + name
+    return e
 
 
 class Device(dbus.service.Object):
@@ -113,6 +121,28 @@ class Device(dbus.service.Object):
                          in_signature="s", out_signature="a{sv}")
     def GetAll(self, iface):
         return device_props(self.mac)
+
+    @dbus.service.method("org.freedesktop.DBus.Properties",
+                         in_signature="ssv")
+    def Set(self, iface, prop, value):
+        if prop == "Trusted":
+            DEVICES[self.mac]["trusted"] = bool(value)
+
+    @dbus.service.method("org.bluez.Device1")
+    def Connect(self):
+        result = DEVICES[self.mac].get("connect_result", "ok")
+        if result == "ok":
+            DEVICES[self.mac]["connected"] = True
+            return
+        if result == "already-connected":
+            raise _bluez_error("AlreadyConnected", "Already Connected")
+        raise _bluez_error("Failed", "br-connection-page-timeout")
+
+    @dbus.service.method("org.bluez.Device1")
+    def Disconnect(self):
+        if not DEVICES[self.mac]["connected"]:
+            raise _bluez_error("NotConnected", "Not Connected")
+        DEVICES[self.mac]["connected"] = False
 
 
 class BluealsaRoot(dbus.service.Object):
@@ -150,6 +180,16 @@ class Mock(dbus.service.Object):
     @dbus.service.method("org.tapbox.Mock", in_signature="s")
     def DropDevice(self, mac):
         DEVICES.pop(str(mac).upper(), None)
+
+    @dbus.service.method("org.tapbox.Mock", in_signature="ss")
+    def SetConnectResult(self, mac, result):
+        # 'ok' | 'already-connected' | 'failed'
+        DEVICES[str(mac).upper()]["connect_result"] = str(result)
+
+    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+                         out_signature="b")
+    def GetTrusted(self, mac):
+        return bool(DEVICES[str(mac).upper()].get("trusted", False))
 
 
 _NAMES = []  # keep references — dbus-python RELEASES a bus name when
