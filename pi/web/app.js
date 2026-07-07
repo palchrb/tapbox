@@ -414,6 +414,9 @@ function fmtBytes(n) {
 
 async function loadSystem() {
   const sys = await api("/system");
+  // keep the header pill in sync — otherwise it shows a reading up to
+  // 60s older than the settings row and the two disagree
+  renderBatteryPill(sys);
   const rows = [];
   rows.push(["Battery", sys.battery == null ? "unknown"
     : `${Math.round(sys.battery)}%${sys.plugged ? " (charging)" : ""}`]);
@@ -718,17 +721,20 @@ async function wifiJoin(n) {
 
 /* --- header battery pill ---------------------------------------------------- */
 
+function renderBatteryPill(sys) {
+  const b = $("#battery");
+  if (sys.battery == null) {
+    b.textContent = "–";
+    b.classList.remove("low");
+  } else {
+    b.textContent = `${Math.round(sys.battery)}%${sys.plugged ? " ⚡" : ""}`;
+    b.classList.toggle("low", !sys.plugged && sys.battery <= 15);
+  }
+}
+
 async function pollBattery() {
   try {
-    const sys = await api("/system");
-    const b = $("#battery");
-    if (sys.battery == null) {
-      b.textContent = "–";
-      b.classList.remove("low");
-    } else {
-      b.textContent = `${Math.round(sys.battery)}%${sys.plugged ? " ⚡" : ""}`;
-      b.classList.toggle("low", !sys.plugged && sys.battery <= 15);
-    }
+    renderBatteryPill(await api("/system"));
   } catch (e) { /* box offline */ }
 }
 
