@@ -105,6 +105,14 @@
         <option value="1">on</option><option value="0">off</option>
       </select>
     </label>
+    <label>Wi-Fi off when no known network
+      <select id="set-wifioff">
+        <option value="15">after 15 min</option>
+        <option value="30">after 30 min</option>
+        <option value="60">after 60 min</option>
+        <option value="0">never</option>
+      </select>
+    </label>
     <label>Spotify cache size
       <select id="set-spotcache">
         <option value="5">5 GB</option><option value="10">10 GB</option>
@@ -131,11 +139,14 @@
     <p id="wifi-current" class="dim">–</p>
     <div class="controls">
       <button id="btn-wifi-scan">Scan for networks</button>
+      <button id="btn-wifi-reconnect">Reconnect</button>
       <button id="btn-hotspot">Setup hotspot</button>
     </div>
     <div id="wifi-list"></div>
     <p class="dim small">Joining another network moves the box: reconnect your
-    phone to that network and reopen this page (tapbox.local or the new IP).</p>
+    phone to that network and reopen this page (tapbox.local or the new IP).
+    “Reconnect” turns the radio back on and restarts the auto-off timer —
+    same as toggling Wi-Fi on from the box’s screen.</p>
   </div>
   <div class="card">
     <h2>System</h2>

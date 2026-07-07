@@ -302,13 +302,15 @@ async function loadSettings() {
   $("#set-idle").value = String(s.idle_shutdown_min);
   $("#set-spotcache").value = String(s.spotify_cache_gb);
   $("#set-resume").value = String(s.resume_on_boot);
+  $("#set-wifioff").value = String(s.wifi_auto_off_min);
 }
 
 for (const [id, key] of [["#set-screen", "screen_timeout_s"],
                          ["#set-cap", "volume_cap"],
                          ["#set-idle", "idle_shutdown_min"],
                          ["#set-spotcache", "spotify_cache_gb"],
-                         ["#set-resume", "resume_on_boot"]]) {
+                         ["#set-resume", "resume_on_boot"],
+                         ["#set-wifioff", "wifi_auto_off_min"]]) {
   $(id).addEventListener("change", async () => {
     try {
       await api("/settings", { method: "PUT",
@@ -389,6 +391,14 @@ $("#btn-wifi").addEventListener("click", async () => {
     await api("/system/wifi", { method: "POST", body: { enabled: enable } });
     toast(enable ? "Wi-Fi on" : "Wi-Fi off");
     loadSystem();
+  } catch (e) { toast(e.message); }
+});
+
+$("#btn-wifi-reconnect").addEventListener("click", async () => {
+  try {
+    await api("/system/wifi", { method: "POST", body: { enabled: true } });
+    toast("Wi-Fi on — reconnecting…");
+    setTimeout(loadSystem, 4000);
   } catch (e) { toast(e.message); }
 });
 

@@ -34,13 +34,28 @@ def wifi_state():
     return enabled, ssid, ip
 
 
-def set_wifi(enabled):
-    cmd = "unblock" if enabled else "block"
+def _rfkill(enabled):
     try:
-        subprocess.run(["rfkill", cmd, "wifi"], timeout=10)
+        subprocess.run(["rfkill", "unblock" if enabled else "block", "wifi"],
+                       timeout=10)
+        return None
     except (OSError, subprocess.TimeoutExpired) as e:
-        return {"error": str(e)}
-    log(f"wifi {cmd}ed")
+        return str(e)
+
+
+def set_wifi(enabled):
+    """User-facing switch (PWA/screen). Turning wifi ON also grants a fresh
+    auto-off grace window; turning it OFF marks the block as deliberate so
+    the auto-off prober won't sneak it back on."""
+    err = _rfkill(enabled)
+    if err:
+        return {"error": err}
+    log(f"wifi {'unblock' if enabled else 'block'}ed")
+    now = time.monotonic()
+    if enabled:
+        _auto.update(last_ok=now, blocked=False)
+    else:
+        _auto.update(blocked=False)
     en, ssid, ip = wifi_state()
     return {"enabled": en, "ssid": ssid, "ip": ip}
 
@@ -53,6 +68,13 @@ HOTSPOT_SSID = os.environ.get("TAPBOX_HOTSPOT_SSID") \
     or f"TapBox-{socket.gethostname()}"
 HOTSPOT_PSK = os.environ.get("TAPBOX_HOTSPOT_PSK", "tapbox123")
 WATCHDOG_DELAY_S = int(os.environ.get("TAPBOX_WIFI_WATCHDOG_DELAY", "45"))
+# wifi auto-off: a disconnected wpa_supplicant scan-loops constantly
+# (~10-20mA — 5-10% of playback draw); after wifi_auto_off_min without a
+# known network we rfkill-block, then briefly probe every PROBE_INTERVAL
+# so a parent's hotspot at the cabin is still found within ~10 minutes.
+PROBE_INTERVAL_S = int(os.environ.get("TAPBOX_WIFI_PROBE_INTERVAL", "600"))
+PROBE_WINDOW_S = int(os.environ.get("TAPBOX_WIFI_PROBE_WINDOW", "30"))
+_auto = {"last_ok": 0.0, "blocked": False, "next_probe": 0.0}
 _last_scan = {"networks": [], "at": 0.0}  # wlan0 can't scan while in AP mode
 
 
@@ -108,30 +130,74 @@ def stop_hotspot():
     log("hotspot stopped")
 
 
+def _link_up():
+    try:
+        with open("/sys/class/net/wlan0/operstate") as f:
+            return f.read().strip() == "up"
+    except OSError:
+        return False
+
+
 def _wifi_watchdog():
-    """Fresh-box onboarding: no saved wifi network and nothing connected
+    """Two jobs, both keyed on 'the link is down':
+
+    Fresh-box onboarding: no saved wifi network and nothing connected
     -> start the setup hotspot. Boxes WITH saved networks never auto-AP
     (a cabin trip must not burn battery on a pointless hotspot) — there
-    the PWA/screen button starts it explicitly."""
+    the PWA/screen button starts it explicitly.
+
+    Wifi auto-off: a box with saved networks that can't find any of them
+    scan-loops for nothing; after wifi_auto_off_min (0 = never) we block
+    the radio, then re-probe for PROBE_WINDOW_S every PROBE_INTERVAL_S and
+    stay on only when a known network actually takes us in. Turning wifi
+    on via PWA/screen (set_wifi) always grants a fresh grace window; a
+    manual 'wifi off' is never probed back on. Never triggers during
+    playback of streams by construction — streaming means the link is up."""
+    from tapbox.sysinfo import load_settings
     time.sleep(WATCHDOG_DELAY_S)
+    _auto["last_ok"] = time.monotonic()
     while True:
         try:
             # Cheap first: one sysfs read. Only when the link is down do we
             # pay for the rfkill/iw/nmcli subprocess probes — a battery box
             # must not spawn processes every 30s around the clock.
-            try:
-                with open("/sys/class/net/wlan0/operstate") as f:
-                    link_up = f.read().strip() == "up"
-            except OSError:
-                link_up = False
-            if link_up:
+            now = time.monotonic()
+            if _link_up():
+                _auto.update(last_ok=now, blocked=False)
                 time.sleep(30)
                 continue
             enabled, ssid, _ip = wifi_state()
-            if (enabled and not ssid and not hotspot_active()
-                    and not _known_wifi_names()):
-                log("no saved wifi + not connected — starting setup hotspot")
-                start_hotspot()
+            if enabled:
+                if ssid or hotspot_active():
+                    _auto.update(last_ok=now, blocked=False)
+                elif not _known_wifi_names():
+                    log("no saved wifi + not connected — starting setup "
+                        "hotspot")
+                    start_hotspot()
+                else:
+                    auto_min = load_settings().get("wifi_auto_off_min", 0)
+                    if auto_min and now - _auto["last_ok"] > auto_min * 60:
+                        log(f"no known network for {auto_min} min — "
+                            f"wifi off (probing every "
+                            f"{PROBE_INTERVAL_S // 60} min)")
+                        _rfkill(False)
+                        _auto.update(blocked=True,
+                                     next_probe=now + PROBE_INTERVAL_S)
+            elif _auto["blocked"] and now >= _auto["next_probe"]:
+                log("wifi probe: looking for known networks")
+                _rfkill(True)  # NetworkManager scans + auto-joins known nets
+                found = None
+                deadline = time.monotonic() + PROBE_WINDOW_S
+                while time.monotonic() < deadline and not found:
+                    time.sleep(5)
+                    _en, found, _ = wifi_state()
+                if found:
+                    log(f"wifi probe: reconnected to {found!r}")
+                    _auto.update(last_ok=time.monotonic(), blocked=False)
+                else:
+                    log("wifi probe: nothing known nearby — off again")
+                    _rfkill(False)
+                    _auto["next_probe"] = time.monotonic() + PROBE_INTERVAL_S
         except Exception as e:
             log(f"wifi watchdog error: {e!r}")
         time.sleep(30)
