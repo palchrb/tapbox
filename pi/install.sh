@@ -397,7 +397,25 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
-install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  || true
+IDLE_CHANGED=0
+install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  && IDLE_CHANGED=1
+# Idle auto-shutdown: enabled by default — the PWA setting
+# (idle_shutdown_min, 0 = never) is the actual on/off knob and idle.py
+# re-reads it live. Previously this service was opt-in via
+# 'tapbox-power idle-on', which made the PWA setting a silent no-op.
+write_if_changed /etc/systemd/system/tapbox-idle.service <<'EOF2' && IDLE_CHANGED=1
+[Unit]
+Description=TapBox idle auto-shutdown
+After=tapbox-daemon.service
+
+[Service]
+ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-idle
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF2
 
 DAEMON_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
@@ -482,7 +500,7 @@ chmod 644 /etc/systemd/system/tapbox-*.service \
   /etc/systemd/system/go-librespot.service 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
-  tapbox-buttons.service tapbox-daemon.service
+  tapbox-buttons.service tapbox-daemon.service tapbox-idle.service
 # One-time migration: earlier installs enabled tapbox-rfid before the PN532
 # existed. Switch it to the same opt-in contract as tapbox-ui — but only
 # once, so an enable after wiring the reader sticks across installs.
@@ -496,6 +514,7 @@ if [[ ! -f /var/lib/tapbox/.rfid-opt-in ]]; then
 fi
 [[ $GO_CHANGED -eq 1 || ${GO_RESTART_NEEDED:-0} -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
+[[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart tapbox-idle.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null \
   && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }

@@ -186,28 +186,10 @@ EOF
     echo "Battery logging stopped — data kept in $LOG_FILE"
     ;;
   idle-on)
-    mins="${2:-30}"
-    idle_bin=/usr/local/bin/tapbox-idle
-    if [[ ! -x $idle_bin ]]; then
-      echo "tapbox-idle not installed — run install.sh first" >&2
-      exit 1
-    fi
-    cat > /etc/systemd/system/tapbox-idle.service <<EOF
-[Unit]
-Description=TapBox idle auto-shutdown
-
-[Service]
-ExecStart=/opt/tapbox/venv/bin/python3 $idle_bin $mins
-Restart=always
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
+    # install.sh installs+enables tapbox-idle by default now; this stays
+    # as a convenience alias (the PWA setting is the real knob)
     systemctl enable --now tapbox-idle.service
-    echo "Auto-shutdown ON: powers off after ${mins} min without playback."
-    echo "Press the PiSugar button to wake it (cold boot ~25-35s)."
+    echo "tapbox-idle enabled — timeout follows the PWA setting (0 = never)."
     ;;
   idle-off)
     systemctl disable --now tapbox-idle.service 2>/dev/null || true
