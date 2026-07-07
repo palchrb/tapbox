@@ -198,6 +198,15 @@ Remaining: **4. `/bt` endpoints** + the BT settings pages (pair/known/forget).
 
 ## 8. Open questions
 
+- **Earlier boot visuals (product polish):** the app splash appears when
+  systemd starts tapbox-ui (~10-15s after power-on); the first ~8-12s are
+  dark by physics (firmware + kernel before SPI exists). A kernel-level
+  panel driver (`panel-mipi-dbi` overlay with an ST7789 firmware blob)
+  could paint a logo at ~5-8s — but then the KERNEL owns the display and
+  our userspace st7789 driver must be rewritten against DRM/fbdev. Only
+  worth it together with general boot-time work (custom init, quiet
+  kernel); revisit at product enclosure time.
+
 - Button layout after kid-testing (3-year-old vs 6-year-old ergonomics differ).
 - Should the screen show cover art (Spotify images via the API —
   go-librespot's `server.image_size` picks the delivered size, 240x240ish
