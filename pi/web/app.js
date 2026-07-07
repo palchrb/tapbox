@@ -134,9 +134,20 @@ async function pollStatus() {
     if (st.artwork) {
       const src = st.artwork.startsWith("http")
         ? st.artwork : `/artwork?path=${encodeURIComponent(st.artwork)}`;
-      if (art.dataset.src !== src) { art.src = src; art.dataset.src = src; }
-      art.hidden = false;
-    } else {
+      if (art.dataset.src !== src) {
+        // decode off-screen and swap only when ready — no blank flash
+        art.dataset.src = src;
+        const pre = new Image();
+        pre.onload = () => {
+          if (art.dataset.src === src) { art.src = src; art.hidden = false; }
+        };
+        pre.src = src;
+      } else {
+        art.hidden = false;
+      }
+    } else if (!st.title) {
+      // drop the art only when there is genuinely nothing on; a null
+      // artwork WITH a title is a transition blip — keep the last image
       art.hidden = true;
       art.dataset.src = "";
     }
