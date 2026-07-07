@@ -92,8 +92,9 @@ install_if_changed() {  # <mode> <src> <dest>
 
 PKGS=(bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
       mpv yt-dlp python3-venv python3-dev i2c-tools fonts-dejavu-core
-      avahi-daemon ffmpeg netcat-openbsd)  # ffmpeg: HLS->m4a episode cache;
+      avahi-daemon ffmpeg netcat-openbsd   # ffmpeg: HLS->m4a episode cache;
                                            # nc: power.sh battery logger
+      python3-dbus python3-gi)             # BlueZ D-Bus backend (PLAN-bt-dbus.md)
 missing=()
 for p in "${PKGS[@]}"; do have_pkg "$p" || missing+=("$p"); done
 if ((${#missing[@]})); then

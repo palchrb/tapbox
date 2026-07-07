@@ -145,6 +145,13 @@ def main():
     if not shutil.which("dbus-daemon"):
         print("SKIP dbus side: dbus-daemon not available (run on the rig)")
         return 0
+    probe = subprocess.run(
+        [sys.executable, "-c", "import dbus, gi"], capture_output=True)
+    if probe.returncode != 0:
+        print("SKIP dbus side: python3-dbus/python3-gi not installed —")
+        print("  sudo apt install python3-dbus python3-gi")
+        print("  (or just: sudo ./pi/install.sh — it installs them now)")
+        return 0
 
     # dbus side: private bus + fake service, same logical state
     addr = subprocess.run(["dbus-daemon", "--session", "--print-address",
