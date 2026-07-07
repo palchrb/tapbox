@@ -69,7 +69,9 @@ print(json.dumps(out))
                        capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise SystemExit(f"snapshot failed:\n{r.stdout}\n{r.stderr}")
-    return json.loads(r.stdout.strip().splitlines()[-1])
+    lines = r.stdout.strip().splitlines()
+    noise = [ln for ln in lines[:-1]] + r.stderr.strip().splitlines()
+    return json.loads(lines[-1]), noise
 
 
 def cli_fixture_bin(tmp):
@@ -105,8 +107,8 @@ def seed_fake_bluezd(bus_addr):
                             env=env, stdout=subprocess.PIPE, text=True)
     line = proc.stdout.readline()
     assert "ready" in line, line
-    call = ["dbus-send", "--bus=" + bus_addr, "--dest=org.bluez",
-            "--type=method_call", "/org/tapbox/mock"]
+    call = ["dbus-send", "--bus=" + bus_addr, "--print-reply",
+            "--dest=org.bluez", "--type=method_call", "/org/tapbox/mock"]
     subprocess.run(call + ["org.tapbox.Mock.AddDevice",
                            f"string:{GO}", "string:JBL GO",
                            "boolean:true", "boolean:false", "int16:0"],
@@ -134,7 +136,8 @@ def main():
     # cli side: PATH fakes — runs everywhere, validates the fixture
     env_cli = fresh_env(tmp, "cli")
     env_cli["PATH"] = cli_fixture_bin(tmp) + ":" + env_cli["PATH"]
-    cli = normalize(snapshot(env_cli))
+    cli_snap, _ = snapshot(env_cli)
+    cli = normalize(cli_snap)
     assert cli["status_devices"] == EXPECTED_STATUS_DEVICES, cli
     assert cli["info_go"] == {"present": True, "paired": True,
                               "connected": False, "name": "JBL GO"}, cli
@@ -161,7 +164,7 @@ def main():
     try:
         env_dbus = fresh_env(tmp, "dbus")
         env_dbus["DBUS_SYSTEM_BUS_ADDRESS"] = addr
-        dbus_snap = snapshot(env_dbus)
+        dbus_snap, noise = snapshot(env_dbus)
         assert dbus_snap["backend"] == "dbus", \
             f"dbus backend not selected: {dbus_snap['backend']}"
         db = normalize(dbus_snap)
@@ -176,6 +179,10 @@ def main():
     print("PARITY MISMATCH:")
     print("cli :", json.dumps(cli, indent=2, sort_keys=True))
     print("dbus:", json.dumps(db, indent=2, sort_keys=True))
+    if noise:
+        print("dbus-side diagnostics (backend fallbacks etc.):")
+        for ln in noise:
+            print("  |", ln)
     return 1
 
 

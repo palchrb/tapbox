@@ -282,7 +282,13 @@ _BLUEALSA = "org.bluealsa"
 
 def _bus():
     import dbus
-    return dbus.SystemBus()  # honors DBUS_SYSTEM_BUS_ADDRESS (test harness)
+    addr = (os.environ.get("TAPBOX_DBUS_ADDRESS")
+            or os.environ.get("DBUS_SYSTEM_BUS_ADDRESS"))
+    if addr:
+        # explicit connection: the test harness's private bus must win
+        # even where libdbus ignores the env (setuid, scrubbing, ...)
+        return dbus.bus.BusConnection(addr)
+    return dbus.SystemBus()
 
 
 def _managed(service, path="/"):
@@ -338,8 +344,10 @@ def _dbus_device_info(mac):
                                "org.freedesktop.DBus.Properties")
         d = props.GetAll("org.bluez.Device1", timeout=10)
     except dbus.exceptions.DBusException as e:
-        if "UnknownObject" in (e.get_dbus_name() or ""):
-            # unlike the CLI, absence here is authoritative
+        name = e.get_dbus_name() or ""
+        # real bluez: UnknownObject; dbus-python fakes: UnknownMethod —
+        # both mean "no such device object", and absence is authoritative
+        if "UnknownObject" in name or "UnknownMethod" in name:
             return {"present": False, "paired": False, "connected": False,
                     "name": None}
         raise

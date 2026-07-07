@@ -24,15 +24,19 @@ machines). Deliberately minimal: grow it with phase B (Pair errors via
 SetPairResult, Agent1 callbacks) per the plan's test strategy.
 """
 
+import os
 import sys
 
 import dbus
+import dbus.bus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
 DBusGMainLoop(set_as_default=True)
-BUS = dbus.SystemBus()  # honors DBUS_SYSTEM_BUS_ADDRESS
+_ADDR = os.environ.get("DBUS_SYSTEM_BUS_ADDRESS")
+# explicit connection: never risk landing on the real system bus
+BUS = dbus.bus.BusConnection(_ADDR) if _ADDR else dbus.SystemBus()
 
 DEVICES = {}   # mac -> {name, paired, connected, rssi}
 PCMS = {}      # mac -> bool
@@ -151,7 +155,7 @@ class Mock(dbus.service.Object):
 def main():
     for name in ("org.bluez", "org.bluealsa"):
         dbus.service.BusName(name, BUS)
-    BluezRoot(BUS, "/org/bluez")
+    BluezRoot(BUS, "/")  # real bluez exports ObjectManager at the root
     Adapter(BUS, "/org/bluez/hci0")
     BluealsaRoot(BUS, "/org/bluealsa")
     Mock(BUS, "/org/tapbox/mock")
