@@ -136,7 +136,7 @@ from tapbox.netmgmt import (  # noqa: E402
     stop_hotspot, wifi_connect, wifi_forget, wifi_scan, wifi_state,
     _wifi_watchdog)
 from tapbox.output import (  # noqa: E402
-    OUTPUT_PCMS, OUT_FILE, current_output, _i2s_card_present,
+    OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
     _retarget_go_librespot)
 from tapbox.sysinfo import (  # noqa: E402
     load_settings, shutdown, system_status, update_settings)
@@ -865,22 +865,7 @@ def _spotify_bookmarker():
 
 
 def _audio_ready():
-    """Is the active output able to make sound yet? BT speakers reconnect
-    a little while after boot; don't start playback into a void."""
-    if current_output()["output"] == "local":
-        return _i2s_card_present()
-    try:
-        mac = open(_bt.MAC_FILE).read().strip()
-    except OSError:
-        return True  # no speaker configured — nothing to wait for
-    if not mac:
-        return True
-    try:
-        r = subprocess.run(["bluealsa-aplay", "-L"], capture_output=True,
-                           text=True, timeout=10)
-        return mac.lower() in r.stdout.lower()
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    return audio_ready()  # shared logic lives in tapbox.output
 
 
 def _flag_was_playing():

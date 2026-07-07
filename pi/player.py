@@ -47,6 +47,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
             sys.path.insert(0, _p)
         break
 from tapbox import content, mpv as _mpv, spotify  # noqa: E402
+from tapbox.output import audio_ready  # noqa: E402
 from tapbox.paths import STATE_DIR  # noqa: E402
 
 is_spotify = spotify.is_spotify
@@ -359,16 +360,68 @@ def main():
         except OSError:
             log("could not seek to resume position — playing from start")
 
+    def survive_dead_audio(stable):
+        """When the audio output dies mid-play (BT chip crash, speaker
+        powered off), mpv burns through the queue silently — every file
+        "ends" within seconds. Pause, roll back to the last episode that
+        was actually audible, and wait for the output to come back."""
+        log("tracks are flying past with no audio — output looks dead; "
+            "pausing")
+        try:
+            ipc(sock, "set_property", "pause", True)
+        except OSError:
+            return
+        if stable and stable[0] in urls:
+            spath, spos = stable
+            try:
+                ipc(sock, "playlist-play-index", urls.index(spath))
+                for _ in range(50):  # wait for the file to load
+                    if ipc_get(sock, "path") == spath \
+                            and ipc_get(sock, "duration"):
+                        break
+                    time.sleep(0.2)
+                ipc(sock, "set_property", "pause", True)
+                ipc(sock, "seek", int(spos), "absolute")
+                log(f"rolled back to the last audible episode at "
+                    f"{int(spos)}s")
+            except OSError:
+                pass
+        for _ in range(120):  # give the output <=10 min to return
+            if audio_ready():
+                time.sleep(2)  # let the transport settle
+                try:
+                    ipc(sock, "set_property", "pause", False)
+                except OSError:
+                    pass
+                log("audio output is back — resuming")
+                return
+            time.sleep(5)
+        log("audio output did not come back — staying paused "
+            "(position saved; any play command resumes)")
+
     # Poll position and persist it until mpv exits; log track changes
     os.makedirs(STATE_DIR, exist_ok=True)
     now_file = os.path.join(STATE_DIR, "now-playing.json")
     last_np = None
     last_title = None
     last_beat = 0.0
+    prev_path, track_started = None, time.monotonic()
+    fast_skips, stable = 0, None
     while proc.poll() is None:
         try:
             path = ipc_get(sock, "path")
             paused = ipc_get(sock, "pause")
+            now_m = time.monotonic()
+            if path and path != prev_path:
+                if prev_path is not None and not paused:
+                    fast_skips = fast_skips + 1 \
+                        if now_m - track_started < 10 else 0
+                prev_path, track_started = path, now_m
+                if fast_skips >= 3:
+                    survive_dead_audio(stable)
+                    fast_skips, prev_path = 0, None
+                    track_started = time.monotonic()
+                    continue
             # Publish which episode is playing + the pause state (tapboxd
             # reads the FILE at shutdown — IPC would race mpv's death);
             # written when the track or pause state changes.
@@ -390,6 +443,8 @@ def main():
             # it (its "position" is the live-edge timestamp, not progress).
             live = ipc_get(sock, "duration") in (None, 0)
             if path and isinstance(pos, (int, float)):
+                if not paused and now_m - track_started > 15:
+                    stable = (path, pos)  # last spot that audibly played
                 if not live:
                     save_state(key, path, pos, ids.get(path))
                 # heartbeat so a quiet-but-playing stream isn't mistaken

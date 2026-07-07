@@ -216,16 +216,31 @@ def read_uid_once(gate, fake_uid):
                 pass
 
 
+def _wait_for_hardware(fn, what):
+    """Retry init forever instead of exiting: the PN532 may simply not be
+    wired yet (module on order), and a crash-looping service spams the
+    journal and systemd restart counters for no reason."""
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except Exception as e:
+            attempt += 1
+            if attempt == 1:
+                log.error("%s failed (%s) — is the module wired and I2C "
+                          "enabled? Retrying every 60s.", what, e)
+            elif attempt % 60 == 0:  # then once an hour
+                log.info("%s still failing (%s) — retrying every 60s.",
+                         what, e)
+            time.sleep(60)
+
+
 def main_slot():
     spec = os.environ["SLOT_GPIO"]
     present_low = os.environ.get("SLOT_PRESENT", "low").lower() != "high"
     fake_uid = os.environ.get("FAKE_UID") or None
-    try:
-        card_present, desc = make_presence_probe(spec, present_low)
-    except Exception as e:
-        log.error("cannot open slot sensor %s (%s). Retrying in 60s.", spec, e)
-        time.sleep(60)
-        sys.exit(1)  # systemd restarts us
+    card_present, desc = _wait_for_hardware(
+        lambda: make_presence_probe(spec, present_low), "slot sensor open")
     gate = None
     gate_bcm = os.environ.get("PN532_POWER_GPIO")
     if gate_bcm:
@@ -275,13 +290,8 @@ def main_slot():
 # --- poll mode (no slot switch wired) -------------------------------------------
 
 def main_poll():
-    try:
-        pn532, ver, rev = init_reader()
-    except Exception as e:  # no reader, i2c disabled, lib missing, ...
-        log.error("PN532 init failed (%s) — is the module wired and I2C "
-                  "enabled? Retrying in 60s.", e)
-        time.sleep(60)
-        sys.exit(1)  # systemd restarts us
+    # no reader, i2c disabled, lib missing, ... -> wait, don't crash-loop
+    pn532, ver, rev = _wait_for_hardware(init_reader, "PN532 init")
 
     # Power: the RF field burns the power, so between polls the PN532 is
     # put in its power-down state (~uA; the adafruit driver wakes it on the

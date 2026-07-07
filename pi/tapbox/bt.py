@@ -64,7 +64,36 @@ def bt_up():
     install), which makes every scan come up empty."""
     _run(["rfkill", "unblock", "bluetooth"], timeout=10)
     btctl("power", "on")
+    if not controller_ok():
+        recover()
     btctl("pairable", "on")  # bonding pairing — see module docstring
+
+
+def controller_ok():
+    _c, out = btctl("show", timeout=10)
+    return "Powered: yes" in out
+
+
+def recover():
+    """The Zero 2 W's BT controller can crash outright (kernel logs
+    'Bluetooth: hci0: hardware error 0x00', typically under 2.4GHz
+    wifi/BT coexistence load); after that every HCI command times out
+    ('Opcode 0x0c03 failed: -110') until the firmware is re-attached —
+    a reboot used to be the only cure. Re-init the whole chain instead:
+    hciuart re-uploads the firmware, then bluetooth + bluealsa return."""
+    log("==> Bluetooth controller looks dead — re-attaching firmware...")
+    _run(["systemctl", "stop", "bluetooth"], timeout=30)
+    _run(["systemctl", "restart", "hciuart"], timeout=60)
+    _run(["systemctl", "start", "bluetooth"], timeout=30)
+    for unit in ("bluealsa", "bluealsad"):  # name differs across releases
+        _run(["systemctl", "try-restart", unit], timeout=30)
+    time.sleep(3)
+    _run(["rfkill", "unblock", "bluetooth"], timeout=10)
+    btctl("power", "on")
+    ok = controller_ok()
+    log("==> Controller is back." if ok
+        else "==> Controller still down — a power cycle may be needed.")
+    return ok
 
 
 def discover(scan_secs=None):
@@ -240,8 +269,13 @@ def pair_auto(name_filter=None):
 
 
 def forget(mac):
+    bt_up()  # a wedged controller made remove fail silently
     btctl("disconnect", mac, timeout=15)
-    btctl("remove", mac, timeout=15)
+    code, out = btctl("remove", mac, timeout=15)
+    if code != 0 and "not available" not in out.lower():
+        tail = out.strip().splitlines()[-1] if out.strip() else "unknown error"
+        log(f"Could not remove {mac}: {tail}")
+        return False
     try:
         active = open(MAC_FILE).read().strip()
     except OSError:
@@ -292,19 +326,18 @@ def bt_status():
     except OSError:
         pass
     devices = {}
-    for line in _out(["devices"]).splitlines():
+    out = _out(["devices", "Paired"])
+    if "Invalid" in out or "Unknown" in out:
+        out = _out(["paired-devices"])  # older bluez
+    for line in out.splitlines():
         parts = line.split(" ", 2)
         if len(parts) == 3 and parts[0] == "Device":
             devices[parts[1]] = {"mac": parts[1], "name": parts[2],
-                                 "paired": False, "connected": False}
-    for filt, key in (("Paired", "paired"), ("Connected", "connected")):
-        out = _out(["devices", filt])
-        if filt == "Paired" and ("Invalid" in out or "Unknown" in out):
-            out = _out(["paired-devices"])  # older bluez
-        for line in out.splitlines():
-            parts = line.split(" ", 2)
-            if len(parts) >= 2 and parts[0] == "Device" and parts[1] in devices:
-                devices[parts[1]][key] = True
+                                 "paired": True, "connected": False}
+    for line in _out(["devices", "Connected"]).splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) >= 2 and parts[0] == "Device" and parts[1] in devices:
+            devices[parts[1]]["connected"] = True
     return {"configured": configured, "pairing": BT_LOCK.locked(),
             "devices": sorted(devices.values(),
                               key=lambda d: d["name"].lower())}
@@ -373,6 +406,8 @@ def main():
         return 0 if fn(args[1]) else 1
     if cmd == "ensure":
         return 0 if ensure() else 1
+    if cmd == "recover":
+        return 0 if recover() else 1
     print(__doc__.split("CLI", 1)[1], file=sys.stderr)
     return 1
 
