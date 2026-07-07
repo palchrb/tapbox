@@ -23,6 +23,15 @@ def log(msg):
     print(f"tapboxd: {msg}", flush=True)
 
 
+def state_key(target):
+    """The resume-bookmark key for a target (same rule as player.py):
+    the podcast slug for NRK links, else a hash of the target."""
+    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
+    if m:
+        return m.group(1)
+    return hashlib.sha1(target.encode()).hexdigest()[:12]
+
+
 # --- library (parent-curated named links) --------------------------------------
 
 def _slug(s):

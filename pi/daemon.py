@@ -126,8 +126,8 @@ def player_path():
 from tapbox import bt as _bt  # noqa: E402
 from tapbox.library import (  # noqa: E402
     ORDERS, artwork_allowed, expand_target, find_entry, load_library,
-    normalize_library, save_library, _cache_sweeper, _natural_order,
-    _sync_wake)
+    normalize_library, save_library, state_key, _cache_sweeper,
+    _natural_order, _sync_wake)
 from tapbox.netmgmt import (  # noqa: E402
     HOTSPOT_PSK, HOTSPOT_SSID, hotspot_active, set_wifi, start_hotspot,
     stop_hotspot, wifi_connect, wifi_forget, wifi_scan, _wifi_watchdog)
@@ -467,6 +467,32 @@ class Orchestrator:
             # position lives on the track object (ms, live-extrapolated)
             out["position"] = (track.get("position") or 0) / 1000
             out["artwork"] = out["spotify"]["artwork"]
+        # Ghost session: nothing is live, but a bookmarked target is
+        # remembered -> present it as paused-at-position instead of
+        # "nothing playing". Pressing play resumes exactly there.
+        if (not mpv_alive and out["title"] is None and target
+                and not is_spotify(target)):
+            try:
+                with open(os.path.join(STATE_DIR,
+                                       state_key(target) + ".json")) as f:
+                    bk = json.load(f)
+            except (OSError, ValueError):
+                bk = None
+            if bk and bk.get("pos"):
+                out["source"] = "mpv"
+                out["position"] = bk.get("pos")
+                try:
+                    with open(NOW_FILE) as f:
+                        now = json.load(f)
+                except (OSError, ValueError):
+                    now = {}
+                if now.get("target") == target:
+                    out["title"] = now.get("title")
+                    out["artwork"] = now.get("image")
+                    out["episode_id"] = now.get("id")
+                    out["duration"] = now.get("duration")
+                if not out["title"]:
+                    out["title"] = os.path.basename(target.rstrip("/"))
         return out
 
 

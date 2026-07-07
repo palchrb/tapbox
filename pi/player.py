@@ -58,11 +58,7 @@ def log(msg):
     print(f"player: {msg}", file=sys.stderr, flush=True)
 
 
-def state_key(target):
-    m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
-    if m:
-        return m.group(1)
-    return hashlib.sha1(target.encode()).hexdigest()[:12]
+from tapbox.library import state_key  # noqa: E402  (shared with tapboxd)
 
 
 def state_path(key):
@@ -340,6 +336,7 @@ def main():
                                    "title": titles.get(path),
                                    "image": images.get(path),
                                    "paused": bool(paused),
+                                   "duration": ipc_get(sock, "duration"),
                                    "target": target}, f)
                     os.replace(now_file + ".tmp", now_file)
                 except OSError:
