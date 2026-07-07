@@ -299,6 +299,7 @@ class App:
         self.last_status = 0.0
         self.last_system = 0.0
         self.last_input = time.monotonic()
+        self.user_touched = False
         self.dirty = True
         self.last_render = 0.0
         self.artwork_cache = {}
@@ -315,6 +316,17 @@ class App:
             except OSError:
                 pass
             self.dirty = True
+        if (self.view == "home" and not self.user_touched
+                and now - self.last_status > 2.0):
+            self.last_status = now
+            try:
+                self.status = api_get("/status")
+            except (OSError, ValueError):
+                self.status = {}
+            if self.status.get("playing"):
+                self.stack = [("home", 0)]
+                self.view = "now"
+                self.dirty = True
         if self.view in ("now", "episodes") \
                 and now - self.last_status > STATUS_POLL_S:
             self.last_status = now
@@ -363,6 +375,7 @@ class App:
 
     def handle(self, ev):
         self.dirty = True
+        self.user_touched = True
         if ev == "settings":
             if self.view != "settings":
                 self.push("settings")
@@ -715,6 +728,15 @@ class App:
                 ticks += 1
                 time.sleep(0.7)
         self.load_library()
+        # Come back where we were: a live session (boot resume) or a
+        # bookmarked-paused ghost puts the screen straight on now-playing.
+        try:
+            self.status = api_get("/status", timeout=3)
+        except (OSError, ValueError):
+            self.status = {}
+        if self.status.get("title"):
+            self.stack = [("home", 0)]
+            self.view = "now"
         log("ready")
         while True:
             self.inputs.gesture_mode = (self.view == "now")
