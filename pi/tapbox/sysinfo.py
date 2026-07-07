@@ -124,6 +124,15 @@ def pisugar_get(prop):
                     return None
 
 
+def _safe_volts(raw):
+    """JSON-safe battery voltage; sane Li-Ion range only (nan/inf fail)."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 2) if 2.0 <= v <= 6.0 else None
+
+
 def _safe_pct(raw):
     """A JSON-safe battery percentage: pisugar can return nan/inf while
     the charger toggles, and json.dumps(nan) is invalid JSON."""
@@ -149,6 +158,7 @@ def _dir_size(path):
 
 def system_status():
     batt = pisugar_get("battery")
+    volts = pisugar_get("battery_v")
     plugged = pisugar_get("battery_power_plugged")
     disk = None
     try:
@@ -170,6 +180,7 @@ def system_status():
         pass
     enabled, ssid, ip = netmgmt.wifi_state()
     return {"battery": _safe_pct(batt),
+            "battery_v": _safe_volts(volts),
             "plugged": plugged == "true",
             "disk": disk, "caches": caches, "cpu_temp": temp,
             "wifi": {"enabled": enabled, "ssid": ssid, "ip": ip,

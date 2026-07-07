@@ -334,6 +334,9 @@ async function loadSystem() {
   const rows = [];
   rows.push(["Battery", sys.battery == null ? "unknown"
     : `${Math.round(sys.battery)}%${sys.plugged ? " (charging)" : ""}`]);
+  if (sys.battery_v != null) {
+    rows.push(["Battery voltage", `${sys.battery_v.toFixed(2)} V`]);
+  }
   if (sys.disk) {
     rows.push(["SD card free", `${fmtBytes(sys.disk.free)} of ${fmtBytes(sys.disk.total)}`]);
   }
