@@ -59,7 +59,7 @@ Explicitly **not** trying to be:
 
 | Layer | Choice | License | Notes |
 |---|---|---|---|
-| OS | Raspberry Pi OS Lite (Bookworm) | Debian mix | Standard Pi OS |
+| OS | Raspberry Pi OS Lite (Trixie) | Debian mix | Standard Pi OS |
 | Spotify backend | [go-librespot](https://github.com/devgianlu/go-librespot) (daemon, HTTP API :3678) | GPL-3.0 | Zeroconf login ("pick tapbox in the Spotify app") is the LOCKED onboarding UX. Phone doubles as remote (same Connect session). Separate binary over HTTP, no linking issues |
 | Local/podcast/radio playback | mpv (IPC socket) | GPL-2.0 | Used as binary. Resamples everything to 44.1kHz (BT/SBC requirement) |
 | Content expansion | `nrk.py` | Apache 2.0 | NRK podcasts/series/live channels via psapi (incremental catalog cache), any RSS feed, local folders. Offline cache: newest-N episode download (mp3 direct, HLS→m4a) |

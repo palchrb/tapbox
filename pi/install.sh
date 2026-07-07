@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# TapBox test rig — install script for Raspberry Pi Zero 2 W (Raspberry Pi OS Bookworm)
+# TapBox test rig — install script for Raspberry Pi Zero 2 W (Raspberry Pi OS, Trixie/Bookworm)
 #
 # Installs:
 #   - go-librespot : Spotify Connect daemon with a local HTTP API (this is our

@@ -1,4 +1,4 @@
-"""WiFi management via nmcli (Bookworm's NetworkManager): scan/join/forget,
+"""WiFi management via nmcli (RPi OS ships NetworkManager): scan/join/forget,
 the setup hotspot with its fresh-box watchdog, and the rfkill on/off toggle.
 Extracted verbatim from daemon.py."""
 
@@ -75,7 +75,7 @@ def set_wifi(enabled):
     return {"enabled": en, "ssid": ssid, "ip": ip}
 
 
-# --- wifi management (nmcli — Bookworm's NetworkManager) --------------------------
+# --- wifi management (nmcli — RPi OS's NetworkManager) -----------------------------
 
 WIFI_LOCK = threading.Lock()  # one scan/connect at a time
 HOTSPOT_CON = "tapbox-hotspot"

@@ -87,10 +87,19 @@ def bt_up():
     btbus.adapter_pairable_on()  # bonding pairing — see module docstring
 
 
+_HCICONFIG_WARNED = [False]
+
+
 def _hci_up():
     """Is the controller actually running? Asks the KERNEL (one ioctl) —
     bluez's 'Powered: yes' is stale state after a firmware crash."""
-    _c, out = _run(["hciconfig", "hci0"], timeout=10)
+    code, out = _run(["hciconfig", "hci0"], timeout=10)
+    if code == 127 and not _HCICONFIG_WARNED[0]:
+        # Trixie's bluez may drop the deprecated tools; detection then
+        # falls back to the kernel-journal signature alone (still works,
+        # just loses the running-controller fast path).
+        _HCICONFIG_WARNED[0] = True
+        log("hciconfig missing — crash detection uses the kernel log only")
     return "UP RUNNING" in out
 
 

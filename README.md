@@ -24,7 +24,7 @@ order; card slot flow implemented behind it.
 Target hardware: Raspberry Pi Zero 2 W, optional PiSugar 3 battery,
 a Bluetooth speaker (or the Pimoroni Pirate Audio Speaker HAT), and a
 Spotify **Premium** account (family member accounts work). Assumed
-already done: Raspberry Pi OS **Bookworm** flashed with the Raspberry
+already done: Raspberry Pi OS **(Trixie-based; Bookworm also works)** flashed with the Raspberry
 Pi Imager (set hostname, user, Wi-Fi and SSH there), and — if you want
 remote admin — Tailscale installed and logged in.
 
@@ -109,7 +109,7 @@ files under `/var/lib/tapbox/cache`; Spotify caches encrypted audio
 - Settings in the PWA: auto-off when idle, Wi-Fi auto-off away from
   known networks, screen timeout, volume cap, resume on power-on.
 - Squeezing the last drops: add `maxcpus=2` to
-  `/boot/firmware/cmdline.txt` by hand (the Bookworm kernel has no CPU
+  `/boot/firmware/cmdline.txt` by hand (the RPi OS kernel has no CPU
   hotplug, so `tapbox-power save` can't park cores at runtime).
 
 ### 7. When the hardware arrives
