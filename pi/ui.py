@@ -300,6 +300,7 @@ class App:
         self.last_system = 0.0
         self.last_input = time.monotonic()
         self.dirty = True
+        self.last_render = 0.0
         self.artwork_cache = {}
 
     # -- data ---------------------------------------------------------------
@@ -733,9 +734,13 @@ class App:
                 if PNG_PATH:  # dev: make the blanking visible
                     self.display.show(Image.new("RGB", (W, H), (0, 0, 0)))
             elif self.display.on and (self.dirty
-                                      or self.view == "now"
-                                      or time.monotonic() < self.volume_flash):
+                                      or ((self.view == "now"
+                                           or time.monotonic() < self.volume_flash)
+                                          and time.monotonic() - self.last_render >= 1.0)):
+                # now-playing repaints at 1fps (the progress bar has second
+                # granularity) — 5fps PIL+SPI would eat 20-30% CPU on a Zero
                 self.dirty = False
+                self.last_render = time.monotonic()
                 self.render()
 
 

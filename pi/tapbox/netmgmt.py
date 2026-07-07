@@ -116,6 +116,17 @@ def _wifi_watchdog():
     time.sleep(WATCHDOG_DELAY_S)
     while True:
         try:
+            # Cheap first: one sysfs read. Only when the link is down do we
+            # pay for the rfkill/iw/nmcli subprocess probes — a battery box
+            # must not spawn processes every 30s around the clock.
+            try:
+                with open("/sys/class/net/wlan0/operstate") as f:
+                    link_up = f.read().strip() == "up"
+            except OSError:
+                link_up = False
+            if link_up:
+                time.sleep(30)
+                continue
             enabled, ssid, _ip = wifi_state()
             if (enabled and not ssid and not hotspot_active()
                     and not _known_wifi_names()):
