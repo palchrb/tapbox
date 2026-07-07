@@ -8,7 +8,8 @@ Views:  Home (sections) -> Entries -> Episodes -> Now Playing
 
 Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
   menus:        A=select  B=back   X=up      Y=down
-  now playing:  A=play/pause  B=back  X=vol+  Y=vol-
+  now playing:  A: 1x=play/pause  2x=next  hold=previous
+                B=back  X=vol+  Y=vol-
 
 The battery indicator is drawn in the top-right corner of every view.
 The screen blanks after settings.screen_timeout_s (0 = never; always on
@@ -17,7 +18,8 @@ while charging); the waking button press is swallowed.
 Dev mode (no HAT needed):
   TAPBOX_UI_PNG=/tmp/frame.png   render frames to a PNG instead of SPI
   TAPBOX_UI_INPUT=/tmp/ui-fifo   read button events from a fifo: one char
-                                 per event: a/b/x/y = press, s = settings
+                                 per event: a/b/x/y = press, d = double-A,
+                                 l = long-A, s = settings
 """
 
 import os
@@ -114,12 +116,14 @@ def make_display():
 # --- input backends ---------------------------------------------------------------
 
 class FifoInput:
-    """Dev input: one char per event on a fifo (a/b/x/y press, s=settings)."""
+    """Dev input: one char per event on a fifo (a/b/x/y press, d=double-A,
+    l=long-A, s=settings)."""
 
     def __init__(self, path):
         if not os.path.exists(path):
             os.mkfifo(path)
         self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        self.gesture_mode = False  # resolved tokens come pre-cooked here
         log(f"dev input <- {path}")
 
     def poll(self, timeout):
@@ -130,29 +134,74 @@ class FifoInput:
         for ch in os.read(self.fd, 64).decode(errors="ignore"):
             if ch in "abxy":
                 events.append(ch)
+            elif ch == "d":
+                events.append("a_double")
+            elif ch == "l":
+                events.append("a_long")
             elif ch == "s":
                 events.append("settings")
         return events
 
 
 class GpioInput:
-    """Pirate Audio buttons via gpiozero. Hold A+B ~2s -> settings."""
+    """Pirate Audio buttons via gpiozero. Hold A+B ~2s -> settings.
+    In gesture_mode (the now-playing view) the A button resolves gestures:
+    single press = 'a', double press = 'a_double', hold = 'a_long'."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
-    HOLD_S = 2.0
+    HOLD_S = 2.0      # A+B settings combo
+    LONG_S = 0.8      # A held this long = previous track
+    DOUBLE_S = 0.35   # second A press within this window = next track
 
     def __init__(self):
         from gpiozero import Button
         self.buttons = {name: Button(pin, pull_up=True, bounce_time=0.05)
                         for name, pin in self.PINS.items()}
         self.queue = []
+        self.gesture_mode = False
         self.combo_since = None
+        self._a_down = None      # press timestamp while A is held
+        self._a_long_sent = False
+        self._a_pending = None   # release timestamp awaiting the double window
         for name, btn in self.buttons.items():
-            btn.when_pressed = lambda n=name: self.queue.append(n)
+            btn.when_pressed = lambda n=name: self._pressed(n)
+        self.buttons["a"].when_released = self._a_released
         log("gpio buttons ready (BCM 5/6/16/24)")
+
+    def _pressed(self, name):
+        if name != "a" or not self.gesture_mode:
+            self.queue.append(name)
+            return
+        now = time.monotonic()
+        if self._a_pending is not None and now - self._a_pending <= self.DOUBLE_S:
+            self._a_pending = None
+            self.queue.append("a_double")
+        else:
+            self._a_down = now
+            self._a_long_sent = False
+
+    def _a_released(self):
+        if not self.gesture_mode or self._a_down is None:
+            return
+        held = time.monotonic() - self._a_down
+        self._a_down = None
+        if not self._a_long_sent and held < self.LONG_S:
+            self._a_pending = time.monotonic()  # single, unless doubled soon
 
     def poll(self, timeout):
         time.sleep(timeout)
+        now = time.monotonic()
+        # long press fires while still held — no waiting for the release
+        if (self.gesture_mode and self._a_down is not None
+                and not self._a_long_sent
+                and now - self._a_down >= self.LONG_S):
+            self._a_long_sent = True
+            self.queue.append("a_long")
+        # a pending single resolves once the double window has passed
+        if (self._a_pending is not None
+                and now - self._a_pending > self.DOUBLE_S):
+            self._a_pending = None
+            self.queue.append("a")
         a, b = self.buttons["a"].is_pressed, self.buttons["b"].is_pressed
         if a and b:
             if self.combo_since is None:
@@ -160,6 +209,7 @@ class GpioInput:
             elif time.monotonic() - self.combo_since >= self.HOLD_S:
                 self.combo_since = None
                 self.queue.clear()  # eat the presses that formed the combo
+                self._a_down = self._a_pending = None
                 return ["settings"]
         else:
             self.combo_since = None
@@ -250,6 +300,8 @@ class App:
         self.entry = None
         self.status = {}
         self.system = {}
+        self.bt = {"devices": []}
+        self.bt_found = []
         self.settings = {"screen_timeout_s": 30, "idle_shutdown_min": 30,
                          "volume_cap": 100}
         self.volume_flash = 0.0     # show volume overlay until this time
@@ -272,7 +324,8 @@ class App:
             except OSError:
                 pass
             self.dirty = True
-        if self.view == "now" and now - self.last_status > STATUS_POLL_S:
+        if self.view in ("now", "episodes") \
+                and now - self.last_status > STATUS_POLL_S:
             self.last_status = now
             try:
                 self.status = api_get("/status")
@@ -326,6 +379,8 @@ class App:
         if self.view == "now":
             self.handle_now(ev)
             return
+        if ev in ("a_double", "a_long"):
+            ev = "a"  # gestures only mean something while playing
         items = self.current_items()
         if ev == "x":
             self.sel = (self.sel - 1) % max(1, len(items))
@@ -341,6 +396,12 @@ class App:
             if ev == "a":
                 api_post("/playpause")
                 self.last_status = 0  # poll immediately
+            elif ev == "a_double":
+                api_post("/next")
+                self.last_status = 0
+            elif ev == "a_long":
+                api_post("/prev")
+                self.last_status = 0
             elif ev == "b":
                 self.back()
             elif ev in ("x", "y"):
@@ -357,9 +418,14 @@ class App:
             return [e["name"] for e in self.section["entries"]]
         if self.view == "episodes":
             eps = self.expanded["episodes"]
-            return ["▶ Play all"] + [
-                (e.get("title") or e.get("id") or "?",
-                 "✓" if e.get("cached") else "") for e in eps]
+            now_id = (self.status or {}).get("episode_id")
+            rows = []
+            for e in eps:
+                playing = now_id is not None and e.get("id") == now_id
+                title = e.get("title") or e.get("id") or "?"
+                rows.append((("▶ " if playing else "") + title,
+                             "✓" if e.get("cached") else ""))
+            return ["▶ Play all"] + rows
         if self.view == "settings":
             s = self.settings
             wifi = "on" if (self.system.get("wifi") or {}).get("enabled") else "off"
@@ -367,9 +433,20 @@ class App:
                     ("Volume cap", f"{s['volume_cap']}%"),
                     ("Auto-off (idle)", self.fmt_idle(s["idle_shutdown_min"])),
                     ("Wi-Fi", wifi),
+                    ("Bluetooth", ""),
                     ("Storage", ""),
                     ("Shut down", ""),
                     ("Restart", "")]
+        if self.view == "bt":
+            rows = [("Pair nearest", ""), ("Scan for new", "")]
+            for d in self.bt.get("devices", []):
+                mark = "●" if d.get("connected") else (
+                    "✓" if d["mac"] == self.bt.get("configured") else "")
+                rows.append((d["name"], mark))
+            return rows
+        if self.view == "btscan":
+            return [(d["name"] + (" ♪" if d.get("audio") else ""), "")
+                    for d in self.bt_found] or ["(nothing found)"]
         if self.view == "storage":
             return []
         return []
@@ -409,6 +486,12 @@ class App:
                 self.push("now")
             elif self.view == "settings":
                 self.select_setting()
+            elif self.view == "bt":
+                self.select_bt()
+            elif self.view == "btscan":
+                if self.bt_found:
+                    d = self.bt_found[self.sel]
+                    self.bt_connect(d["mac"], d["name"])
         except OSError as e:
             log(f"action failed: {e}")
             self.draw_message("Network error — try again")
@@ -430,13 +513,57 @@ class App:
             r = api_post("/system/wifi", {"enabled": not enabled})
             self.system.setdefault("wifi", {}).update(r)
         elif i == 4:
+            self.draw_message("Loading speakers ...")
+            self.bt = api_get("/bt")
+            self.push("bt")
+        elif i == 5:
             self.push("storage")
-        elif i in (5, 6):
-            action = "Restarting" if i == 6 else "Shutting down"
+        elif i in (6, 7):
+            action = "Restarting" if i == 7 else "Shutting down"
             self.draw_message(f"{action} ... (A confirms, B cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
                 api_post("/system/shutdown", {"restart": i == 6})
+
+    def select_bt(self):
+        if self.sel == 0:  # Pair nearest (the one-button flow)
+            self.draw_message("Pairing the nearest speaker ... (up to 60 s)")
+            try:
+                r = api_post("/bt/pair", {}, timeout=130)
+                self.bt = {k: r[k] for k in ("configured", "devices", "pairing")
+                           if k in r} or api_get("/bt")
+                self.draw_message("Paired!" if r.get("ok")
+                                  else (r.get("output") or "Failed").splitlines()[-1])
+            except OSError as e:
+                self.draw_message(f"Failed: {e}")
+            time.sleep(2)
+        elif self.sel == 1:  # Scan for new
+            self.draw_message("Scanning ... (~25 s)")
+            try:
+                r = api_post("/bt/scan", {}, timeout=70)
+                self.bt_found = r.get("found", [])
+                self.push("btscan")
+            except OSError as e:
+                self.draw_message(f"Failed: {e}")
+                time.sleep(2)
+        else:
+            d = self.bt["devices"][self.sel - 2]
+            self.bt_connect(d["mac"], d["name"])
+
+    def bt_connect(self, mac, name):
+        self.draw_message(f"Connecting to {name} ...")
+        try:
+            r = api_post("/bt/connect", {"mac": mac}, timeout=120)
+            for k in ("configured", "devices", "pairing"):
+                if k in r:
+                    self.bt[k] = r[k]
+            self.draw_message("Connected!" if r.get("ok")
+                              else (r.get("output") or "Failed").splitlines()[-1])
+        except OSError as e:
+            self.draw_message(f"Failed: {e}")
+        time.sleep(2)
+        if self.view == "btscan":
+            self.back()
 
     def confirm(self, timeout=5):
         end = time.monotonic() + timeout
@@ -474,6 +601,12 @@ class App:
         elif self.view == "settings":
             draw_list(d, "Settings", self.current_items(), self.sel,
                       self.system, hint="A: change   B: back")
+        elif self.view == "bt":
+            draw_list(d, "Bluetooth speaker", self.current_items(), self.sel,
+                      self.system, hint="● connected   ✓ selected")
+        elif self.view == "btscan":
+            draw_list(d, "Nearby devices", self.current_items(), self.sel,
+                      self.system, hint="A: pair and connect   B: back")
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "now":
@@ -559,6 +692,7 @@ class App:
             pass
         log("ready")
         while True:
+            self.inputs.gesture_mode = (self.view == "now")
             events = self.inputs.poll(TICK_S)
             if events:
                 woke = not self.display.on
