@@ -8,9 +8,40 @@ Anti-lock-in alternative to Tonies / Yoto / Toniebox for tech-conscious parents.
 
 ## Status
 
-**Pre-MVP — design phase.** This repo currently contains only the product specification. No code yet.
+**Working test rig** on a Pi Zero 2 W + PiSugar 3 + BT speaker: Spotify
+(Connect, via a go-librespot fork with on-disk audio cache), NRK/RSS
+podcasts with offline episode cache and exact resume, parent PWA
+(library, wifi, BT, settings), screen UI for the Pirate Audio HAT
+(dev-mode complete), boot resume, battery tooling. RFID hardware on
+order; card slot flow implemented behind it.
 
-- See [SPEC.md](./SPEC.md) for product definition, hardware BOM, software stack, and MVP feature list.
+- See [SPEC.md](./SPEC.md) for the platform spec, plus
+  [SPEC-A-explorer.md](./SPEC-A-explorer.md) (screen navigator) and
+  [SPEC-B-card-player.md](./SPEC-B-card-player.md) (card player).
+
+## Setup
+
+Everything on-box installs and updates with one idempotent script:
+
+```
+git clone <this repo> ~/tunebox
+cd ~/tunebox && sudo ./pi/install.sh     # update later: git pull && sudo ./pi/install.sh
+```
+
+### Outside install.sh (by design)
+
+| What | How | Why manual |
+|---|---|---|
+| OS basics | Raspberry Pi Imager (hostname, user, wifi, SSH) | pre-boot |
+| pisugar-server | PiSugar's own installer script | third-party installer; install.sh only patches its config (battery curve) when present |
+| PiSugar safe-shutdown / taps | PiSugar web UI (:8421) or `tapbox-power taps-on` | user preference |
+| Tailscale (optional, remote admin) | official installer + `tailscale up` | interactive auth |
+| `maxcpus=2` in cmdline.txt (optional) | manual edit | kernel has no CPU hotplug; only for max battery |
+| Power-save at boot (optional) | `sudo tapbox-power boot-on` | opt-in trade-off |
+| Pirate Audio HAT (when mounted) | `sudo tapbox-power hat-audio-on` + reboot + enable `tapbox-ui` | hardware-gated |
+| PN532 RFID (when wired) | `sudo systemctl enable --now tapbox-rfid` | hardware-gated |
+| Spotify login | pick the box under Devices in the Spotify app (same wifi) | zeroconf by design |
+| BT speaker pairing | PWA settings -> Bluetooth (or screen) | per-home config |
 
 ## Why this exists
 
