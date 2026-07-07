@@ -551,7 +551,11 @@ class Orchestrator:
                           "artwork": track.get("album_cover_url") or None}
         # A paused Spotify track is still "what's on" — keep showing it
         # (title/artwork/position) with playing=False, like the mpv side does.
-        if not mpv_alive and track and not st.get("stopped"):
+        # Gate on "mpv supplied nothing" rather than "child dead": while a
+        # spawn is starting up the socket answers nothing, and blanking the
+        # card to 'Nothing playing' for those seconds looks broken.
+        if (out["title"] is None and track and not st.get("stopped")
+                and (not mpv_alive or source == "spotify")):
             out["playing"] = sp_playing
             out["shuffle"] = bool(st.get("shuffle_context"))
             out["source"] = "spotify"
@@ -563,21 +567,20 @@ class Orchestrator:
         # Ghost sessions: nothing is live, but a bookmarked target is
         # remembered -> present it as paused-at-position instead of
         # "nothing playing". Pressing play resumes exactly there.
-        if (not mpv_alive and out["title"] is None and target
-                and is_spotify(target)):
+        if out["title"] is None and target and is_spotify(target):
             try:
                 with open(SPOT_BM_FILE) as f:
                     bm = json.load(f)
             except (OSError, ValueError):
                 bm = None
             if bm and bm.get("uri") and (bm.get("position") or 0) > 20000:
+                out["playing"] = mpv_alive  # a spawn in flight IS starting
                 out["source"] = "spotify"
                 out["title"] = bm.get("name")
                 out["artwork"] = bm.get("artwork")
                 out["position"] = (bm.get("position") or 0) / 1000
                 out["duration"] = (bm.get("duration") or 0) / 1000 or None
-        if (not mpv_alive and out["title"] is None and target
-                and not is_spotify(target)):
+        if out["title"] is None and target and not is_spotify(target):
             try:
                 with open(os.path.join(STATE_DIR,
                                        state_key(target) + ".json")) as f:
@@ -585,6 +588,7 @@ class Orchestrator:
             except (OSError, ValueError):
                 bk = None
             if bk and bk.get("pos"):
+                out["playing"] = mpv_alive  # a spawn in flight IS starting
                 out["source"] = "mpv"
                 out["position"] = bk.get("pos")
                 try:
