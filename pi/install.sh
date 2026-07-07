@@ -23,7 +23,6 @@
 
 set -euo pipefail
 
-DEVICE_NAME="TapBox Test"
 API_PORT=3678
 UPDATE=0
 [[ ${1:-} == "--update" ]] && UPDATE=1
@@ -31,6 +30,26 @@ UPDATE=0
 if [[ $EUID -ne 0 ]]; then
   echo "Run with sudo: sudo $0" >&2
   exit 1
+fi
+
+# Box name -> <name>.local (mDNS) and the Spotify device name. Default is
+# "tapbox"; override with TAPBOX_NAME=<name>, or answer the one-time prompt
+# on the first install. Re-runs keep whatever avahi already advertises.
+BOX_NAME="${TAPBOX_NAME:-}"
+if [[ -z $BOX_NAME ]]; then
+  if [[ -f /etc/avahi/avahi-daemon.conf ]] \
+      && grep -q '^host-name=' /etc/avahi/avahi-daemon.conf; then
+    BOX_NAME="$(sed -n 's/^host-name=//p' /etc/avahi/avahi-daemon.conf | head -n1)"
+  elif [[ -t 0 ]]; then
+    read -r -p "Name for this box (=> <name>.local) [tapbox]: " BOX_NAME || true
+  fi
+fi
+BOX_NAME="$(echo "${BOX_NAME:-tapbox}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+[[ -n $BOX_NAME ]] || BOX_NAME=tapbox
+if [[ $BOX_NAME == tapbox ]]; then
+  DEVICE_NAME="TapBox Test"
+else
+  DEVICE_NAME="TapBox ($BOX_NAME)"
 fi
 
 RUN_USER="${SUDO_USER:-pi}"
@@ -301,17 +320,17 @@ install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || tru
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
 install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
 
-# mDNS: advertise the box as tapbox.local regardless of the system hostname
-# (avahi's host-name option). iOS/macOS/Windows resolve .local natively;
-# Android's browsers mostly do NOT — use the IP there.
+# mDNS: advertise the box as <BOX_NAME>.local regardless of the system
+# hostname (avahi's host-name option). iOS/macOS/Windows resolve .local
+# natively; Android's browsers mostly do NOT — use the IP there.
 if [[ -f /etc/avahi/avahi-daemon.conf ]] \
-    && ! grep -q '^host-name=tapbox$' /etc/avahi/avahi-daemon.conf; then
-  sed -i 's/^#\?host-name=.*/host-name=tapbox/' /etc/avahi/avahi-daemon.conf
+    && ! grep -q "^host-name=$BOX_NAME\$" /etc/avahi/avahi-daemon.conf; then
+  sed -i "s/^#\?host-name=.*/host-name=$BOX_NAME/" /etc/avahi/avahi-daemon.conf
   grep -q '^host-name=' /etc/avahi/avahi-daemon.conf \
-    || sed -i '/^\[server\]/a host-name=tapbox' /etc/avahi/avahi-daemon.conf
+    || sed -i "/^\[server\]/a host-name=$BOX_NAME" /etc/avahi/avahi-daemon.conf
   systemctl enable --now avahi-daemon 2>/dev/null || true
   systemctl restart avahi-daemon 2>/dev/null || true
-  echo "    mDNS: box advertised as tapbox.local"
+  echo "    mDNS: box advertised as $BOX_NAME.local"
 else
   systemctl enable --now avahi-daemon 2>/dev/null || true
 fi

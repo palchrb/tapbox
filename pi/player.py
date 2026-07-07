@@ -323,15 +323,18 @@ def main():
     while proc.poll() is None:
         try:
             path = ipc_get(sock, "path")
-            # Publish which episode is playing (tapboxd /status -> menu
-            # highlight); written only when the track changes.
-            if path and path != last_np:
-                last_np = path
+            paused = ipc_get(sock, "pause")
+            # Publish which episode is playing + the pause state (tapboxd
+            # reads the FILE at shutdown — IPC would race mpv's death);
+            # written when the track or pause state changes.
+            if path and (path, paused) != last_np:
+                last_np = (path, paused)
                 try:
                     with open(now_file + ".tmp", "w") as f:
                         json.dump({"id": ids.get(path), "url": path,
                                    "title": titles.get(path),
                                    "image": images.get(path),
+                                   "paused": bool(paused),
                                    "target": target}, f)
                     os.replace(now_file + ".tmp", now_file)
                 except OSError:

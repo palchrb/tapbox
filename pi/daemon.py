@@ -726,7 +726,18 @@ def _flag_was_playing():
     try:
         playing = False
         if ORCH.child is not None and ORCH.child.poll() is None:
-            playing = mpv_get("pause") is False
+            p = mpv_get("pause")
+            if p is not None:
+                playing = p is False
+            else:
+                # systemd TERMs the whole cgroup at once — mpv may already
+                # be gone. player.py published the pause state to a file
+                # for exactly this moment.
+                try:
+                    with open(NOW_FILE) as f:
+                        playing = json.load(f).get("paused") is False
+                except (OSError, ValueError):
+                    playing = True  # child alive, no info: assume playing
         if not playing:
             playing = spotify_playing()
         with open(LAST_FILE) as f:
@@ -774,6 +785,26 @@ def _boot_resume():
     else:
         log("boot resume: audio path never came up — press play to resume")
         return
+    if is_spotify(target):
+        # go-librespot must be up AND logged in, or the play call dies
+        for _ in range(30):
+            if go_status().get("username"):
+                break
+            time.sleep(2)
+        else:
+            log("boot resume: go-librespot never became ready — skipping")
+            return
+    else:
+        # Give wifi a moment: without it the player's offline filter drops
+        # stream URLs and playback starts at the wrong (cached-only) place.
+        # A genuinely offline box proceeds after the wait — cached content
+        # is then the RIGHT thing to play.
+        for _ in range(15):  # up to ~30s
+            try:
+                socket.create_connection(("1.1.1.1", 443), timeout=2).close()
+                break
+            except OSError:
+                time.sleep(2)
     ORCH.play(target, reverse=bool(last.get("reverse")))
 
 
