@@ -83,6 +83,7 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
+from tapbox import bt as _btmod  # noqa: E402
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from tapbox.paths import CACHE_DIR, SETTINGS_FILE, STATE_DIR  # noqa: E402
 
@@ -638,10 +639,12 @@ BT_LOCK = threading.Lock()  # one pairing/connect operation at a time
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
-def play_cli():
-    p = os.path.join(_here, "play.sh")
-    return os.environ.get("TAPBOX_PLAY") or (
-        p if os.path.exists(p) else "/usr/local/bin/tapbox-play")
+def bt_cli():
+    """argv prefix for the BT helper. TAPBOX_PLAY lets tests inject a fake."""
+    override = os.environ.get("TAPBOX_PLAY")
+    if override:
+        return ["bash", override]
+    return [sys.executable, _btmod.__file__]
 
 
 def bt_status():
@@ -675,7 +678,7 @@ def bt_action(args, timeout):
     if not BT_LOCK.acquire(blocking=False):
         return None
     try:
-        r = subprocess.run(["bash", play_cli(), *args], capture_output=True,
+        r = subprocess.run([*bt_cli(), *args], capture_output=True,
                            text=True, timeout=timeout)
         out = (r.stdout + "\n" + r.stderr).strip()
         tail = "\n".join(out.splitlines()[-6:])
@@ -693,7 +696,7 @@ def bt_scan():
     if not BT_LOCK.acquire(blocking=False):
         return None
     try:
-        r = subprocess.run(["bash", play_cli(), "scan-raw"],
+        r = subprocess.run([*bt_cli(), "scan-raw"],
                            capture_output=True, text=True, timeout=60)
         found = []
         for line in r.stdout.splitlines():
