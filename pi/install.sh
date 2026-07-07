@@ -71,6 +71,10 @@ write_if_changed() {
     return 1
   fi
   mkdir -p "$(dirname "$dest")"
+  # mktemp creates 600 and mv keeps it — systemd then warns that unit
+  # files are 'world-inaccessible'. World-readable is right for all of
+  # these (units, ALSA config, helper scripts hold no secrets).
+  chmod 644 "$tmp"
   mv "$tmp" "$dest"
   return 0
 }
