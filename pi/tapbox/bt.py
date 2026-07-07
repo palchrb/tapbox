@@ -69,13 +69,29 @@ def bt_up():
     btctl("pairable", "on")  # bonding pairing — see module docstring
 
 
+def _hci_up():
+    """Is the controller actually running? Asks the KERNEL (one ioctl) —
+    bluez's 'Powered: yes' is stale state after a firmware crash."""
+    _c, out = _run(["hciconfig", "hci0"], timeout=10)
+    return "UP RUNNING" in out
+
+
 def _hci_crashed():
-    """The crash leaves bluez believing the adapter is fine ('Powered:
-    yes' is stale state), so ask the kernel: the firmware crash has an
-    unmistakable signature in the log."""
-    _c, out = _run(["dmesg"], timeout=10)
-    tail = "\n".join(out.splitlines()[-80:])
-    return "hci0: hardware error" in tail or "Opcode 0x0c03 failed" in tail
+    """Crashed = the controller is down AND the kernel reported the
+    firmware crash recently. The functional check comes first (a running
+    controller is never 'crashed', whatever old log lines say), and the
+    log query is time-bounded to the last two minutes — so a crash from
+    hours ago can't trigger recovery, and an rfkill-blocked or merely
+    powered-down adapter (down, no signature) doesn't either. The log IS
+    the right source: the kernel has no sysfs flag for this event."""
+    if _hci_up():
+        return False
+    code, out = _run(["journalctl", "-k", "-S", "-120s", "-o", "cat",
+                      "--no-pager"], timeout=10)
+    if code != 0 or not out.strip():
+        _c, out = _run(["dmesg"], timeout=10)  # fallback: journal missing
+        out = "\n".join(out.splitlines()[-80:])
+    return "hci0: hardware error" in out or "Opcode 0x0c03 failed" in out
 
 
 def controller_ok():
@@ -196,6 +212,10 @@ def _info_retry(mac):
 def connect(mac):
     """Pair (if needed) + trust + A2DP connect + wait for the audio
     transport + route ALSA output. The full play.sh connect_headset flow."""
+    if _hci_crashed():
+        # recover FIRST: connect attempts against a crashed controller
+        # each hang toward their timeout — this is the recovery latency
+        recover()
     bt_up()
     info = _info_retry(mac)
 
