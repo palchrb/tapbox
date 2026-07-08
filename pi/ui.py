@@ -748,7 +748,10 @@ class App:
     def render_now(self, d, img):
         st = self.status or {}
         battery_corner(d, self.system)
-        art = self.artwork(st.get("artwork"), 128)
+        # local cover first (synced shows have it on disk — works offline
+        # and never waits on gfx.nrk.no), episode image as the fallback
+        art = (self.artwork(st.get("artwork_local"), 128)
+               or self.artwork(st.get("artwork"), 128))
         if art:
             img.paste(art, ((W - art.width) // 2, 24))
             ty = 156

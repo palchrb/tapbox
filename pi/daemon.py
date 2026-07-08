@@ -93,7 +93,7 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import mpv as _mpv, spotify as _spotify  # noqa: E402
+from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from tapbox.paths import STATE_DIR  # noqa: E402
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
@@ -661,6 +661,15 @@ class Orchestrator:
                 out["title"] = name
                 out["position"] = 0
                 out["playing"] = mpv_alive  # a spawn in flight IS starting
+        # Offline-proof cover for the screen: the episode artwork above is
+        # a gfx.nrk.no URL even when the episode itself plays from the
+        # local cache — synced shows have cover.jpg on disk, serve that
+        # alongside so the box needs no network to show SOMETHING.
+        if target and not is_spotify(target):
+            try:
+                out["artwork_local"] = content.collection_image(target)
+            except Exception:
+                out["artwork_local"] = None
         return out
 
 
