@@ -404,14 +404,19 @@ class Orchestrator:
             # converge anyway: a deferred mpv switch (transport wasn't up
             # when the user flipped the output) applies on this announce
             with self.lock:
-                if device == "bt" and self._mpv_alive() \
-                        and _bt_transport_ready():
-                    try:
-                        mpv_ipc(["set_property", "audio-device",
-                                 f"alsa/{pcm}"])
-                        log("output bt: deferred mpv switch applied")
-                    except OSError:
-                        pass
+                if device == "bt" and _bt_transport_ready():
+                    if self._mpv_alive():
+                        try:
+                            mpv_ipc(["set_property", "audio-device",
+                                     f"alsa/{pcm}"])
+                            log("output bt: deferred mpv switch applied")
+                        except OSError:
+                            pass
+                    # idempotent: rewrites + restarts only when the config
+                    # still points elsewhere (a deferred switch)
+                    if _retarget_go_librespot(pcm):
+                        log("output bt: deferred go-librespot retarget "
+                            "applied")
             return {"unchanged": True, "output": device}
         with self.lock:
             os.makedirs(STATE_DIR, exist_ok=True)
@@ -435,7 +440,14 @@ class Orchestrator:
                         ).get("error") == "success"
                     except OSError:
                         pass
-            restarted = _retarget_go_librespot(pcm)
+            if device == "bt" and not _bt_transport_ready():
+                # same rule as mpv above: don't bounce go-librespot into a
+                # device with no transport — the restart's wifi burst lands
+                # exactly during AVDTP setup on the SHARED radio (the
+                # coexistence load that crashes the Zero's BT firmware)
+                restarted = False
+            else:
+                restarted = _retarget_go_librespot(pcm)
             log(f"output -> {device} (pcm {pcm}, "
                 f"mpv {'switched' if mpv_switched else 'n/a'}, "
                 f"go-librespot {'restarted' if restarted else 'unchanged'})")
