@@ -322,11 +322,18 @@ if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
 fi
 if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio' 2>/dev/null; then
   echo "    installing python libs (this can take a few minutes on a Zero)..."
+  /opt/tapbox/venv/bin/pip install --quiet --upgrade \
+    adafruit-circuitpython-pn532 evdev pillow gpiozero
   # lgpio is gpiozero's pin factory on kernel 6.x — without it gpiozero
   # falls back to RPi.GPIO, whose edge detection is broken there
-  # ('RuntimeError: Failed to add edge detection' from tapbox-ui)
-  /opt/tapbox/venv/bin/pip install --quiet --upgrade \
-    adafruit-circuitpython-pn532 evdev pillow gpiozero lgpio
+  # ('RuntimeError: Failed to add edge detection' from tapbox-ui).
+  # No prebuilt wheel for this python: pip builds from source, which
+  # needs swig + the lg library headers. Never abort the install on it.
+  if ! /opt/tapbox/venv/bin/python3 -c 'import lgpio' 2>/dev/null; then
+    apt-get install -y -qq swig liblgpio-dev >/dev/null 2>&1 || true
+    /opt/tapbox/venv/bin/pip install --quiet --upgrade lgpio \
+      || echo "    WARNING: lgpio build failed — tapbox-ui buttons need it (apt install swig liblgpio-dev, then rerun)"
+  fi
   # Screen driver for the Pirate Audio HAT (harmless without the hardware)
   /opt/tapbox/venv/bin/pip install --quiet --upgrade st7789 spidev 2>/dev/null \
     || echo "    (st7789 screen lib skipped — install when the HAT arrives)"
