@@ -144,7 +144,7 @@ class FifoInput:
 
 
 class GpioInput:
-    """Pirate Audio buttons via gpiozero. Hold A+B ~2s -> settings.
+    """Pirate Audio buttons — event/state logic. Hold A+B ~2s -> settings.
 
     A and B fire on RELEASE — a press can be the start of the A+B
     combo, and firing them on press made the combo navigate the menu
@@ -217,6 +217,9 @@ class GpioInput:
         # this is the tick for hold-timing (combo, a_long)
         self.wake.wait(timeout)
         self.wake.clear()
+        return self._events()
+
+    def _events(self):
         now = time.monotonic()
         if "a" in self.down and "b" in self.down:
             if now - max(self.down.values()) >= self.HOLD_S:
@@ -235,10 +238,80 @@ class GpioInput:
         return ev
 
 
+class LgpioInput(GpioInput):
+    """Same button logic, but the pins are SAMPLED (20Hz) over raw lgpio
+    instead of watched via gpiozero callbacks: the lg alert machinery
+    runs a ~1ms-tick thread that burned 13-15% CPU on the Zero around
+    the clock (field measurement — one hot thread, screen dark). Four
+    gpio_read ioctls every 50ms are unmeasurable, worst-case latency is
+    one sample, and 50ms sampling inherently debounces."""
+
+    def __init__(self):
+        import lgpio
+        self._lg = lgpio
+        self._h = None
+        for chip in (0, 4):  # main header: chip 0 (chip 4 on a Pi 5)
+            try:
+                h = lgpio.gpiochip_open(chip)
+            except lgpio.error:
+                continue
+            try:
+                for pin in self.PINS.values():
+                    lgpio.gpio_claim_input(h, pin, lgpio.SET_PULL_UP)
+                self._h = h
+                break
+            except lgpio.error:
+                lgpio.gpiochip_close(h)
+        if self._h is None:
+            raise RuntimeError("no gpiochip exposes the button pins")
+        self.queue = []
+        self.gesture_mode = False
+        self.down = {}
+        self.tainted = set()
+        self._a_long_sent = False
+        self._a_gesture = False
+        self.wake = threading.Event()  # set by inherited handlers; unused
+        self._level = {n: 1 for n in self.PINS}   # pull-up: 1 = released
+        self._edge_at = {n: 0.0 for n in self.PINS}
+        log("lgpio buttons ready (BCM 5/6/16/24, 20Hz sampled)")
+
+    def _sample(self):
+        now = time.monotonic()
+        for name, pin in self.PINS.items():
+            lvl = self._lg.gpio_read(self._h, pin)
+            if lvl == self._level[name]:
+                continue
+            self._level[name] = lvl
+            if now - self._edge_at[name] < 0.05:
+                continue  # contact bounce — swallow the phantom edge
+            self._edge_at[name] = now
+            if lvl == 0:  # active low
+                self._pressed(name)
+            else:
+                self._released(name)
+
+    def poll(self, timeout):
+        deadline = time.monotonic() + timeout
+        while True:
+            self._sample()
+            if self.queue:
+                break  # respond now — don't sit out the tick
+            rest = deadline - time.monotonic()
+            if rest <= 0:
+                break
+            time.sleep(min(0.05, rest))
+        return self._events()
+
+
 def make_input():
     if FIFO_PATH:
         return FifoInput(FIFO_PATH)
-    return GpioInput()
+    try:
+        return LgpioInput()
+    except Exception as e:
+        log(f"lgpio input unavailable ({e.__class__.__name__}: {e}) — "
+            f"falling back to gpiozero")
+        return GpioInput()
 
 
 # --- drawing helpers ----------------------------------------------------------------
