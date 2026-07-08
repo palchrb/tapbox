@@ -248,7 +248,7 @@ def battery_corner(draw, system):
         draw.text((x - 4, y + 1), "?", font=F_SMALL, fill=color, anchor="ra")
 
 
-def draw_list(draw, title, items, sel, system, hint=None):
+def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
     draw.text((10, 4), title, font=F_MED, fill=DIM)
     battery_corner(draw, system)
     top, row_h, visible = 30, 30, 6
@@ -260,7 +260,7 @@ def draw_list(draw, title, items, sel, system, hint=None):
             draw.rounded_rectangle([4, y - 2, W - 4, y + row_h - 6],
                                    radius=6, fill=(40, 40, 60))
         label, right = item if isinstance(item, tuple) else (item, None)
-        draw.text((14, y), label[:24], font=F_MED,
+        draw.text((14, y), label[:maxlen], font=F_MED,
                   fill=FG if idx == sel else DIM)
         if right:
             draw.text((W - 14, y), right, font=F_MED,
@@ -358,10 +358,11 @@ class App:
         except OSError:
             self.library = {"sections": []}
 
-    def artwork(self, ref):
+    def artwork(self, ref, size=110):
         if not ref:
             return None
-        if ref not in self.artwork_cache:
+        key = (ref, size)
+        if key not in self.artwork_cache:
             try:
                 if ref.startswith("http"):
                     with urllib.request.urlopen(ref, timeout=10) as r:
@@ -371,11 +372,27 @@ class App:
                 else:
                     img = Image.open(ref)
                 img = img.convert("RGB")
-                img.thumbnail((110, 110))
-                self.artwork_cache[ref] = img
+                img.thumbnail((size, size))
+                self.artwork_cache[key] = img
             except Exception:
-                self.artwork_cache[ref] = None
-        return self.artwork_cache[ref]
+                self.artwork_cache[key] = None
+        return self.artwork_cache[key]
+
+    def entry_art(self):
+        """Cover of the highlighted entry (56px). Loading can hit the
+        network for a non-synced show, so wait until scrolling settles
+        — self.dirty retries next tick (the loop clears it pre-render)."""
+        ents = self.section.get("entries") or []
+        if not ents:
+            return None
+        ref = ents[min(self.sel, len(ents) - 1)].get("image")
+        if not ref:
+            return None
+        if ((ref, 56) not in self.artwork_cache
+                and time.monotonic() - self.last_input < 0.4):
+            self.dirty = True
+            return None
+        return self.artwork(ref, 56)
 
     # -- input ----------------------------------------------------------------
 
@@ -632,8 +649,11 @@ class App:
             draw_list(d, "TapBox", self.current_items(), self.sel, self.system,
                       hint="A: select   hold A+B: settings")
         elif self.view == "entries":
+            art = self.entry_art()
             draw_list(d, self.section["name"], self.current_items(), self.sel,
-                      self.system)
+                      self.system, maxlen=17 if art else 24)
+            if art:
+                img.paste(art, (W - art.width - 6, 26))
         elif self.view == "episodes":
             draw_list(d, self.expanded.get("name") or "Episoder",
                       self.current_items(), self.sel, self.system,

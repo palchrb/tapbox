@@ -135,8 +135,8 @@ def player_path():
 
 from tapbox import bt as _bt  # noqa: E402
 from tapbox.library import (  # noqa: E402
-    ORDERS, artwork_allowed, expand_target, find_entry, load_library,
-    normalize_library, save_library, state_key, _cache_sweeper,
+    ORDERS, artwork_allowed, expand_target, find_entry, library_with_covers,
+    load_library, normalize_library, save_library, state_key, _cache_sweeper,
     _natural_order, _sync_wake)
 from tapbox.netmgmt import (  # noqa: E402
     HOTSPOT_PSK, HOTSPOT_SSID, hotspot_active, set_wifi, start_hotspot,
@@ -711,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/volume":
             self._send(200, ORCH.get_volume())
         elif url.path == "/library":
-            self._send(200, load_library())
+            self._send(200, library_with_covers())
         elif url.path == "/output":
             self._send(200, current_output())
         elif url.path == "/settings":

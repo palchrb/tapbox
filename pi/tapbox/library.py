@@ -85,6 +85,22 @@ def load_library():
         return {"version": 1, "sections": []}
 
 
+def library_with_covers():
+    """load_library() + best-effort show artwork per entry (menu covers
+    for the screen UI; the PWA ignores the field). Cheap by construction:
+    collection_image only consults local files and in-process caches —
+    never the network. Entries without a synced/remembered cover get
+    None until their feed is first expanded or cached."""
+    lib = load_library()
+    for s in lib.get("sections", []):
+        for e in s.get("entries", []):
+            try:
+                e["image"] = content.collection_image(e["target"])
+            except Exception:
+                e["image"] = None
+    return lib
+
+
 def save_library(lib):
     os.makedirs(os.path.dirname(LIB_FILE), exist_ok=True)
     tmp = LIB_FILE + ".tmp"
