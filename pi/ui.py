@@ -975,11 +975,12 @@ class App:
     # -- main loop -------------------------------------------------------------------
 
     def screen_should_sleep(self):
+        # The timeout applies whether on charger or battery (0 = never
+        # blank). No special charger behaviour — the screen just blanks
+        # after screen_timeout_s of no button input, always.
         t = self.settings.get("screen_timeout_s", 30)
         if t == 0:
             return False
-        if self.system.get("plugged"):
-            return False  # on the charger: always on (nightstand mode)
         return time.monotonic() - self.last_input > t
 
     def run(self):
