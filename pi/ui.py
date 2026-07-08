@@ -490,6 +490,7 @@ class App:
         self.volume_flash = 0.0     # show volume overlay until this time
         self.volume_shown = None
         self.vol_mode_until = 0.0   # while set: B/Y adjust volume (X opened it)
+        self.catch_up_until = 0.0   # repaint every tick until this time
         self.last_status = 0.0
         self.last_system = 0.0
         self.last_input = time.monotonic()
@@ -597,6 +598,18 @@ class App:
         self.stack.append((self.view, self.sel))
         self.view, self.sel = view, 0
         self.dirty = True
+
+    def _enter_now(self):
+        """Open now-playing right after issuing a play. Force an immediate
+        status refetch and repaint every tick for a few seconds: the
+        steady-state repaint is change-driven (CPU), but go-librespot
+        takes a moment to load the new track and can briefly report an
+        unchanged/blank status mid-switch — without this the panel keeps
+        showing the previous playlist's cover until the next change or a
+        keypress."""
+        self.push("now")
+        self.last_status = 0.0                     # poll now, not in ~1s
+        self.catch_up_until = time.monotonic() + 6
 
     def back(self):
         if self.stack:
@@ -762,7 +775,7 @@ class App:
                 self.expanded = api_get(f"/expand?id={self.entry['id']}")
                 if self.expanded["kind"] == "spotify" or not self.expanded["episodes"]:
                     api_post("/play", {"id": self.entry["id"]})
-                    self.push("now")
+                    self._enter_now()
                 else:
                     self.push("episodes")
             elif self.view == "episodes":
@@ -772,7 +785,7 @@ class App:
                     if ep.get("id"):
                         body["episode"] = ep["id"]
                 api_post("/play", body)
-                self.push("now")
+                self._enter_now()
             elif self.view == "settings":
                 self.select_setting()
             elif self.view == "bt":
@@ -1080,6 +1093,7 @@ class App:
                 if PNG_PATH:  # dev: make the blanking visible
                     self.display.show(Image.new("RGB", (W, H), (0, 0, 0)))
             elif self.display.on and (self.dirty
+                                      or time.monotonic() < self.catch_up_until
                                       or (self.last_render < self.volume_flash
                                           and time.monotonic()
                                           - self.last_render >= 0.5)):
