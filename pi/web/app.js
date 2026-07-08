@@ -381,6 +381,7 @@ $("#add-form").addEventListener("submit", async (ev) => {
 async function loadSettings() {
   const s = await api("/settings");
   $("#set-screen").value = String(s.screen_timeout_s);
+  $("#set-brightness").value = String(s.screen_brightness);
   $("#set-cap").value = String(s.volume_cap);
   $("#set-idle").value = String(s.idle_shutdown_min);
   $("#set-spotcache").value = String(s.spotify_cache_gb);
@@ -389,6 +390,7 @@ async function loadSettings() {
 }
 
 for (const [id, key] of [["#set-screen", "screen_timeout_s"],
+                         ["#set-brightness", "screen_brightness"],
                          ["#set-cap", "volume_cap"],
                          ["#set-idle", "idle_shutdown_min"],
                          ["#set-spotcache", "spotify_cache_gb"],

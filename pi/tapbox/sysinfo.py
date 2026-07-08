@@ -31,6 +31,7 @@ def shutdown(restart=False):
 # the screen timeout / idle shutdown.
 SETTING_SPECS = {
     "screen_timeout_s": (30, 0, 600),
+    "screen_brightness": (100, 10, 100),  # % backlight (min 10: never black)
     "idle_shutdown_min": (30, 0, 240),
     "volume_cap": (100, 30, 100),
     "spotify_cache_gb": (20, 1, 100),

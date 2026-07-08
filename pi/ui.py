@@ -14,8 +14,9 @@ Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
                 B=previous  Y=next  (instant single presses)
 
 The battery indicator is drawn in the top-right corner of every view.
-The screen blanks after settings.screen_timeout_s (0 = never; always on
-while charging); the waking button press is swallowed.
+The screen blanks after settings.screen_timeout_s (0 = never); the
+waking button press is swallowed. Brightness is settings.screen_
+brightness (% backlight via PWM on BCM13).
 
 Dev mode (no HAT needed):
   TAPBOX_UI_PNG=/tmp/frame.png   render frames to a PNG instead of SPI
@@ -80,10 +81,14 @@ F_BIG, F_MED, F_SMALL = font(22), font(17), font(13)
 
 # --- display backends -----------------------------------------------------------
 
+BACKLIGHT_PIN = 13  # Pirate Audio backlight (BCM13, PWM1-capable)
+
+
 class PngDisplay:
-    def __init__(self, path):
-        self.path = path
+    def __init__(self):
+        self.path = PNG_PATH
         self.on = True
+        self.brightness = 100
 
     def show(self, img):
         img.save(self.path + ".tmp", "PNG")
@@ -92,27 +97,54 @@ class PngDisplay:
     def set_backlight(self, on):
         self.on = on
 
+    def set_brightness(self, pct):
+        self.brightness = pct
+
 
 class St7789Display:
     def __init__(self):
         import st7789  # Pimoroni library
+        # backlight=None: we drive BCM13 ourselves so we can DIM it (the
+        # library only does on/off). PWMLED via the lgpio pin factory
+        # gives real brightness control; only runs while the screen is on.
         self.disp = st7789.ST7789(
             height=240, width=240, rotation=90, port=0, cs=1, dc=9,
-            backlight=13, spi_speed_hz=80 * 1000 * 1000)
+            backlight=None, spi_speed_hz=80 * 1000 * 1000)
         self.on = True
+        self.brightness = 100
+        self._bl = None
+        try:
+            from gpiozero import PWMLED
+            self._bl = PWMLED(BACKLIGHT_PIN)
+            self._bl.value = 1.0
+        except Exception as e:
+            log(f"backlight PWM unavailable ({e.__class__.__name__}) — "
+                f"on/off only")
 
     def show(self, img):
         self.disp.display(img)
 
+    def _apply(self):
+        if self._bl is not None:
+            self._bl.value = (self.brightness / 100.0) if self.on else 0.0
+
     def set_backlight(self, on):
-        self.disp.set_backlight(1 if on else 0)
         self.on = on
+        if self._bl is not None:
+            self._apply()
+        else:
+            # no PWM: fall back to the library's on/off
+            self.disp.set_backlight(1 if on else 0)
+
+    def set_brightness(self, pct):
+        self.brightness = max(10, min(100, int(pct)))
+        self._apply()
 
 
 def make_display():
     if PNG_PATH:
         log(f"dev display -> {PNG_PATH}")
-        return PngDisplay(PNG_PATH)
+        return PngDisplay()
     return St7789Display()
 
 
@@ -483,6 +515,9 @@ class App:
             try:
                 self._set("system", api_get("/system"))
                 self._set("settings", api_get("/settings"))
+                # brightness may have changed from the PWA — apply live
+                self.display.set_brightness(
+                    self.settings.get("screen_brightness", 100))
             except OSError:
                 pass
         if (self.view == "home" and not self.user_touched
@@ -683,6 +718,7 @@ class App:
             s = self.settings
             wifi = "on" if (self.system.get("wifi") or {}).get("enabled") else "off"
             return [("Screen off after", self.fmt_timeout(s["screen_timeout_s"])),
+                    ("Brightness", f"{s.get('screen_brightness', 100)}%"),
                     ("Volume cap", f"{s['volume_cap']}%"),
                     ("Auto-off (idle)", self.fmt_idle(s["idle_shutdown_min"])),
                     ("Wi-Fi", wifi),
@@ -753,32 +789,35 @@ class App:
     def select_setting(self):
         i = self.sel
         cycles = {0: ("screen_timeout_s", [15, 30, 60, 0]),
-                  1: ("volume_cap", [60, 70, 80, 90, 100]),
-                  2: ("idle_shutdown_min", [15, 30, 60, 0])}
+                  1: ("screen_brightness", [25, 50, 75, 100]),
+                  2: ("volume_cap", [60, 70, 80, 90, 100]),
+                  3: ("idle_shutdown_min", [15, 30, 60, 0])}
         if i in cycles:
             key, opts = cycles[i]
-            cur = self.settings[key]
+            cur = self.settings.get(key)
             nxt = opts[(opts.index(cur) + 1) % len(opts)] if cur in opts else opts[0]
             self.settings = api_put("/settings", {key: nxt})
-        elif i == 3:
+            if key == "screen_brightness":
+                self.display.set_brightness(nxt)  # live preview
+        elif i == 4:
             enabled = (self.system.get("wifi") or {}).get("enabled")
             self.draw_message("Please wait ...")
             r = api_post("/system/wifi", {"enabled": not enabled})
             self.system.setdefault("wifi", {}).update(r)
-        elif i == 4:
+        elif i == 5:
             self.draw_message("Loading speakers ...")
             self.bt = api_get("/bt")
             self.push("bt")
-        elif i == 5:
+        elif i == 6:
             self.push("storage")
-        elif i in (6, 7):
-            # row 6 = Shut down, row 7 = Restart (an inverted flag here
+        elif i in (7, 8):
+            # row 7 = Shut down, row 8 = Restart (an inverted flag here
             # made Restart power the box off — field-reported)
-            action = "Restarting" if i == 7 else "Shutting down"
+            action = "Restarting" if i == 8 else "Shutting down"
             self.draw_message(f"{action} ... (B confirms, A cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
-                api_post("/system/shutdown", {"restart": i == 7})
+                api_post("/system/shutdown", {"restart": i == 8})
 
     def select_bt(self):
         if self.sel == 0:  # Pair nearest (the one-button flow)
@@ -1002,6 +1041,7 @@ class App:
             self.system = api_get("/system", timeout=3)
         except (OSError, ValueError):
             pass  # refresh() fills it in on the next tick
+        self.display.set_brightness(self.settings.get("screen_brightness", 100))
         self.load_library()
         # Come back where we were: a live session (boot resume) or a
         # bookmarked-paused ghost puts the screen straight on now-playing.
