@@ -395,6 +395,31 @@ def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
         draw.text((10, H - 18), hint, font=F_SMALL, fill=DIM)
 
 
+def wrap_two(d, text, fnt, maxw):
+    """Split text onto up to two lines that fit maxw px (word-wrapped,
+    second line hard-truncated) — long episode titles were cut at 26
+    chars, which lost the part that tells kids' episodes apart."""
+    if d.textlength(text, font=fnt) <= maxw:
+        return [text]
+    words = text.split()
+    first = ""
+    while words:
+        cand = (first + " " + words[0]).strip()
+        if d.textlength(cand, font=fnt) > maxw:
+            break
+        first = cand
+        words.pop(0)
+    if not first:  # one monster word — hard-split it
+        first = text
+        while d.textlength(first, font=fnt) > maxw and len(first) > 1:
+            first = first[:-1]
+        words = [text[len(first):]]
+    rest = " ".join(words)
+    while d.textlength(rest, font=fnt) > maxw and len(rest) > 1:
+        rest = rest[:-1]
+    return [first, rest]
+
+
 def fmt_time(s):
     if s is None:
         return "--:--"
@@ -892,11 +917,16 @@ class App:
         else:
             ty = 70
         title = st.get("title") or "(nothing playing)"
-        d.text((W // 2, ty), title[:26], font=F_MED, fill=FG, anchor="ma")
+        lines = wrap_two(d, title, F_MED, W - 20)
+        d.text((W // 2, ty), lines[0], font=F_MED, fill=FG, anchor="ma")
+        if len(lines) > 1:
+            d.text((W // 2, ty + 19), lines[1], font=F_MED, fill=FG,
+                   anchor="ma")
         # artists only when spotify is the ACTIVE source — /status keeps
         # the paused-spotify block around during mpv playback, and its
-        # last artist has nothing to do with the podcast episode showing
-        sub = "" if st.get("source") != "spotify" else \
+        # last artist has nothing to do with the podcast episode showing.
+        # A two-line title uses the artist row's space (titles win).
+        sub = "" if (st.get("source") != "spotify" or len(lines) > 1) else \
             ", ".join((st.get("spotify") or {}).get("artists") or [])
         if sub:
             d.text((W // 2, ty + 22), sub[:30], font=F_SMALL, fill=DIM, anchor="ma")

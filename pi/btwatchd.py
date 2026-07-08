@@ -249,20 +249,31 @@ class Reconnector:
         I2S card exists, so BT-only boxes are unaffected). Announced at
         most once per transition — flapping links can't restart
         go-librespot in a loop."""
+        self._want_output = device
         if device == self.announced:
             return
         try:
             r = boxapi.post("/output", {"device": device, "fallback": True},
                             timeout=5)
         except Exception as e:
-            log(f"output -> {device} not applied ({e.__class__.__name__})")
-            return  # not announced: retried on the next transition event
+            # tapboxd not up yet (boot: we connect the speaker before the
+            # daemon listens) — retry until the announcement lands
+            log(f"output -> {device} not applied ({e.__class__.__name__}) "
+                f"— retrying in 10s")
+            GLib.timeout_add(10000, self._output_retry)
+            return
         self.announced = device
         if r.get("skipped"):
             log(f"output -> {device} skipped ({r['skipped']})")
         elif not r.get("unchanged"):
             log(f"output -> {device} (speaker "
                 f"{'connected' if device == 'bt' else 'away'})")
+
+    def _output_retry(self):
+        want = getattr(self, "_want_output", None)
+        if want and want != self.announced:
+            self._output(want)
+        return False
 
     # --- the attempt ---------------------------------------------------------
 

@@ -421,7 +421,13 @@ done
 write_if_changed /etc/systemd/system/tapbox-ui.service <<'EOF' || true
 [Unit]
 Description=TapBox screen UI (Pirate Audio)
-After=tapbox-daemon.service
+# Early start: the splash handles a not-yet-ready tapboxd, and waiting
+# behind the daemon (which waits behind the network) left the screen
+# frozen on its last image for ~35s of every boot
+DefaultDependencies=no
+After=local-fs.target sysinit.target
+Before=shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-ui
