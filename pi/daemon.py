@@ -135,7 +135,7 @@ def player_path():
 # --- moved to the tapbox package; aliases keep internal call sites and the
 # --- tests' daemon.<name> monkeypatching working unchanged ----------------------
 
-from tapbox import bt as _bt  # noqa: E402
+from tapbox import bt as _bt, btbus  # noqa: E402
 from tapbox.library import (  # noqa: E402
     ORDERS, artwork_allowed, expand_target, find_entry, library_with_covers,
     load_library, normalize_library, save_library, state_key, _cache_sweeper,
@@ -401,6 +401,17 @@ class Orchestrator:
             return {"skipped": "no built-in sound card", "output":
                     current_output()["output"]}
         if fallback and current_output()["output"] == device:
+            # converge anyway: a deferred mpv switch (transport wasn't up
+            # when the user flipped the output) applies on this announce
+            with self.lock:
+                if device == "bt" and self._mpv_alive() \
+                        and _bt_transport_ready():
+                    try:
+                        mpv_ipc(["set_property", "audio-device",
+                                 f"alsa/{pcm}"])
+                        log("output bt: deferred mpv switch applied")
+                    except OSError:
+                        pass
             return {"unchanged": True, "output": device}
         with self.lock:
             os.makedirs(STATE_DIR, exist_ok=True)
@@ -409,12 +420,21 @@ class Orchestrator:
             os.replace(OUT_FILE + ".tmp", OUT_FILE)
             mpv_switched = False
             if self._mpv_alive():
-                try:  # mpv can retarget its audio device live
-                    mpv_switched = mpv_ipc(
-                        ["set_property", "audio-device", f"alsa/{pcm}"]
-                    ).get("error") == "success"
-                except OSError:
-                    pass
+                if device == "bt" and not _bt_transport_ready():
+                    # NEVER point a live mpv at a bluealsa device with no
+                    # A2DP transport: it errors the track and skips to the
+                    # next, over and over (field: 'jumps between episodes
+                    # like crazy'). Record the intent; btwatchd's announce
+                    # applies the mpv switch once the transport exists.
+                    log("output -> bt: no A2DP transport yet — mpv stays "
+                        "on the current device until the speaker is ready")
+                else:
+                    try:  # mpv can retarget its audio device live
+                        mpv_switched = mpv_ipc(
+                            ["set_property", "audio-device", f"alsa/{pcm}"]
+                        ).get("error") == "success"
+                    except OSError:
+                        pass
             restarted = _retarget_go_librespot(pcm)
             log(f"output -> {device} (pcm {pcm}, "
                 f"mpv {'switched' if mpv_switched else 'n/a'}, "
@@ -1032,6 +1052,16 @@ def _spotify_bookmarker():
 
 def _audio_ready():
     return audio_ready()  # shared logic lives in tapbox.output
+
+
+def _bt_transport_ready():
+    """Does the configured speaker have a live A2DP PCM right now?"""
+    try:
+        with open(_bt.MAC_FILE) as f:
+            mac = f.read().strip()
+        return bool(mac) and btbus.a2dp_pcm_present(mac)
+    except OSError:
+        return False
 
 
 def _internet_up():

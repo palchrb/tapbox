@@ -506,7 +506,11 @@ def main():
                     fast_skips = fast_skips + 1 \
                         if now_m - track_started < 10 else 0
                 prev_path, track_started = path, now_m
-                if fast_skips >= 3:
+                # dead output = mpv chews through the queue erroring
+                # track after track; with the audio path gone there is
+                # no reason to wait for skip #3 — pause on the FIRST one
+                if fast_skips >= 3 or (fast_skips >= 1
+                                       and not audio_ready()):
                     survive_dead_audio(stable)
                     fast_skips, prev_path = 0, None
                     track_started = time.monotonic()
