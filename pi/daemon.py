@@ -19,7 +19,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   GET  /expand?id=<entry>|target=<url>   entry -> playable episode list
                    with titles + cached flags (offline-aware menus)
   GET  /output     current audio output ("bt" or "local")
-  POST /output     {"device": "bt"|"local"} — mpv switches live over IPC;
+  POST /output     {"device": "bt"|"local", "fallback": bool} — mpv
+                   switches live over IPC; fallback=true (btwatchd's
+                   follow-the-speaker policy) is skipped without an I2S card;
                    go-librespot needs a config rewrite + service restart
   GET  /settings   box settings (screen timeout, idle shutdown, volume cap)
   PUT  /settings   update settings (validated; consumers re-read live)
@@ -388,10 +390,18 @@ class Orchestrator:
                     "volume": round((st.get("volume") or 0) * 100 / steps)}
         return {"routed": None, "volume": None}
 
-    def set_output(self, device):
+    def set_output(self, device, fallback=False):
         pcm = OUTPUT_PCMS.get(device)
         if not pcm:
             return None  # handler answers 400
+        if fallback and device == "local" and not _i2s_card_present():
+            # btwatchd's speaker-away fallback: without a built-in/HAT
+            # card there is nothing to fall back TO — keep bt configured
+            # so the reconnect logic brings audio back by itself
+            return {"skipped": "no built-in sound card", "output":
+                    current_output()["output"]}
+        if fallback and current_output()["output"] == device:
+            return {"unchanged": True, "output": device}
         with self.lock:
             os.makedirs(STATE_DIR, exist_ok=True)
             with open(OUT_FILE + ".tmp", "w") as f:
@@ -829,7 +839,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, ORCH.volume(absolute=body.get("volume"),
                                             delta=body.get("delta")))
             elif self.path == "/output":
-                r = ORCH.set_output(body.get("device"))
+                r = ORCH.set_output(body.get("device"),
+                                    fallback=bool(body.get("fallback")))
                 if r is None:
                     self._send(400, {"error":
                                      f"device must be one of {sorted(OUTPUT_PCMS)}"})

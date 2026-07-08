@@ -699,17 +699,17 @@ class App:
     def render_now(self, d, img):
         st = self.status or {}
         battery_corner(d, self.system)
-        art = self.artwork(st.get("artwork"))
+        art = self.artwork(st.get("artwork"), 128)
         if art:
-            img.paste(art, ((W - art.width) // 2, 30))
-            ty = 150
+            img.paste(art, ((W - art.width) // 2, 24))
+            ty = 156
         else:
             ty = 70
         title = st.get("title") or "(nothing playing)"
         d.text((W // 2, ty), title[:26], font=F_MED, fill=FG, anchor="ma")
         sub = ", ".join((st.get("spotify") or {}).get("artists") or [])
         if sub:
-            d.text((W // 2, ty + 24), sub[:30], font=F_SMALL, fill=DIM, anchor="ma")
+            d.text((W // 2, ty + 22), sub[:30], font=F_SMALL, fill=DIM, anchor="ma")
         pos, dur = st.get("position"), st.get("duration")
         bar_y = H - 46
         d.rectangle([14, bar_y, W - 14, bar_y + 5], fill=(50, 50, 65))
@@ -728,10 +728,22 @@ class App:
         else:
             d.polygon([(W // 2 - 6, cy - 8), (W // 2 - 6, cy + 8),
                        (W // 2 + 8, cy)], fill=FG)
-        # volume-button hint: a small speaker by the X button (top right,
-        # below the battery pill)
+        # physical-button hints along the edges (drawn shapes — DejaVu has
+        # no media glyphs). X (top right, below the battery): volume.
         d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
                    (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
+        # A (top left): the action a press takes — pause while playing
+        if st.get("playing"):
+            d.rectangle([12, 27, 16, 41], fill=DIM)
+            d.rectangle([20, 27, 24, 41], fill=DIM)
+        else:
+            d.polygon([(12, 26), (12, 42), (26, 34)], fill=DIM)
+        # B (bottom left): previous
+        d.rectangle([12, 222, 14, 236], fill=DIM)
+        d.polygon([(28, 222), (28, 236), (16, 229)], fill=DIM)
+        # Y (bottom right): next
+        d.polygon([(W - 28, 222), (W - 28, 236), (W - 16, 229)], fill=DIM)
+        d.rectangle([W - 14, 222, W - 12, 236], fill=DIM)
         if time.monotonic() < self.volume_flash:
             d.rounded_rectangle([50, 84, 190, 136], radius=8, fill=(30, 30, 45))
             shown = "–" if self.volume_shown is None else self.volume_shown

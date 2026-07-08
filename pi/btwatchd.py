@@ -70,6 +70,7 @@ try:
 except ImportError as _e:
     _fallback(f"dbus/gi unavailable ({_e})")
 
+from tapbox import boxapi  # noqa: E402
 from tapbox.bt import MAC_FILE, acquire_process_lock  # noqa: E402
 
 # timings are env-tunable so the test harness can run in seconds
@@ -110,6 +111,7 @@ class Reconnector:
         self.lock = None             # flock held across the Connect
         self.boot_deadline = time.monotonic() + BOOT_WINDOW_S
         self.monitor = None          # Gio ref — GC would stop events
+        self.announced = None        # last output we told tapboxd about
 
     # --- bus plumbing ------------------------------------------------------
 
@@ -176,6 +178,7 @@ class Reconnector:
         self.cancel_timer()
         if new is None:
             self.state = "NO_TARGET"
+            self._output("local")  # speaker forgotten -> built-in
         else:
             self.state = "WAITING"
             self.attempt("retarget")
@@ -202,6 +205,28 @@ class Reconnector:
         self.state = "STEADY"
         self.backoff = BACKOFF_MIN_S
         self.cancel_timer()
+        self._output("bt")
+
+    def _output(self, device):
+        """Follow-the-speaker output policy: connected -> bt, confirmed
+        away/forgotten -> built-in (tapboxd skips the fallback when no
+        I2S card exists, so BT-only boxes are unaffected). Announced at
+        most once per transition — flapping links can't restart
+        go-librespot in a loop."""
+        if device == self.announced:
+            return
+        try:
+            r = boxapi.post("/output", {"device": device, "fallback": True},
+                            timeout=5)
+        except Exception as e:
+            log(f"output -> {device} not applied ({e.__class__.__name__})")
+            return  # not announced: retried on the next transition event
+        self.announced = device
+        if r.get("skipped"):
+            log(f"output -> {device} skipped ({r['skipped']})")
+        elif not r.get("unchanged"):
+            log(f"output -> {device} (speaker "
+                f"{'connected' if device == 'bt' else 'away'})")
 
     # --- the attempt ---------------------------------------------------------
 
@@ -269,6 +294,7 @@ class Reconnector:
             self.state = "WAITING"
         log(f"connect failed ({detail}) — next blind attempt in "
             f"{int(self.backoff)}s")
+        self._output("local")  # speaker confirmed away, not just a blip
         self.schedule(self.backoff, None)
         self.backoff = min(self.backoff * 2, BACKOFF_MAX_S)
 
