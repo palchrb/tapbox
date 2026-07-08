@@ -1034,6 +1034,43 @@ def _audio_ready():
     return audio_ready()  # shared logic lives in tapbox.output
 
 
+def _internet_up():
+    """Actual-internet probe (not just wifi association): plain IP, no
+    DNS to hang on — same test player.py's offline filter uses."""
+    try:
+        socket.create_connection(("1.1.1.1", 443), timeout=2).close()
+        return True
+    except OSError:
+        return False
+
+
+def _spotify_supervisor():
+    """go-librespot is useless without internet, but restarts forever —
+    each round costs ~1s of Zero CPU and journal noise. Park the unit
+    while the box is offline; it is back within a minute of
+    connectivity returning. Manual restarts while offline (e.g. an
+    output switch rewrote its config) get re-parked on the next tick."""
+    parked = False
+    while True:
+        time.sleep(60)
+        try:
+            if _internet_up():
+                if parked:
+                    subprocess.run(["systemctl", "start", "go-librespot"],
+                                   timeout=30)
+                    log("spotify: internet is back — go-librespot started")
+                    parked = False
+            else:
+                subprocess.run(["systemctl", "stop", "go-librespot"],
+                               timeout=30)
+                if not parked:
+                    log("spotify: no internet — go-librespot parked "
+                        "(auto-starts when connectivity returns)")
+                    parked = True
+        except Exception as e:
+            log(f"spotify supervisor error: {e!r}")
+
+
 def _flag_was_playing():
     """At shutdown (SIGTERM from systemd), record whether something was
     audibly playing — boot resume only continues in that case, so a box
@@ -1165,6 +1202,7 @@ def main():
     _wifi_boot_reenable()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
     threading.Thread(target=_battery_runtime_tracker, daemon=True).start()
+    threading.Thread(target=_spotify_supervisor, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")
