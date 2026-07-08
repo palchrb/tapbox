@@ -729,7 +729,10 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/system":
             st = system_status()
             try:
-                st["spotify_user"] = go_status().get("username")
+                # short timeout: while go-librespot flaps at boot (no DNS
+                # yet) a 5s wait here starves /system — the screen sits on
+                # its splash even though playback is already running
+                st["spotify_user"] = go_status(timeout=1).get("username")
             except OSError:
                 st["spotify_user"] = None
             self._send(200, st)

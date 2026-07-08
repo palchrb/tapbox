@@ -168,6 +168,7 @@ class GpioInput:
         self.down = {}        # a/b -> press timestamp while held
         self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._a_long_sent = False
+        self._a_gesture = False   # gesture_mode when A was pressed
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
         for name in ("a", "b"):
@@ -182,6 +183,11 @@ class GpioInput:
         self.down[name] = time.monotonic()
         if name == "a":
             self._a_long_sent = False
+            # judge the RELEASE by the mode the press STARTED in: a_long
+            # navigates away from now-playing while still held, flipping
+            # gesture_mode off — the release must not then be re-read as
+            # a menu press (field bug: it re-selected the episode)
+            self._a_gesture = self.gesture_mode
 
     def _released(self, name):
         held_since = self.down.pop(name, None)
@@ -196,7 +202,7 @@ class GpioInput:
             # attempt, not two commands — swallow the other one too
             self.tainted.add(other)
             return
-        if name == "a" and self.gesture_mode:
+        if name == "a" and self._a_gesture:
             if not self._a_long_sent:
                 self.queue.append("a")
             return
@@ -212,7 +218,7 @@ class GpioInput:
                 self.down.clear()
                 self.queue.clear()
                 return ["settings"]
-        elif (self.gesture_mode and "a" in self.down
+        elif (self._a_gesture and "a" in self.down
                 and not self._a_long_sent
                 and now - self.down["a"] >= self.LONG_S):
             # long press fires while still held — no waiting for release
@@ -782,13 +788,19 @@ class App:
         ticks = 0
         while True:
             try:
-                self.system = api_get("/system", timeout=2)
+                # gate on /settings only (a local file read — always fast);
+                # /system can take seconds at boot (pisugar, go-librespot
+                # flapping) and kept the splash up long after playback ran
                 self.settings = api_get("/settings", timeout=2)
                 break
             except (OSError, ValueError):
                 self.splash("starting" + "." * (ticks % 4))
                 ticks += 1
                 time.sleep(0.7)
+        try:
+            self.system = api_get("/system", timeout=3)
+        except (OSError, ValueError):
+            pass  # refresh() fills it in on the next tick
         self.load_library()
         # Come back where we were: a live session (boot resume) or a
         # bookmarked-paused ghost puts the screen straight on now-playing.
