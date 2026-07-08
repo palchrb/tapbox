@@ -7,7 +7,7 @@ Views:  Home (sections) -> Entries -> Episodes -> Now Playing
         shut the box down or wipe caches)
 
 Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
-  menus:        A=select  B=back   X=up      Y=down
+  menus:        A=back    B=select X=up      Y=down
   now playing:  A: press=play/pause, hold=back to menu
                 X: press=volume mode (then B=down, Y=up; closes after 3s)
                    hold=switch output (bt speaker <-> built-in)
@@ -560,9 +560,9 @@ class App:
             self.sel = (self.sel - 1) % max(1, len(items))
         elif ev == "y":
             self.sel = (self.sel + 1) % max(1, len(items))
-        elif ev == "b":
-            self.back()
         elif ev == "a":
+            self.back()   # A backs out everywhere — matching hold-A
+        elif ev == "b":
             self.select()
 
     def handle_now(self, ev):
@@ -572,7 +572,7 @@ class App:
                 api_post("/playpause")
                 self.last_status = 0  # poll immediately
             elif ev == "a_long":
-                self.back()
+                self._back_to_episodes()
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
             elif ev == "x_long":
@@ -585,6 +585,32 @@ class App:
                     self.last_status = 0
         except OSError as e:
             log(f"control failed: {e}")
+
+    def _back_to_episodes(self):
+        """Leave now-playing for the episode list of whatever is playing.
+        The stack usually has it — but the auto-jump to now-playing
+        resets the stack to [home], which made hold-A land on the home
+        screen instead of the episodes (field: 'jumps back several
+        pages')."""
+        if self.stack and self.stack[-1][0] == "episodes":
+            self.back()
+            return
+        target = (self.status or {}).get("target")
+        for sec in (self.library or {}).get("sections", []):
+            for e in sec.get("entries", []):
+                if e.get("target") == target:
+                    try:
+                        self.expanded = api_get(f"/expand?id={e['id']}")
+                    except (OSError, ValueError):
+                        break
+                    if not self.expanded.get("episodes"):
+                        break  # spotify etc: no episode view exists
+                    self.section, self.entry = sec, e
+                    self.stack = [("home", 0), ("entries", 0)]
+                    self.view, self.sel = "episodes", 0
+                    self.dirty = True
+                    return
+        self.back()
 
     def _toggle_output(self):
         """Hold X: flip between the bluetooth speaker and the built-in
@@ -724,7 +750,7 @@ class App:
             # row 6 = Shut down, row 7 = Restart (an inverted flag here
             # made Restart power the box off — field-reported)
             action = "Restarting" if i == 7 else "Shutting down"
-            self.draw_message(f"{action} ... (A confirms, B cancels)")
+            self.draw_message(f"{action} ... (B confirms, A cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
                 api_post("/system/shutdown", {"restart": i == 7})
@@ -773,9 +799,9 @@ class App:
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for ev in self.inputs.poll(0.1):
-                if ev == "a":
-                    return True
                 if ev == "b":
+                    return True
+                if ev == "a":
                     return False
         return False
 
@@ -804,7 +830,7 @@ class App:
         if self.view == "home":
             self.load_library()
             draw_list(d, "TapBox", self.current_items(), self.sel, self.system,
-                      hint="A: select   hold A+B: settings")
+                      hint="B: select   hold A+B: settings")
         elif self.view == "entries":
             art = self.entry_art()
             draw_list(d, self.section["name"], self.current_items(), self.sel,
@@ -817,13 +843,13 @@ class App:
                       hint="✓ = downloaded (plays offline)")
         elif self.view == "settings":
             draw_list(d, "Settings", self.current_items(), self.sel,
-                      self.system, hint="A: change   B: back")
+                      self.system, hint="B: change   A: back")
         elif self.view == "bt":
             draw_list(d, "Bluetooth speaker", self.current_items(), self.sel,
                       self.system, hint="● connected   ✓ selected")
         elif self.view == "btscan":
             draw_list(d, "Nearby devices", self.current_items(), self.sel,
-                      self.system, hint="A: pair and connect   B: back")
+                      self.system, hint="B: pair and connect   A: back")
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "now":
