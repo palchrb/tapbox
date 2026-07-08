@@ -234,6 +234,34 @@ systemctl enable --now bluetooth.service
 systemctl enable --now bluealsa.service 2>/dev/null \
   || systemctl enable --now bluealsad.service
 
+# A2DP transport keep-alive: stock bluealsa tears the transport down the
+# instant the last PCM client closes ('keep-alive: 0 ms' in the journal),
+# so every switch to the built-in speaker and back forced a full AVDTP
+# renegotiation — signalling load on the SHARED wifi/bt radio, which is
+# the Zero 2 W firmware-crash trigger. 30s of keep-alive lets a
+# switch-and-back reuse the live transport: no renegotiation at all.
+BA_UNIT=""
+for u in bluealsa.service bluealsad.service; do
+  systemctl cat "$u" >/dev/null 2>&1 && BA_UNIT="$u" && break
+done
+if [[ -n $BA_UNIT ]]; then
+  # first ExecStart= in systemctl cat is the distro unit's own line (our
+  # drop-in, when present, appears after it) — so this stays idempotent
+  exec_line="$(systemctl cat "$BA_UNIT" | grep -m1 '^ExecStart=' || true)"
+  if [[ -n $exec_line ]] && ! grep -q -- '--keep-alive' <<<"$exec_line"; then
+    if write_if_changed "/etc/systemd/system/$BA_UNIT.d/keep-alive.conf" <<KEEPALIVE
+[Service]
+ExecStart=
+$exec_line --keep-alive=30
+KEEPALIVE
+    then
+      systemctl daemon-reload
+      systemctl restart "$BA_UNIT"
+      echo "    bluealsa keep-alive=30 (A2DP transport survives output switches)"
+    fi
+  fi
+fi
+
 GO_CHANGED=0
 write_if_changed /etc/systemd/system/go-librespot.service <<EOF && GO_CHANGED=1
 [Unit]
