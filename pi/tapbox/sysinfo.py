@@ -144,6 +144,20 @@ def _safe_pct(raw):
     return round(v, 1) if -1 <= v <= 200 else None  # nan/inf fail the compare
 
 
+_PCT_HIST = []  # last readings — the percent is voltage-modelled and sags
+                # a few points under load; median stops the visible bounce
+
+
+def _smoothed_pct(pct, plugged):
+    if pct is None or plugged:
+        # charging moves fast and monotonically — show it raw
+        _PCT_HIST.clear()
+        return pct
+    _PCT_HIST.append(pct)
+    del _PCT_HIST[:-3]
+    return sorted(_PCT_HIST)[len(_PCT_HIST) // 2]
+
+
 BATT_RUNTIME_FILE = os.path.join(STATE_DIR, "on-battery-runtime.json")
 
 
@@ -226,7 +240,7 @@ def system_status():
     on_battery_s = None
     if batt is not None and plugged != "true":
         on_battery_s = _battery_runtime()
-    return {"battery": _safe_pct(batt),
+    return {"battery": _smoothed_pct(_safe_pct(batt), plugged == "true"),
             "battery_v": _safe_volts(volts),
             "on_battery_s": on_battery_s,
             "plugged": plugged == "true",

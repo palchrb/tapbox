@@ -102,6 +102,7 @@ def library_with_covers():
 
 
 def save_library(lib):
+    _EXPAND_CACHE.clear()  # order/cache settings may have changed
     os.makedirs(os.path.dirname(LIB_FILE), exist_ok=True)
     tmp = LIB_FILE + ".tmp"
     with open(tmp, "w") as f:
@@ -200,11 +201,25 @@ def _cached_stems():
     return stems
 
 
+_EXPAND_CACHE = {}  # (target, order, name) -> (monotonic, result)
+EXPAND_TTL_S = 300  # menus re-open constantly; feeds change hourly at most
+
+
 def expand_target(target, order="auto", name=None):
     if is_spotify(target):
         # Not expandable without the Web API: a leaf "play all" entry.
         return {"kind": "spotify", "name": name, "target": target,
                 "order": "auto", "image": None, "episodes": []}
+    key = (target, order, name)
+    hit = _EXPAND_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < EXPAND_TTL_S:
+        return hit[1]
+    result = _expand_target_uncached(target, order, name)
+    _EXPAND_CACHE[key] = (time.monotonic(), result)
+    return result
+
+
+def _expand_target_uncached(target, order, name):
     entries = content.expand_entries(target)
     if order != "auto" and order != _natural_order(target):
         entries = list(reversed(entries))

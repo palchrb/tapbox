@@ -236,15 +236,35 @@ def make_input():
 
 # --- drawing helpers ----------------------------------------------------------------
 
+_BATT_COLOR = [None]  # hysteresis: the PiSugar percent jitters a few
+                      # points, and a hard threshold made the gauge flap
+
+
+def _batt_color(pct, plugged):
+    if pct is None:
+        return DIM
+    if plugged:
+        _BATT_COLOR[0] = GOOD
+        return GOOD
+    lo, mid = 10, 20
+    prev = _BATT_COLOR[0]
+    if prev == WARN:
+        lo += 3    # once red, climb back to orange only at 13
+    elif prev == HILITE:
+        mid += 3   # once orange, back to green only at 23
+    color = WARN if pct <= lo else (HILITE if pct <= mid else GOOD)
+    _BATT_COLOR[0] = color
+    return color
+
+
 def battery_corner(draw, system):
     """Battery gauge top-right — on every view. Just the bar (color
-    carries the message: green ok/charging, yellow low, red critical);
+    carries the message: green ok/charging, orange <=20, red <=10);
     the exact percent lives in the PWA."""
     pct = (system or {}).get("battery")
     plugged = (system or {}).get("plugged")
     x, y, w, h = W - 32, 8, 24, 11
-    color = DIM if pct is None else (
-        GOOD if plugged or pct > 30 else (HILITE if pct > 12 else WARN))
+    color = _batt_color(pct, plugged)
     draw.rounded_rectangle([x, y, x + w, y + h], radius=2, outline=color)
     draw.rectangle([x + w + 1, y + 3, x + w + 2, y + h - 3], fill=color)
     if pct is not None:

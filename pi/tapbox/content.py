@@ -366,10 +366,14 @@ def _queue(slug, kind, newest_first):
     n_local = sum(1 for u in urls if u.startswith("/"))
     order = "newest first" if newest_first else "oldest first"
     _log(f"{slug}: queueing {len(urls)} episodes, {order} "
-         f"({n_local} from local cache, {len(urls) - n_local} streamed):")
-    for i, (ep, u) in enumerate(zip(episodes, urls), 1):
-        mark = "  [cached]" if u.startswith("/") else ""
-        _log(f"  {i:3d}. {ep.get('title') or ep['id']}{mark}")
+         f"({n_local} from local cache, {len(urls) - n_local} streamed)")
+    if n_local < len(urls):
+        # the per-episode listing earns its keep only when something will
+        # stream — all-cached queues were 36 journal lines per expansion,
+        # written several times per play on a Zero's SD card
+        for i, (ep, u) in enumerate(zip(episodes, urls), 1):
+            mark = "  [cached]" if u.startswith("/") else ""
+            _log(f"  {i:3d}. {ep.get('title') or ep['id']}{mark}")
     return [{"url": u, "title": ep.get("title"), "id": ep["id"],
              "image": ep.get("image")}
             for ep, u in zip(episodes, urls)]
