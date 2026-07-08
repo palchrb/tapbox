@@ -440,6 +440,51 @@ EOF
   fi
 fi
 
+# PiSugar RTC: the Zero has no real-time clock, so an offline boot starts
+# in 1970 until NTP (if it ever) syncs — the battery logger and journal
+# timestamps go haywire, and time-of-day features can't work. The PiSugar
+# 3 has a battery-backed RTC; load it into the system clock at boot, and
+# write the NTP-corrected time back periodically so it stays accurate.
+if [[ -f /etc/pisugar-server/config.json ]]; then
+  write_if_changed /etc/systemd/system/tapbox-rtc.service <<'EOF' && RTC_CHANGED=1
+[Unit]
+Description=TapBox: load system clock from the PiSugar RTC
+After=pisugar-server.service
+Wants=pisugar-server.service
+Before=time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tapbox-power rtc-load
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  write_if_changed /etc/systemd/system/tapbox-rtc-save.service <<'EOF' && RTC_CHANGED=1
+[Unit]
+Description=TapBox: write the NTP-corrected time back to the PiSugar RTC
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tapbox-power rtc-save
+EOF
+  write_if_changed /etc/systemd/system/tapbox-rtc-save.timer <<'EOF' && RTC_CHANGED=1
+[Unit]
+Description=TapBox: periodically refresh the PiSugar RTC from the system clock
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now tapbox-rtc.service >/dev/null 2>&1 || true
+  systemctl enable --now tapbox-rtc-save.timer >/dev/null 2>&1 || true
+  [[ ${RTC_CHANGED:-0} -eq 1 ]] && echo "    PiSugar RTC clock sync installed (offline boots get a sane time)"
+fi
+
 # Captive portal DNS: while the setup hotspot runs (NetworkManager shared
 # mode), resolve every hostname to the box so phone connectivity probes hit
 # tapboxd's :80 redirect and pop the portal. Inert outside hotspot mode.

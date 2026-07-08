@@ -73,6 +73,10 @@ pisugar_get() {  # query pisugar-server, e.g. pisugar_get battery_v
   (echo "get $1"; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null | awk '{print $2}'
 }
 
+pisugar_cmd() {  # send a raw pisugar-server command, e.g. rtc_rtc2pi
+  (echo "$1"; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null
+}
+
 status_report() {
   echo "online CPUs:   $(cat /sys/devices/system/cpu/online)"
   echo "governor:      $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
@@ -267,6 +271,27 @@ PY
     systemctl restart pisugar-server
     echo "Calibrated battery curve applied (percent = remaining playtime)."
     echo "Note: with this curve 5% safe-shutdown fires at ~3.65V (~15 min left)."
+    ;;
+  rtc-load)  # boot: set the system clock from the PiSugar's battery-backed
+             # RTC, so an OFFLINE boot has a sane time (the Zero has no RTC;
+             # NTP later corrects it and rtc-save writes it back)
+    command -v nc >/dev/null || { echo "nc missing"; exit 0; }
+    for _ in $(seq 1 15); do  # wait for pisugar-server to answer
+      [[ -n "$(pisugar_get battery)" ]] && break; sleep 1
+    done
+    before="$(date '+%F %T')"
+    pisugar_cmd rtc_rtc2pi >/dev/null || true
+    echo "RTC -> system clock (was $before, now $(date '+%F %T'))"
+    ;;
+  rtc-save)  # write the current time back to the RTC — but ONLY when the
+             # clock is NTP-synced, so we never persist a wrong time
+    command -v nc >/dev/null || exit 0
+    if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then
+      pisugar_cmd rtc_pi2rtc >/dev/null || true
+      echo "system clock -> RTC ($(date '+%F %T'))"
+    else
+      echo "clock not NTP-synced yet — RTC left untouched"
+    fi
     ;;
   _logloop)  # internal: run by tapbox-batlog.service
     [[ -f $LOG_FILE ]] || echo "time,volt,amp,percent,plugged" > "$LOG_FILE"
