@@ -245,7 +245,9 @@ Wants=network-online.target
 User=$RUN_USER
 ExecStart=/usr/local/bin/go-librespot --config_dir $CONF_DIR
 Restart=always
-RestartSec=5
+# 30s: offline it exits instantly (no DNS) — a 5s loop burned ~1s CPU
+# per round on the Zero, forever, every time the box had no internet
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

@@ -55,10 +55,16 @@ try:
 except ImportError:  # run as a script (sync subprocess)
     CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
 CATALOG_TTL_S = 12 * 3600
+
+# The PLAYBACK path sets this (player.py): use whatever catalog/feed
+# listing is cached, however old — pressing play must never wait on
+# psapi/feed refreshes (or their offline timeouts). Refreshes belong to
+# the background sync and the menu's /expand.
+STALE_OK = False
 SYNC_COUNT = 50
 
 
-def _get(url, timeout=15):
+def _get(url, timeout=8):
     req = urllib.request.Request(url, headers={"User-Agent": "tapbox/0.1"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
@@ -209,10 +215,13 @@ def _catalog(slug, kind="podcast"):
         "image" not in cached
         or any(not ep.get("title") or "image" not in ep
                for ep in cached.get("episodes", [])))
-    if (cached and not needs_backfill
-            and time.time() - cached.get("fetched_at", 0) < CATALOG_TTL_S):
-        age_h = (time.time() - cached["fetched_at"]) / 3600
-        _log(f"{slug}: catalog cache fresh ({len(cached['episodes'])} episodes, {age_h:.1f}h old) — no API calls")
+    if cached and cached.get("episodes") and (
+            STALE_OK or (not needs_backfill and
+                         time.time() - cached.get("fetched_at", 0)
+                         < CATALOG_TTL_S)):
+        age_h = (time.time() - cached.get("fetched_at", 0)) / 3600
+        _log(f"{slug}: catalog cache {'accepted (playback)' if STALE_OK else 'fresh'} "
+             f"({len(cached['episodes'])} episodes, {age_h:.1f}h old) — no API calls")
         return cached["episodes"]
 
     image = (cached or {}).get("image")
@@ -577,9 +586,18 @@ def expand_entries(target):
             or _sniffs_like_feed(target))
         if looks_like_feed:
             chan_img, items = None, []
+            if STALE_OK and os.path.exists(feed_cache):
+                try:  # playback: the cached listing, no refetch/timeouts
+                    with open(feed_cache) as f:
+                        d = json.load(f)
+                    chan_img = d.get("image")
+                    items = [tuple(i) for i in d["items"]]
+                except (OSError, ValueError, KeyError):
+                    items = []
             try:
-                chan_img, items = _parse_feed(_get(target))
-                if items:  # remember the listing for offline replays
+                if not items:
+                    chan_img, items = _parse_feed(_get(target))
+                if items and not STALE_OK:  # remember for offline replays
                     os.makedirs(os.path.dirname(feed_cache), exist_ok=True)
                     with open(feed_cache + ".tmp", "w") as f:
                         json.dump({"image": chan_img, "items": items}, f)

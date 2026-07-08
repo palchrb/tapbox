@@ -283,6 +283,10 @@ def main():
     titles, ids, images = {}, {}, {}
     if not urls:  # expand the link ourselves — pure-python entrypoint
         try:
+            # play must never wait on catalog/feed refreshes (psapi calls,
+            # or 8s+ timeouts when offline) — the cached listing is always
+            # good enough to START; the background sync freshens it
+            content.STALE_OK = True
             entries = content.expand_entries(target)
             urls = [e["url"] for e in entries]
             titles = {e["url"]: e["title"] for e in entries if e.get("title")}
@@ -398,11 +402,19 @@ def main():
             and target.startswith(("http://", "https://")):
         sync_args = ["sync-feed", target, str(cache_n)]
     if sync_args:
-        # content.py is stdlib-only and runs fine as a plain script
-        subprocess.Popen([sys.executable, content.__file__, *sync_args],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         preexec_fn=lambda: os.nice(19))  # never compete with audio
-        log(f"background sync started: {' '.join(sync_args)}")
+        from tapbox.library import _on_battery
+        if _on_battery():
+            # same policy as the scheduled sweeps: downloading episodes is
+            # exactly the background work that shouldn't spend battery —
+            # and it competed with mpv startup on every single play
+            log("background sync skipped — on battery (runs when charging)")
+        else:
+            # content.py is stdlib-only and runs fine as a plain script
+            subprocess.Popen([sys.executable, content.__file__, *sync_args],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             preexec_fn=lambda: os.nice(19))  # never compete
+            log(f"background sync started: {' '.join(sync_args)}")
 
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):
