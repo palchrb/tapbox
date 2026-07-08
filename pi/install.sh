@@ -359,7 +359,8 @@ install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/tapbox-rfid   && R
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
-install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    || true
+UI_CHANGED=$PKG_CHANGED
+install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    && UI_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
 
 # mDNS: advertise the box as <BOX_NAME>.local regardless of the system
@@ -553,6 +554,8 @@ fi
   && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
 [[ $DAEMON_CHANGED -eq 1 ]] && { echo "    orchestration daemon changed — restarting"; systemctl restart tapbox-daemon.service; }
+[[ ${UI_CHANGED:-0} -eq 1 ]] && systemctl is-active --quiet tapbox-ui.service 2>/dev/null \
+  && { echo "    screen ui changed — restarting"; systemctl restart tapbox-ui.service; }
 
 # --- 7. API + login ----------------------------------------------------------
 
