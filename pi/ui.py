@@ -26,6 +26,7 @@ Dev mode (no HAT needed):
 import os
 import select
 import sys
+import threading
 import time
 import urllib.request
 
@@ -169,6 +170,7 @@ class GpioInput:
         self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._a_long_sent = False
         self._a_gesture = False   # gesture_mode when A was pressed
+        self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
         for name in ("a", "b"):
@@ -177,6 +179,7 @@ class GpioInput:
         log("gpio buttons ready (BCM 5/6/16/24)")
 
     def _pressed(self, name):
+        self.wake.set()  # end the current poll() immediately
         if name in ("x", "y"):
             self.queue.append(name)
             return
@@ -190,6 +193,7 @@ class GpioInput:
             self._a_gesture = self.gesture_mode
 
     def _released(self, name):
+        self.wake.set()
         held_since = self.down.pop(name, None)
         if name in self.tainted:
             self.tainted.discard(name)
@@ -209,7 +213,10 @@ class GpioInput:
         self.queue.append(name)
 
     def poll(self, timeout):
-        time.sleep(timeout)
+        # a button callback sets the event -> instant reaction; otherwise
+        # this is the tick for hold-timing (combo, a_long)
+        self.wake.wait(timeout)
+        self.wake.clear()
         now = time.monotonic()
         if "a" in self.down and "b" in self.down:
             if now - max(self.down.values()) >= self.HOLD_S:
@@ -346,23 +353,30 @@ class App:
 
     # -- data ---------------------------------------------------------------
 
+    def _set(self, attr, value):
+        """Repaint only when the data actually changed — every repaint is
+        a full PIL compose + a 115KB SPI push, and a paused now-view
+        otherwise redraws an identical frame every STATUS_POLL_S."""
+        if getattr(self, attr) != value:
+            setattr(self, attr, value)
+            self.dirty = True
+
     def refresh(self):
         now = time.monotonic()
         if now - self.last_system > SYSTEM_POLL_S:
             self.last_system = now
             try:
-                self.system = api_get("/system")
-                self.settings = api_get("/settings")
+                self._set("system", api_get("/system"))
+                self._set("settings", api_get("/settings"))
             except OSError:
                 pass
-            self.dirty = True
         if (self.view == "home" and not self.user_touched
                 and now - self.last_status > 2.0):
             self.last_status = now
             try:
-                self.status = api_get("/status")
+                self._set("status", api_get("/status"))
             except (OSError, ValueError):
-                self.status = {}
+                self._set("status", {})
             if self.status.get("playing"):
                 self.stack = [("home", 0)]
                 self.view = "now"
@@ -371,10 +385,9 @@ class App:
                 and now - self.last_status > STATUS_POLL_S:
             self.last_status = now
             try:
-                self.status = api_get("/status")
+                self._set("status", api_get("/status"))
             except OSError:
-                self.status = {}
-            self.dirty = True
+                self._set("status", {})
 
     def load_library(self):
         try:
@@ -834,9 +847,10 @@ class App:
         log("ready")
         while True:
             self.inputs.gesture_mode = (self.view == "now")
-            # Screen off = deep idle: slower ticks (presses are queued by
-            # gpio interrupts, so nothing is lost — wake latency <=0.6s)
-            events = self.inputs.poll(TICK_S if self.display.on else 0.6)
+            # Screen off = deep idle: long ticks, and a button press sets
+            # the wake event so poll() returns INSTANTLY — no latency, and
+            # 8x fewer wakeups than the old 0.6s polling
+            events = self.inputs.poll(TICK_S if self.display.on else 5.0)
             if events:
                 woke = not self.display.on
                 self.last_input = time.monotonic()
@@ -858,11 +872,15 @@ class App:
                 if PNG_PATH:  # dev: make the blanking visible
                     self.display.show(Image.new("RGB", (W, H), (0, 0, 0)))
             elif self.display.on and (self.dirty
-                                      or ((self.view == "now"
-                                           or time.monotonic() < self.volume_flash)
-                                          and time.monotonic() - self.last_render >= 1.0)):
-                # now-playing repaints at 1fps (the progress bar has second
-                # granularity) — 5fps PIL+SPI would eat 20-30% CPU on a Zero
+                                      or (self.last_render < self.volume_flash
+                                          and time.monotonic()
+                                          - self.last_render >= 0.5)):
+                # Repaints are change-driven (_set marks dirty): while
+                # playing the 1s status poll moves the progress bar, while
+                # paused NOTHING repaints — a full PIL compose + 115KB SPI
+                # push per identical frame was measurable CPU on the Zero.
+                # The volume overlay is the one time-based exception: keep
+                # painting until one frame lands after it expired.
                 self.dirty = False
                 self.last_render = time.monotonic()
                 self.render()
