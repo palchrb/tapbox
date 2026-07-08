@@ -231,21 +231,19 @@ def make_input():
 # --- drawing helpers ----------------------------------------------------------------
 
 def battery_corner(draw, system):
-    """Battery pill in the top-right corner — on every view."""
+    """Battery gauge top-right — on every view. Just the bar (color
+    carries the message: green ok/charging, yellow low, red critical);
+    the exact percent lives in the PWA."""
     pct = (system or {}).get("battery")
     plugged = (system or {}).get("plugged")
-    x, y, w, h = W - 46, 6, 34, 15
+    x, y, w, h = W - 32, 8, 24, 11
     color = DIM if pct is None else (
         GOOD if plugged or pct > 30 else (HILITE if pct > 12 else WARN))
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=3, outline=color)
-    draw.rectangle([x + w + 1, y + 4, x + w + 3, y + h - 4], fill=color)
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=2, outline=color)
+    draw.rectangle([x + w + 1, y + 3, x + w + 2, y + h - 3], fill=color)
     if pct is not None:
         fill = max(2, int((w - 4) * min(pct, 100) / 100))
         draw.rectangle([x + 2, y + 2, x + 2 + fill, y + h - 2], fill=color)
-        label = "chg" if plugged else f"{int(round(pct))}%"
-        draw.text((x - 4, y + 1), label, font=F_SMALL, fill=color, anchor="ra")
-    else:
-        draw.text((x - 4, y + 1), "?", font=F_SMALL, fill=color, anchor="ra")
 
 
 def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
@@ -362,21 +360,31 @@ class App:
         if not ref:
             return None
         key = (ref, size)
-        if key not in self.artwork_cache:
-            try:
-                if ref.startswith("http"):
-                    with urllib.request.urlopen(ref, timeout=10) as r:
-                        raw = r.read()
-                    import io
-                    img = Image.open(io.BytesIO(raw))
-                else:
-                    img = Image.open(ref)
-                img = img.convert("RGB")
-                img.thumbnail((size, size))
-                self.artwork_cache[key] = img
-            except Exception:
-                self.artwork_cache[key] = None
-        return self.artwork_cache[key]
+        cached = self.artwork_cache.get(key)
+        if isinstance(cached, float):  # failed earlier — when to retry
+            if time.monotonic() < cached:
+                return None
+        elif key in self.artwork_cache:
+            return cached
+        try:
+            if ref.startswith("http"):
+                with urllib.request.urlopen(ref, timeout=10) as r:
+                    raw = r.read()
+                import io
+                img = Image.open(io.BytesIO(raw))
+            else:
+                img = Image.open(ref)
+            img = img.convert("RGB")
+            img.thumbnail((size, size))
+            self.artwork_cache[key] = img
+            return img
+        except Exception as e:
+            # Never cache a failure for good: the first fetch often races
+            # wifi at boot (auto-resume starts before DNS is up) and the
+            # cover would stay blank until the next ui restart.
+            log(f"artwork failed ({e.__class__.__name__}): {ref[:80]}")
+            self.artwork_cache[key] = time.monotonic() + 60
+            return None
 
     def entry_art(self):
         """Cover of the highlighted entry (56px). Loading can hit the
@@ -566,11 +574,13 @@ class App:
         elif i == 5:
             self.push("storage")
         elif i in (6, 7):
+            # row 6 = Shut down, row 7 = Restart (an inverted flag here
+            # made Restart power the box off — field-reported)
             action = "Restarting" if i == 7 else "Shutting down"
             self.draw_message(f"{action} ... (A confirms, B cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
-                api_post("/system/shutdown", {"restart": i == 6})
+                api_post("/system/shutdown", {"restart": i == 7})
 
     def select_bt(self):
         if self.sel == 0:  # Pair nearest (the one-button flow)
@@ -707,7 +717,11 @@ class App:
             ty = 70
         title = st.get("title") or "(nothing playing)"
         d.text((W // 2, ty), title[:26], font=F_MED, fill=FG, anchor="ma")
-        sub = ", ".join((st.get("spotify") or {}).get("artists") or [])
+        # artists only when spotify is the ACTIVE source — /status keeps
+        # the paused-spotify block around during mpv playback, and its
+        # last artist has nothing to do with the podcast episode showing
+        sub = "" if st.get("source") != "spotify" else \
+            ", ".join((st.get("spotify") or {}).get("artists") or [])
         if sub:
             d.text((W // 2, ty + 22), sub[:30], font=F_SMALL, fill=DIM, anchor="ma")
         pos, dur = st.get("position"), st.get("duration")
