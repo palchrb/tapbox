@@ -9,7 +9,8 @@ Views:  Home (sections) -> Entries -> Episodes -> Now Playing
 Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
   menus:        A=select  B=back   X=up      Y=down
   now playing:  A: press=play/pause, hold=back to menu
-                X: volume mode (then B=down, Y=up; closes after 3s)
+                X: press=volume mode (then B=down, Y=up; closes after 3s)
+                   hold=switch output (bt speaker <-> built-in)
                 B=previous  Y=next  (instant single presses)
 
 The battery indicator is drawn in the top-right corner of every view.
@@ -138,6 +139,8 @@ class FifoInput:
                 events.append(ch)
             elif ch == "l":
                 events.append("a_long")
+            elif ch == "o":
+                events.append("x_long")
             elif ch == "s":
                 events.append("settings")
         return events
@@ -170,20 +173,25 @@ class GpioInput:
         self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._a_long_sent = False
         self._a_gesture = False   # gesture_mode when A was pressed
+        self._x_long_sent = False
         self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
-        for name in ("a", "b"):
+        for name in ("a", "b", "x"):
             self.buttons[name].when_released = \
                 lambda n=name: self._released(n)
         log("gpio buttons ready (BCM 5/6/16/24)")
 
     def _pressed(self, name):
         self.wake.set()  # end the current poll() immediately
-        if name in ("x", "y"):
+        if name == "y" or (name == "x" and not self.gesture_mode):
             self.queue.append(name)
             return
         self.down[name] = time.monotonic()
+        if name == "x":
+            # now-playing: short X = volume card, held X = output toggle
+            self._x_long_sent = False
+            return
         if name == "a":
             self._a_long_sent = False
             # judge the RELEASE by the mode the press STARTED in: a_long
@@ -199,6 +207,10 @@ class GpioInput:
             self.tainted.discard(name)
             return
         if held_since is None:
+            return
+        if name == "x":
+            if not self._x_long_sent:
+                self.queue.append("x")
             return
         other = "b" if name == "a" else "a"
         if other in self.down:
@@ -222,7 +234,7 @@ class GpioInput:
     def _events(self):
         now = time.monotonic()
         if "a" in self.down and "b" in self.down:
-            if now - max(self.down.values()) >= self.HOLD_S:
+            if now - max(self.down["a"], self.down["b"]) >= self.HOLD_S:
                 # swallow both releases; drop anything queued meanwhile
                 self.tainted.update(self.down)
                 self.down.clear()
@@ -234,6 +246,10 @@ class GpioInput:
             # long press fires while still held — no waiting for release
             self._a_long_sent = True
             self.queue.append("a_long")
+        if ("x" in self.down and not self._x_long_sent
+                and now - self.down["x"] >= self.LONG_S):
+            self._x_long_sent = True
+            self.queue.append("x_long")
         ev, self.queue = self.queue[:], []
         return ev
 
@@ -270,6 +286,7 @@ class LgpioInput(GpioInput):
         self.tainted = set()
         self._a_long_sent = False
         self._a_gesture = False
+        self._x_long_sent = False
         self.wake = threading.Event()  # set by inherited handlers; unused
         self._level = {n: 1 for n in self.PINS}   # pull-up: 1 = released
         self._edge_at = {n: 0.0 for n in self.PINS}
@@ -558,6 +575,8 @@ class App:
                 self.back()
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
+            elif ev == "x_long":
+                self._toggle_output()
             elif ev in ("b", "y"):
                 if in_vol:
                     self._volume_mode(delta=-5 if ev == "b" else 5)
@@ -566,6 +585,22 @@ class App:
                     self.last_status = 0
         except OSError as e:
             log(f"control failed: {e}")
+
+    def _toggle_output(self):
+        """Hold X: flip between the bluetooth speaker and the built-in
+        one — the same set_output the PWA buttons use."""
+        try:
+            cur = api_get("/output").get("output")
+            dev = "local" if cur == "bt" else "bt"
+            r = api_post("/output", {"device": dev})
+        except OSError as e:
+            log(f"output toggle failed: {e}")
+            return
+        name = "built-in speaker" if dev == "local" else "bluetooth speaker"
+        self.draw_message(f"Output: {name}"
+                          + (" (no sound card?)" if r.get("warning") else ""))
+        time.sleep(1.2)   # let it read before the next repaint
+        self.dirty = True
 
     def _volume_mode(self, delta):
         """The volume card: X opens it, then B/Y adjust while it shows."""
