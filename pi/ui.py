@@ -144,10 +144,16 @@ class FifoInput:
 
 class GpioInput:
     """Pirate Audio buttons via gpiozero. Hold A+B ~2s -> settings.
-    In gesture_mode (the now-playing view) the A button resolves
-    short-vs-hold: release before LONG_S -> 'a' (fires instantly on
-    release), held LONG_S -> 'a_long' (fires while still held). All
-    other buttons are instant single presses."""
+
+    A and B fire on RELEASE — a press can be the start of the A+B
+    combo, and firing them on press made the combo navigate the menu
+    while you were holding it (select! back!). Overlapping A+B that
+    never reaches HOLD_S is swallowed as a failed combo attempt, not
+    delivered as two commands. X/Y stay instant single presses.
+
+    In gesture_mode (the now-playing view) A resolves short-vs-hold:
+    release before LONG_S -> 'a', held LONG_S -> 'a_long' (fires while
+    still held — but never while B is also down: that's a combo)."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
     HOLD_S = 2.0      # A+B settings combo
@@ -159,49 +165,59 @@ class GpioInput:
                         for name, pin in self.PINS.items()}
         self.queue = []
         self.gesture_mode = False
-        self.combo_since = None
-        self._a_down = None      # press timestamp while A is held
+        self.down = {}        # a/b -> press timestamp while held
+        self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._a_long_sent = False
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
-        self.buttons["a"].when_released = self._a_released
+        for name in ("a", "b"):
+            self.buttons[name].when_released = \
+                lambda n=name: self._released(n)
         log("gpio buttons ready (BCM 5/6/16/24)")
 
     def _pressed(self, name):
-        if name != "a" or not self.gesture_mode:
+        if name in ("x", "y"):
             self.queue.append(name)
             return
-        self._a_down = time.monotonic()
-        self._a_long_sent = False
+        self.down[name] = time.monotonic()
+        if name == "a":
+            self._a_long_sent = False
 
-    def _a_released(self):
-        if not self.gesture_mode or self._a_down is None:
+    def _released(self, name):
+        held_since = self.down.pop(name, None)
+        if name in self.tainted:
+            self.tainted.discard(name)
             return
-        held = time.monotonic() - self._a_down
-        self._a_down = None
-        if not self._a_long_sent and held < self.LONG_S:
-            self.queue.append("a")  # short press — fires right on release
+        if held_since is None:
+            return
+        other = "b" if name == "a" else "a"
+        if other in self.down:
+            # overlapping A+B released before HOLD_S: a failed combo
+            # attempt, not two commands — swallow the other one too
+            self.tainted.add(other)
+            return
+        if name == "a" and self.gesture_mode:
+            if not self._a_long_sent:
+                self.queue.append("a")
+            return
+        self.queue.append(name)
 
     def poll(self, timeout):
         time.sleep(timeout)
         now = time.monotonic()
-        # long press fires while still held — no waiting for the release
-        if (self.gesture_mode and self._a_down is not None
+        if "a" in self.down and "b" in self.down:
+            if now - max(self.down.values()) >= self.HOLD_S:
+                # swallow both releases; drop anything queued meanwhile
+                self.tainted.update(self.down)
+                self.down.clear()
+                self.queue.clear()
+                return ["settings"]
+        elif (self.gesture_mode and "a" in self.down
                 and not self._a_long_sent
-                and now - self._a_down >= self.LONG_S):
+                and now - self.down["a"] >= self.LONG_S):
+            # long press fires while still held — no waiting for release
             self._a_long_sent = True
             self.queue.append("a_long")
-        a, b = self.buttons["a"].is_pressed, self.buttons["b"].is_pressed
-        if a and b:
-            if self.combo_since is None:
-                self.combo_since = time.monotonic()
-            elif time.monotonic() - self.combo_since >= self.HOLD_S:
-                self.combo_since = None
-                self.queue.clear()  # eat the presses that formed the combo
-                self._a_down = None
-                return ["settings"]
-        else:
-            self.combo_since = None
         ev, self.queue = self.queue[:], []
         return ev
 
