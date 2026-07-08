@@ -62,6 +62,8 @@ def main():
 
     env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS=addr,
                TAPBOX_BT_FILE=mac_file, TAPBOX_BT_LOCKFILE=lock_file,
+               TAPBOX_DAEMON="http://127.0.0.1:9",  # never the real one
+               TAPBOX_RECON_FALLBACK="1",
                TAPBOX_RECON_BOOT_RETRY="1", TAPBOX_RECON_BOOT_WINDOW="15",
                TAPBOX_RECON_BACKOFF_MIN="2", TAPBOX_RECON_BACKOFF_MAX="8",
                TAPBOX_RECON_DROP_RETRY="1", TAPBOX_RECON_DEBOUNCE="0.5",

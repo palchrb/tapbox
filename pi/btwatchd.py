@@ -81,6 +81,7 @@ BACKOFF_MAX_S = float(os.environ.get("TAPBOX_RECON_BACKOFF_MAX", "300"))
 DROP_RETRY_S = float(os.environ.get("TAPBOX_RECON_DROP_RETRY", "3"))
 DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_DEBOUNCE", "5"))
 LOCK_RETRY_S = float(os.environ.get("TAPBOX_RECON_LOCK_RETRY", "10"))
+FALLBACK_S = float(os.environ.get("TAPBOX_RECON_FALLBACK", "20"))
 CONNECT_TIMEOUT_S = 30
 
 BLUEZ = "org.bluez"
@@ -112,6 +113,8 @@ class Reconnector:
         self.boot_deadline = time.monotonic() + BOOT_WINDOW_S
         self.monitor = None          # Gio ref — GC would stop events
         self.announced = None        # last output we told tapboxd about
+        self.disconnected_since = None  # when the target went away
+        self._pcm_waiting = False    # a bt announcement awaits the PCM
 
     # --- bus plumbing ------------------------------------------------------
 
@@ -148,6 +151,8 @@ class Reconnector:
                     # one page and starts the backoff ladder
                     self.state = "WAITING"
                     self.backoff = BACKOFF_MIN_S
+                    if self.disconnected_since is None:
+                        self.disconnected_since = time.monotonic()
                     self.schedule(DROP_RETRY_S, "target dropped")
             elif self.state == "WAITING":
                 # RSSI etc. — evidence the device is nearby right now
@@ -175,6 +180,7 @@ class Reconnector:
         log(f"target changed: {self.target or '(none)'} -> {new or '(none)'}")
         self.target = new
         self.backoff = BACKOFF_MIN_S
+        self.disconnected_since = None
         self.cancel_timer()
         if new is None:
             self.state = "NO_TARGET"
@@ -204,8 +210,38 @@ class Reconnector:
             log(f"steady: {self.target} ({why})")
         self.state = "STEADY"
         self.backoff = BACKOFF_MIN_S
+        self.disconnected_since = None
         self.cancel_timer()
-        self._output("bt")
+        if not self._pcm_waiting:
+            self._pcm_waiting = True
+            self._pcm_tries = 10
+            self._await_pcm()
+
+    def _await_pcm(self):
+        """Announce bt only once the A2DP PCM actually exists: the
+        announcement restarts go-librespot, and doing that while AVDTP
+        is still configuring TORE FRESH CONNECTIONS DOWN (field log:
+        SelectCodec 'Resource temporarily unavailable' -> transport
+        freed -> disconnect -> fallback to local -> reconnect -> ...,
+        an output flap loop that also made mpv skip episodes)."""
+        if self.state != "STEADY":
+            self._pcm_waiting = False
+            return
+        try:
+            from tapbox import btbus
+            ready = btbus.a2dp_pcm_present(self.target)
+        except Exception:
+            ready = True  # can't tell — announce rather than stall
+        if ready or self._pcm_tries <= 0:
+            self._pcm_waiting = False
+            self._output("bt")
+            return
+        self._pcm_tries -= 1
+        GLib.timeout_add(1000, self._await_pcm_tick)
+
+    def _await_pcm_tick(self):
+        self._await_pcm()
+        return False
 
     def _output(self, device):
         """Follow-the-speaker output policy: connected -> bt, confirmed
@@ -287,6 +323,11 @@ class Reconnector:
         if was is not None and was != self.target:
             self.attempt("retarget (stale connect)")
             return
+        if self.state == "STEADY" or self._connected():
+            # a racing attempt lost to a successful connection (the
+            # speaker paged us while we paged it) — nothing is wrong,
+            # and touching the output here flapped it mid-playback
+            return
         if self.state == "BOOT":
             if time.monotonic() < self.boot_deadline:
                 self.schedule(BOOT_RETRY_S, None)
@@ -294,7 +335,13 @@ class Reconnector:
             self.state = "WAITING"
         log(f"connect failed ({detail}) — next blind attempt in "
             f"{int(self.backoff)}s")
-        self._output("local")  # speaker confirmed away, not just a blip
+        if self.disconnected_since is None:
+            self.disconnected_since = time.monotonic()
+        if time.monotonic() - self.disconnected_since >= FALLBACK_S:
+            # away for real — a speaker mid-power-cycle flaps drop/connect
+            # for many seconds, and each premature local/bt swing restarts
+            # go-librespot and yanks mpv's audio device (episode skips)
+            self._output("local")
         self.schedule(self.backoff, None)
         self.backoff = min(self.backoff * 2, BACKOFF_MAX_S)
 
