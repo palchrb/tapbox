@@ -439,9 +439,13 @@ async function loadSystem() {
   rows.push(["Wi-Fi", sys.wifi.enabled ? (sys.wifi.ssid || "on (not connected)") : "off"]);
   rows.push(["IP", sys.wifi.ip || "–"]);
   if (sys.cpu_temp != null) rows.push(["CPU temp", `${sys.cpu_temp}°C`]);
-  $("#spotify-current").textContent = sys.spotify_user
-    ? `Logged in as ${sys.spotify_user}`
-    : "Not logged in — pick the box under Devices in the Spotify app";
+  $("#spotify-current").textContent = sys.spotify_open
+    ? (sys.spotify_user
+        ? `Open for login as ${sys.spotify_user} — locking shortly…`
+        : "Open — pick the box under Devices in the Spotify app")
+    : (sys.spotify_user
+        ? `Locked to ${sys.spotify_user} — no one else can take the box`
+        : "Not logged in — tap Switch account to open for login");
   rows.push(["Box", sys.hostname]);
   const dl = $("#sysinfo");
   dl.textContent = "";

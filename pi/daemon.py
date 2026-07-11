@@ -776,6 +776,9 @@ class Handler(BaseHTTPRequestHandler):
                 st["spotify_user"] = go_status(timeout=1).get("username")
             except OSError:
                 st["spotify_user"] = None
+            if st.get("spotify_user") is None:  # /status is None while it
+                st["spotify_user"] = _spotify.logged_in_user()  # reconnects
+            st["spotify_open"] = _spotify.zeroconf_open()
             self._send(200, st)
         elif url.path == "/bt":
             self._send(200, bt_status())
@@ -1102,6 +1105,12 @@ def _spotify_supervisor():
                                    timeout=30)
                     log("spotify: internet is back — go-librespot started")
                     parked = False
+                # Once an account is on, close the open Connect door so a
+                # passing phone can't overwrite our login. No-op when
+                # already locked or not logged in.
+                if _spotify.lock():
+                    log("spotify: locked to the logged-in account "
+                        "(zeroconf closed — box can't be hijacked)")
             else:
                 subprocess.run(["systemctl", "stop", "go-librespot"],
                                timeout=30)
