@@ -259,10 +259,10 @@ def main():
             reverse = True
             args = args[1:]
         elif args[0] == "--cache":
-            if len(args) < 2 or not args[1].isdigit():
+            if len(args) < 2 or not re.fullmatch(r"-?\d+", args[1]):
                 print("--cache needs a number", file=sys.stderr)
                 sys.exit(1)
-            cache_n = int(args[1])
+            cache_n = int(args[1])  # -1 = keep all offline
             args = args[2:]
         else:
             if len(args) < 2:
@@ -384,9 +384,9 @@ def main():
     signal.signal(signal.SIGTERM, _stop)
 
     # Background episode caching. A library entry's cache setting (--cache N,
-    # passed by tapboxd) decides: 0 = never sync, N = keep the newest N.
-    # Without the flag (cards with raw links, CLI) the legacy behaviour
-    # stands: NRK podcasts/series sync their newest 50.
+    # passed by tapboxd) decides: 0 = never sync, N = keep the newest N,
+    # -1 = keep every episode. Without the flag (cards with raw links, CLI)
+    # the legacy behaviour stands: NRK podcasts/series sync their newest 50.
     kind = None
     m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
     if m:
@@ -395,10 +395,12 @@ def main():
         m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$", target, re.I)
         if m:
             kind = "series"
+    # cache_n: None = legacy (newest 50), 0 = off, N = newest N, -1 = keep all
     sync_args = None
-    if m and (cache_n is None or cache_n > 0):
-        sync_args = ["sync", m.group(1), str(cache_n or 50), kind]
-    elif (cache_n or 0) > 0 and len(urls) > 1 \
+    if m and cache_n != 0:
+        n = 50 if cache_n is None else cache_n
+        sync_args = ["sync", m.group(1), str(n), kind]
+    elif cache_n not in (None, 0) and len(urls) > 1 \
             and target.startswith(("http://", "https://")):
         sync_args = ["sync-feed", target, str(cache_n)]
     if sync_args:

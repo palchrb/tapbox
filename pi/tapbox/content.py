@@ -418,7 +418,7 @@ def sync_feed(target, count=SYNC_COUNT):
             _log(f"{key}: downloaded cover art")
         except OSError:
             pass
-    wanted = items[:count]
+    wanted = items if count < 0 else items[:count]  # count<0 = keep all
     have = sum(1 for u, _t, _i in wanted if os.path.exists(
         os.path.join(CACHE_DIR, key, f"{_feed_episode_id(u)}.mp3")))
     _log(f"{key}: sync (feed) — {len(wanted)} newest wanted, {have} already "
@@ -443,7 +443,7 @@ def sync(slug, count=SYNC_COUNT, kind="podcast"):
     Podcasts are straight mp3 downloads; series episodes (HLS) are captured
     to m4a with ffmpeg. Already-cached episodes are skipped."""
     episodes = _catalog(slug, kind)  # oldest first
-    wanted = episodes[-count:]
+    wanted = episodes if count < 0 else episodes[-count:]  # count<0 = keep all
     have = sum(1 for ep in wanted
                if os.path.exists(_episode_file(slug, ep["id"], kind)))
     _log(f"{slug}: sync ({kind}) — {len(wanted)} newest wanted, {have} already "

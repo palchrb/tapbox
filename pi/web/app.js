@@ -237,7 +237,7 @@ let LIB = { version: 1, sections: [] };
 const ORDER_LABEL = {
   auto: "auto", newest_first: "newest first", oldest_first: "oldest first",
 };
-const CACHE_OPTIONS = [0, 5, 10, 25, 50];
+const CACHE_OPTIONS = [0, 5, 10, 25, 50, -1];  // -1 = keep all offline
 const isSpotify = (t) => /open\.spotify\.com|spotify:|spotify\.link\//.test(t);
 const isLocal = (t) => t.startsWith("/");
 
@@ -300,15 +300,16 @@ function entryRow(e) {
     for (const n of CACHE_OPTIONS) {
       const o = document.createElement("option");
       o.value = String(n);
-      o.textContent = n === 0 ? "no offline" : `keep ${n}`;
+      o.textContent = n === 0 ? "no offline" : n < 0 ? "keep all" : `keep ${n}`;
       if ((e.cache || 0) === n) o.selected = true;
       cache.appendChild(o);
     }
     cache.addEventListener("change", async () => {
       e.cache = Number(cache.value);
       await saveLibrary();
-      toast(e.cache ? `${e.name}: keeps the newest ${e.cache} offline`
-                    : `${e.name}: no offline copies`);
+      toast(e.cache < 0 ? `${e.name}: keeps every episode offline`
+            : e.cache ? `${e.name}: keeps the newest ${e.cache} offline`
+                      : `${e.name}: no offline copies`);
     });
   }
 

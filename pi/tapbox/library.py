@@ -64,8 +64,10 @@ def normalize_library(obj):
             if order not in ORDERS:
                 raise ValueError(f"order must be one of {ORDERS}")
             cache = e.get("cache", 0)
-            if not isinstance(cache, int) or not 0 <= cache <= 100:
-                raise ValueError("cache must be 0-100 (episodes to keep offline)")
+            # -1 = keep all episodes offline; 0 = none; 1..100 = newest N
+            if not isinstance(cache, int) or not (cache == -1 or 0 <= cache <= 100):
+                raise ValueError("cache must be -1 (all) or 0-100 (episodes "
+                                 "to keep offline)")
             eid = str(e.get("id") or hashlib.sha1(target.encode()).hexdigest()[:8])
             if eid in seen:
                 raise ValueError(f"duplicate entry id {eid}")
@@ -162,7 +164,8 @@ def _cache_sweeper():
         for s in load_library()["sections"]:
             for e in s["entries"]:
                 n = e.get("cache") or 0
-                args = _sync_args_for(e["target"], n) if n > 0 else None
+                # n>0 keep newest N, n==-1 keep all, n==0 no offline copies
+                args = _sync_args_for(e["target"], n) if n != 0 else None
                 if not args:
                     continue
                 log(f"cache sweep: {e['name']} ({' '.join(args)})")
