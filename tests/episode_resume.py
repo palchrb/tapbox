@@ -48,4 +48,20 @@ assert player.episode_pos(old, IDB, B) == 90.0, "old bookmark ignored"
 assert player.episode_pos(old, IDA, A) == 0.0
 print("5. legacy single-bookmark state still resumes OK")
 
-print("EPISODE RESUME OK — position remembered per episode.")
+# per-entry 'from start': the library accepts the flag and defaults to resume
+from tapbox import library  # noqa: E402
+lib = {"sections": [{"name": "S", "entries": [
+    {"name": "Songs", "target": "https://ex.com/rss", "resume": False},
+    {"name": "Story", "target": "https://radio.nrk.no/podkast/foo"}]}]}
+out = library.normalize_library(lib)
+assert out["sections"][0]["entries"][0]["resume"] is False
+assert out["sections"][0]["entries"][1]["resume"] is True, "resume must default on"
+lib["sections"][0]["entries"][0]["resume"] = "nope"
+try:
+    library.normalize_library(lib)
+    raise AssertionError("non-bool resume should be rejected")
+except ValueError:
+    pass
+print("6. per-entry resume flag validated + defaults on OK")
+
+print("EPISODE RESUME OK — position remembered per episode, configurable.")

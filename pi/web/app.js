@@ -325,6 +325,26 @@ function entryRow(e, sectionName) {
     });
   }
 
+  // Resume where you left off, or always start from the beginning — not
+  // for Spotify (go-librespot owns its own resume)
+  let resume = null;
+  if (!isSpotify(e.target)) {
+    resume = document.createElement("select");
+    resume.title = "Resume or always from the start";
+    for (const [val, label] of [["1", "resume"], ["0", "from start"]]) {
+      const o = document.createElement("option");
+      o.value = val; o.textContent = label;
+      if ((e.resume === false ? "0" : "1") === val) o.selected = true;
+      resume.appendChild(o);
+    }
+    resume.addEventListener("change", async () => {
+      e.resume = resume.value === "1";
+      await saveLibrary();
+      toast(e.resume ? `${e.name}: resumes where you left off`
+                     : `${e.name}: always starts from the beginning`);
+    });
+  }
+
   // Move to another category (reorganise the library)
   const move = document.createElement("select");
   move.title = "Category";
@@ -378,6 +398,7 @@ function entryRow(e, sectionName) {
   actions.className = "entry-actions";
   actions.append(order);
   if (cache) actions.append(cache);
+  if (resume) actions.append(resume);
   actions.append(move, play, del);
   row.append(info, actions);
   return row;
@@ -395,6 +416,7 @@ $("#add-form").addEventListener("submit", async (ev) => {
     target: $("#add-target").value.trim(),
     order: $("#add-order").value,
     cache: Number($("#add-cache").value),
+    resume: $("#add-resume").value === "1",
   };
   let sec = LIB.sections.find(
     (s) => s.name.toLowerCase() === sectionName.toLowerCase());

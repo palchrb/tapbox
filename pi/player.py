@@ -285,9 +285,14 @@ def main():
     reverse = False  # flip the expanded queue (library 'order' override)
     episode = None   # explicit episode pick from the menu (tapboxd /play)
     cache_n = None   # library entry cache setting; None = legacy behaviour
-    while args and args[0] in ("--fresh", "--reverse", "--episode", "--cache"):
+    no_resume = False  # library 'from start' setting: never remember position
+    while args and args[0] in ("--fresh", "--reverse", "--episode", "--cache",
+                               "--no-resume"):
         if args[0] == "--fresh":
             fresh = True
+            args = args[1:]
+        elif args[0] == "--no-resume":
+            no_resume = True
             args = args[1:]
         elif args[0] == "--reverse":
             reverse = True
@@ -305,8 +310,8 @@ def main():
             episode = args[1]
             args = args[2:]
     if not args:
-        print("usage: player.py [--fresh] [--reverse] [--episode <id>] "
-              "<target> [url...]", file=sys.stderr)
+        print("usage: player.py [--fresh] [--no-resume] [--reverse] "
+              "[--episode <id>] [--cache N] <target> [url...]", file=sys.stderr)
         sys.exit(1)
     target, urls = args[0], args[1:]
 
@@ -341,9 +346,10 @@ def main():
         log(f"offline — playing {len(urls)} cached episode(s), "
             f"skipping {len(streams)} streams")
     key = state_key(target)
-    if fresh:
+    if fresh or no_resume:
         clear_state(key)
-        log("starting fresh — cleared remembered position")
+        if fresh:
+            log("starting fresh — cleared remembered position")
 
     try:
         spotify.go("/player/pause")  # don't talk over Spotify
@@ -356,7 +362,7 @@ def main():
     # stream URL one run and a cached local file the next, so URLs alone are
     # not reliable.
     start_pos = 0.0
-    st = load_state(key)
+    st = None if no_resume else load_state(key)
     url_by_id = {eid: u for u, eid in ids.items()}
     if episode:
         picked = url_by_id.get(episode)
@@ -556,7 +562,7 @@ def main():
                 # where it was left. The first track is already at start_pos,
                 # and a never-heard/finished episode has no saved position, so
                 # a natural advance still plays from the top.
-                if not was_first:
+                if not was_first and not no_resume:
                     saved = episode_pos(load_state(key), ids.get(path), path)
                     if saved > RESUME_MIN_S:
                         try:
@@ -588,7 +594,7 @@ def main():
             if path and isinstance(pos, (int, float)):
                 if not paused and now_m - track_started > 15:
                     stable = (path, pos)  # last spot that audibly played
-                if not live:
+                if not live and not no_resume:
                     save_state(key, path, pos, ids.get(path), dur)
                 # heartbeat so a quiet-but-playing stream isn't mistaken
                 # for frozen (mpv runs silent); every ~30s

@@ -166,12 +166,14 @@ class Orchestrator:
         self.target = None
         self.source = None
         self.reverse = False
+        self.resume = True  # library 'from start' entries set this False
         self.mpv_shuffle = False  # mpv has no queryable shuffle state
         try:
             with open(LAST_FILE) as f:
                 d = json.load(f)
             self.target, self.source = d.get("target"), d.get("source")
             self.reverse = bool(d.get("reverse"))
+            self.resume = bool(d.get("resume", True))
             if self.target:
                 log(f"remembered last play: [{self.source}] {self.target}")
         except (OSError, ValueError):
@@ -265,7 +267,8 @@ class Orchestrator:
                 with self.lock:
                     if (self.target and self.source == "mpv"
                             and not self._mpv_alive()):
-                        self._spawn(self.target, reverse=self.reverse)
+                        self._spawn(self.target, reverse=self.reverse,
+                                    resume=self.resume)
                 last_pos, last_change = None, time.monotonic()
             except Exception as e:
                 log(f"stall watchdog error: {e!r}")
@@ -275,7 +278,8 @@ class Orchestrator:
         tmp = LAST_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump({"target": self.target, "source": self.source,
-                       "reverse": self.reverse, "updated": time.time()}, f)
+                       "reverse": self.reverse, "resume": self.resume,
+                       "updated": time.time()}, f)
         os.replace(tmp, LAST_FILE)
 
     def _mpv_alive(self):
@@ -291,10 +295,12 @@ class Orchestrator:
         self.child = None
 
     def _spawn(self, target, fresh=False, episode=None, reverse=False,
-               cache=None):
+               cache=None, resume=True):
         args = [sys.executable, player_path()]
         if fresh:
             args.append("--fresh")
+        if not resume:
+            args.append("--no-resume")
         if reverse:
             args.append("--reverse")
         if episode:
@@ -306,7 +312,7 @@ class Orchestrator:
         self.child_started = time.monotonic()
 
     def play(self, target, fresh=False, episode=None, reverse=False,
-             cache=None):
+             cache=None, resume=True):
         with self.lock:
             # Same card back in the slot (or same link replayed): if its
             # session is still loaded, unpause instead of restarting.
@@ -323,10 +329,11 @@ class Orchestrator:
                 except OSError:
                     pass  # IPC gone but child alive? fall through to respawn
             self._stop_child()
-            self._spawn(target, fresh, episode, reverse, cache)
+            self._spawn(target, fresh, episode, reverse, cache, resume)
             self.mpv_shuffle = False  # fresh queue plays in order
             self.target = target
             self.reverse = reverse
+            self.resume = resume
             self.source = "spotify" if is_spotify(target) else "mpv"
             self._persist()
             log(f"play [{self.source}] {target}"
@@ -573,7 +580,8 @@ class Orchestrator:
                     pass
             # 4) dead session + remembered target -> bring it back (resumes)
             if self.target and not self._mpv_alive():
-                self._spawn(self.target, reverse=self.reverse)
+                self._spawn(self.target, reverse=self.reverse,
+                            resume=self.resume)
                 log(f"{action} -> resuming last: {self.target}")
                 return {"routed": "resume", "target": self.target}
             log(f"{action}: nothing to control")
@@ -865,6 +873,7 @@ class Handler(BaseHTTPRequestHandler):
                 target = body.get("target")
                 reverse = False
                 cache = None  # None = legacy behaviour for raw targets
+                resume = True  # 'from start' entries turn this off
                 if not target and body.get("id"):
                     entry = find_entry(load_library(), body["id"])
                     if not entry:
@@ -875,12 +884,13 @@ class Handler(BaseHTTPRequestHandler):
                     reverse = (entry["order"] != "auto"
                                and entry["order"] != _natural_order(target))
                     cache = entry.get("cache", 0)
+                    resume = entry.get("resume", True)
                 if not target:
                     self._send(400, {"error": "target or id required"})
                     return
                 self._send(200, ORCH.play(target, bool(body.get("fresh")),
                                           body.get("episode") or None, reverse,
-                                          cache))
+                                          cache, resume))
             elif self.path in ("/playpause", "/next", "/prev"):
                 self._send(200, ORCH.command(self.path[1:]))
             elif self.path == "/pause":
@@ -1010,10 +1020,10 @@ def _bt_resume(resume):
     if not resume:
         return
     with ORCH.lock:
-        target, reverse = ORCH.target, ORCH.reverse
+        target, reverse, resume = ORCH.target, ORCH.reverse, ORCH.resume
         if target and not ORCH._mpv_alive():
             log("bt connect done — resuming playback on the new output")
-            ORCH._spawn(target, reverse=reverse)
+            ORCH._spawn(target, reverse=reverse, resume=resume)
 
 
 def _wifi_boot_reenable():
@@ -1220,7 +1230,8 @@ def _boot_resume():
                 break
             except OSError:
                 time.sleep(2)
-    ORCH.play(target, reverse=bool(last.get("reverse")))
+    ORCH.play(target, reverse=bool(last.get("reverse")),
+              resume=bool(last.get("resume", True)))
 
 
 class PortalHandler(BaseHTTPRequestHandler):

@@ -68,13 +68,16 @@ def normalize_library(obj):
             if not isinstance(cache, int) or not (cache == -1 or 0 <= cache <= 100):
                 raise ValueError("cache must be -1 (all) or 0-100 (episodes "
                                  "to keep offline)")
+            resume = e.get("resume", True)  # False = always play from the start
+            if not isinstance(resume, bool):
+                raise ValueError("resume must be true or false")
             eid = str(e.get("id") or hashlib.sha1(target.encode()).hexdigest()[:8])
             if eid in seen:
                 raise ValueError(f"duplicate entry id {eid}")
             seen.add(eid)
             sec["entries"].append(
                 {"id": eid, "name": ename, "target": target, "order": order,
-                 "cache": cache})
+                 "cache": cache, "resume": resume})
         out["sections"].append(sec)
     return out
 
