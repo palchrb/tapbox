@@ -257,7 +257,7 @@ async function loadLibrary() {
     h.textContent = s.name;
     card.appendChild(h);
     for (const e of s.entries) {
-      card.appendChild(entryRow(e));
+      card.appendChild(entryRow(e, s.name));
     }
     wrap.appendChild(card);
   }
@@ -266,7 +266,19 @@ async function loadLibrary() {
   }
 }
 
-function entryRow(e) {
+const NEW_SECTION = " new";  // sentinel: "move to a new category…"
+
+function moveEntry(e, dest) {
+  for (const s of LIB.sections) {
+    s.entries = s.entries.filter((x) => x.id !== e.id);
+  }
+  let sec = LIB.sections.find((s) => s.name === dest);
+  if (!sec) { sec = { name: dest, entries: [] }; LIB.sections.push(sec); }
+  sec.entries.push(e);
+  LIB.sections = LIB.sections.filter((s) => s.entries.length);
+}
+
+function entryRow(e, sectionName) {
   const row = document.createElement("div");
   row.className = "entry";
 
@@ -313,6 +325,31 @@ function entryRow(e) {
     });
   }
 
+  // Move to another category (reorganise the library)
+  const move = document.createElement("select");
+  move.title = "Category";
+  for (const s of LIB.sections) {
+    const o = document.createElement("option");
+    o.value = s.name; o.textContent = s.name;
+    if (s.name === sectionName) o.selected = true;
+    move.appendChild(o);
+  }
+  const newOpt = document.createElement("option");
+  newOpt.value = NEW_SECTION; newOpt.textContent = "New category…";
+  move.appendChild(newOpt);
+  move.addEventListener("change", async () => {
+    let dest = move.value;
+    if (dest === NEW_SECTION) {
+      dest = (prompt("New category name:") || "").trim();
+      if (!dest) { move.value = sectionName; return; }
+    }
+    if (dest === sectionName) return;
+    moveEntry(e, dest);
+    await saveLibrary();
+    loadLibrary();
+    toast(`Moved “${e.name}” to ${dest}`);
+  });
+
   const play = document.createElement("button");
   play.textContent = "▶";
   play.title = "Play now";
@@ -341,7 +378,7 @@ function entryRow(e) {
   actions.className = "entry-actions";
   actions.append(order);
   if (cache) actions.append(cache);
-  actions.append(play, del);
+  actions.append(move, play, del);
   row.append(info, actions);
   return row;
 }

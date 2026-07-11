@@ -833,6 +833,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             save_library(lib)
             log(f"library updated ({sum(len(s['entries']) for s in lib['sections'])} entries)")
+            # Free the disk held by entries just removed (or flipped to 'no
+            # offline'): only entries that still want offline copies keep them.
+            try:
+                keep = [e["target"] for s in lib["sections"] for e in s["entries"]
+                        if e.get("cache")]
+                gone = content.prune_cache(keep)
+                if gone:
+                    log(f"cache: pruned {len(gone)} orphaned offline "
+                        f"cache(s): {', '.join(gone)}")
+            except Exception as e:  # cleanup must never fail the save
+                log(f"cache prune failed: {e!r}")
             _sync_wake.set()  # start caching new/changed entries right away
             self._send(200, lib)
         elif self.path == "/settings":

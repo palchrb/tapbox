@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -289,6 +290,63 @@ _FEED_IMAGES = {}
 def feed_key(target):
     """Stable cache-directory name for a generic RSS feed URL."""
     return "feed-" + hashlib.sha1(target.encode()).hexdigest()[:12]
+
+
+def _nrk_slug(target):
+    """The NRK podkast/serie slug for a target, or None."""
+    for pat in (r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)",
+                r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)/?$"):
+        m = re.match(pat, target, re.I)
+        if m:
+            return m.group(1)
+    return None
+
+
+def cache_key_for(target):
+    """The CACHE_DIR subdirectory an entry's downloads live under, or None
+    for targets we never cache (Spotify, local folders)."""
+    slug = _nrk_slug(target)
+    if slug:
+        return slug
+    if target.startswith(("http://", "https://")):
+        return feed_key(target)
+    return None
+
+
+def prune_cache(keep_targets):
+    """Delete cached episodes/catalogs that no entry wants offline anymore —
+    entries removed from the library, or flipped to 'no offline'. Only ever
+    removes orphans (dirs / catalog files under CACHE_DIR with no owner in
+    keep_targets); the live library is the source of truth. Returns the list
+    of removed names."""
+    keep_dirs, keep_json = set(), set()
+    for t in keep_targets:
+        key = cache_key_for(t)
+        if key:
+            keep_dirs.add(key)
+        slug = _nrk_slug(t)
+        if slug:  # a slug's catalog cache is either podcast or series
+            keep_json.add(f"catalog-{slug}.json")
+            keep_json.add(f"catalog-series-{slug}.json")
+    removed = []
+    try:
+        names = os.listdir(CACHE_DIR)
+    except OSError:
+        return removed
+    for name in names:
+        path = os.path.join(CACHE_DIR, name)
+        if os.path.isdir(path):
+            if name not in keep_dirs:
+                shutil.rmtree(path, ignore_errors=True)
+                removed.append(name)
+        elif name.startswith("catalog-") and name.endswith(".json"):
+            if name not in keep_json:
+                try:
+                    os.remove(path)
+                    removed.append(name)
+                except OSError:
+                    pass
+    return removed
 
 
 def _feed_episode_id(enclosure_url):
