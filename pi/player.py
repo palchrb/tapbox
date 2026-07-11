@@ -74,13 +74,47 @@ def load_state(key):
         return None
 
 
-def save_state(key, url, pos, episode_id=None):
+def save_state(key, url, pos, episode_id=None, duration=None):
+    """Persist playback position. The top-level {url,pos,id} is the
+    whole-feed bookmark (which episode was last playing, for resume-on-tap);
+    `episodes` additionally remembers a position PER episode so hopping
+    between episodes continues each where it was left. Keyed by the stable
+    episode id (falls back to url), so a stream and its cached file share
+    one slot. An episode played to its end is dropped from the map — a
+    re-tap then starts it fresh instead of at the last second."""
     os.makedirs(STATE_DIR, exist_ok=True)
+    st = load_state(key) or {}
+    eps = st.get("episodes")
+    if not isinstance(eps, dict):
+        eps = {}
+    ep_key = episode_id or url
+    if duration and pos > duration - RESUME_MIN_S:
+        eps.pop(ep_key, None)  # finished — no mid-episode resume to keep
+    else:
+        eps[ep_key] = {"pos": pos, "url": url, "updated": time.time()}
+    st.update({"url": url, "pos": pos, "id": episode_id,
+               "updated": time.time(), "episodes": eps})
     tmp = state_path(key) + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"url": url, "pos": pos, "id": episode_id,
-                   "updated": time.time()}, f)
+        json.dump(st, f)
     os.replace(tmp, state_path(key))
+
+
+def episode_pos(st, episode_id, url):
+    """The remembered position for one specific episode, across its stream
+    and cached-file URLs. 0 when unknown."""
+    if not st:
+        return 0.0
+    eps = st.get("episodes")
+    if isinstance(eps, dict):  # new format: the map is authoritative — an
+        rec = eps.get(episode_id) if episode_id is not None else None  # episode
+        rec = rec or eps.get(url) or {}                       # cleared on finish
+        return float(rec.get("pos") or 0)                     # must stay cleared
+    # back-compat: state files written before per-episode memory only had
+    # the single top-level bookmark
+    if episode_id is not None and st.get("id") == episode_id:
+        return float(st.get("pos") or 0)
+    return 0.0
 
 
 def clear_state(key):
@@ -333,11 +367,11 @@ def main():
         else:
             idx = urls.index(picked)
             urls = urls[idx:] + urls[:idx]
-            # Picking the bookmarked episode continues at its position;
-            # picking any other episode starts it from the top. The bookmark
-            # follows playback from here on, as always.
-            if st and st.get("id") == episode and st.get("pos", 0) > RESUME_MIN_S:
-                start_pos = float(st["pos"])
+            # Every episode remembers its own position — picking any episode
+            # continues where it was last left (not just the last-played one).
+            ep_pos = episode_pos(st, episode, picked)
+            if ep_pos > RESUME_MIN_S:
+                start_pos = ep_pos
             name = titles.get(picked) or episode
             log(f"starting at '{name}'"
                 + (f", {int(start_pos)}s" if start_pos else ""))
@@ -504,7 +538,8 @@ def main():
             paused = ipc_get(sock, "pause")
             now_m = time.monotonic()
             if path and path != prev_path:
-                if prev_path is not None and not paused:
+                was_first = prev_path is None
+                if not was_first and not paused:
                     fast_skips = fast_skips + 1 \
                         if now_m - track_started < 10 else 0
                 prev_path, track_started = path, now_m
@@ -517,6 +552,18 @@ def main():
                     fast_skips, prev_path = 0, None
                     track_started = time.monotonic()
                     continue
+                # Jumped to another episode in-session (prev/next): resume it
+                # where it was left. The first track is already at start_pos,
+                # and a never-heard/finished episode has no saved position, so
+                # a natural advance still plays from the top.
+                if not was_first:
+                    saved = episode_pos(load_state(key), ids.get(path), path)
+                    if saved > RESUME_MIN_S:
+                        try:
+                            ipc(sock, "seek", saved, "absolute")
+                            log(f"resuming this episode at {int(saved)}s")
+                        except OSError:
+                            pass
             # Publish which episode is playing + the pause state (tapboxd
             # reads the FILE at shutdown — IPC would race mpv's death);
             # written when the track or pause state changes.
@@ -536,12 +583,13 @@ def main():
             pos = ipc_get(sock, "playback-time")
             # A live stream (radio) has no finite duration — don't bookmark
             # it (its "position" is the live-edge timestamp, not progress).
-            live = ipc_get(sock, "duration") in (None, 0)
+            dur = ipc_get(sock, "duration")
+            live = dur in (None, 0)
             if path and isinstance(pos, (int, float)):
                 if not paused and now_m - track_started > 15:
                     stable = (path, pos)  # last spot that audibly played
                 if not live:
-                    save_state(key, path, pos, ids.get(path))
+                    save_state(key, path, pos, ids.get(path), dur)
                 # heartbeat so a quiet-but-playing stream isn't mistaken
                 # for frozen (mpv runs silent); every ~30s
                 now_m = time.monotonic()
