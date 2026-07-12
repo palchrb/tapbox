@@ -156,6 +156,25 @@ def main():
     assert r.disconnected_since is None
     print("4. quick flap leaves output alone OK")
 
+    # 5: the user switches output to bt while disconnected -> the kick
+    # file handler attempts a connect NOW, not after the backoff ladder
+    connected["v"] = False
+    r.state = "WAITING"
+    r.connecting = None
+    r.backoff = bw.BACKOFF_MAX_S              # deep in the ladder
+    r.last_attempt = 0.0                      # debounce must not block it
+    before = r.last_attempt
+    r._kicked()
+    assert r.last_attempt > before, "kick did not trigger a connect attempt"
+    # ...and while already connected, the kick is a harmless no-op
+    r._finish_attempt()
+    connected["v"] = True
+    r.state = "STEADY"
+    r.last_attempt = 0.0
+    r._kicked()
+    assert r.state == "STEADY" and r.connecting is None
+    print("5. output-to-bt kick connects immediately, no-op when connected OK")
+
     print("BT OUTPUT POLICY OK — flap-loop protections intact.")
     return 0
 

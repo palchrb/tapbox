@@ -48,8 +48,14 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
         break
 from tapbox import btbus  # noqa: E402
 from tapbox.btbus import _run, log  # noqa: E402 — shared helpers
+from tapbox.paths import STATE_DIR  # noqa: E402
 
 MAC_FILE = os.environ.get("TAPBOX_BT_FILE", "/etc/tapbox/bt-headset")
+# tapboxd touches this when the user switches output to bt while the
+# speaker is disconnected — btwatchd watches it and connects immediately
+# instead of waiting out its blind-retry backoff (up to 300s)
+KICK_FILE = os.environ.get("TAPBOX_BT_KICK",
+                           os.path.join(STATE_DIR, "bt-connect-kick"))
 ASOUND = os.environ.get("TAPBOX_ASOUND", "/etc/asound.conf")
 SCAN_SECS = int(os.environ.get("TAPBOX_SCAN_SECS", "20"))
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")

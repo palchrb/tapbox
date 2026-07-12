@@ -432,6 +432,19 @@ class Orchestrator:
             with open(OUT_FILE + ".tmp", "w") as f:
                 json.dump({"output": device, "pcm": pcm}, f)
             os.replace(OUT_FILE + ".tmp", OUT_FILE)
+            if device == "bt" and not fallback and not _bt_transport_ready():
+                # The user asked for the speaker NOW, but it's not
+                # connected: poke btwatchd to attempt a connect right away
+                # instead of waiting out its blind-retry backoff (up to
+                # 300s of silence after picking 'bluetooth' otherwise).
+                try:
+                    with open(_bt.KICK_FILE + ".tmp", "w") as f:
+                        f.write(str(time.time()))
+                    os.replace(_bt.KICK_FILE + ".tmp", _bt.KICK_FILE)
+                    log("output -> bt: speaker not connected — kicked "
+                        "btwatchd to connect it now")
+                except OSError:
+                    pass
             mpv_switched = False
             if self._mpv_alive():
                 if device == "bt" and not _bt_transport_ready():

@@ -71,7 +71,7 @@ except ImportError as _e:
     _fallback(f"dbus/gi unavailable ({_e})")
 
 from tapbox import boxapi  # noqa: E402
-from tapbox.bt import MAC_FILE, acquire_process_lock  # noqa: E402
+from tapbox.bt import KICK_FILE, MAC_FILE, acquire_process_lock  # noqa: E402
 
 # timings are env-tunable so the test harness can run in seconds
 BOOT_RETRY_S = float(os.environ.get("TAPBOX_RECON_BOOT_RETRY", "5"))
@@ -112,6 +112,7 @@ class Reconnector:
         self.lock = None             # flock held across the Connect
         self.boot_deadline = time.monotonic() + BOOT_WINDOW_S
         self.monitor = None          # Gio ref — GC would stop events
+        self.kick_monitor = None     # ditto, for the connect-now kick
         self.announced = None        # last output we told tapboxd about
         self.disconnected_since = None  # when the target went away
         self._pcm_waiting = False    # a bt announcement awaits the PCM
@@ -134,6 +135,11 @@ class Reconnector:
         f = Gio.File.new_for_path(MAC_FILE)
         self.monitor = f.monitor(Gio.FileMonitorFlags.NONE, None)
         self.monitor.connect("changed", self._mac_file_changed)
+
+    def watch_kick_file(self):
+        f = Gio.File.new_for_path(KICK_FILE)
+        self.kick_monitor = f.monitor(Gio.FileMonitorFlags.NONE, None)
+        self.kick_monitor.connect("changed", self._kicked)
 
     # --- signal handlers ---------------------------------------------------
 
@@ -172,6 +178,17 @@ class Reconnector:
             log("bluez went away — going quiet until it returns")
             self.cancel_timer()
             self.state = "BOOT"
+
+    def _kicked(self, *_args):
+        """tapboxd touched the kick file: the user just switched the
+        output to bt while the speaker is disconnected — connect NOW
+        instead of waiting out the backoff ladder. attempt() handles the
+        harmless cases (already connected, in flight, lock busy); the
+        debounce absorbs Gio's multiple events per touch."""
+        if not self.target:
+            return
+        self.backoff = BACKOFF_MIN_S  # a fresh user intent resets the ladder
+        self.attempt("output switched to bt", debounce=True)
 
     def _mac_file_changed(self, *_args):
         new = read_target()
@@ -427,6 +444,7 @@ def main():
     r = Reconnector(bus)
     r.subscribe()
     r.watch_mac_file()
+    r.watch_kick_file()
     log(f"event-driven reconnect up — target {r.target or '(none)'}")
     r.enter_boot()
     GLib.MainLoop().run()
