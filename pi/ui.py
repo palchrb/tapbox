@@ -1273,11 +1273,9 @@ class App:
         # flip arrows (B / Y), drawn dim at the bottom corners
         d.polygon([(24, 222), (24, 236), (12, 229)], fill=DIM)
         d.polygon([(W - 24, 222), (W - 24, 236), (W - 12, 229)], fill=DIM)
-        # A (top left): play the selected tile — same glyph as now view
-        d.polygon([(12, 26), (12, 42), (26, 34)], fill=DIM)
-        # X (top right, under the battery): volume — same glyph as now view
-        d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
-                   (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
+        # A (top left): play the selected tile — THE action here, so it
+        # gets the highlight color and a bigger glyph than the dim hints
+        d.polygon([(10, 24), (10, 46), (30, 35)], fill=HILITE)
         name, rolls = marquee(e["name"], 20)
         d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
         st = self.status or {}
