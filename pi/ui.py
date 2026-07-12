@@ -55,6 +55,9 @@ SYSTEM_POLL_S = 30.0
 CONTROL_TIMEOUT = 5   # play/pause/next/prev hit the LOCAL daemon — if it
                       # can't answer in 5s the backend is wedged; fail fast
                       # so buttons keep working instead of freezing the UI
+NOW_RETURN_S = 10     # idle this long in a browse menu while music plays ->
+                      # snap back to now-playing (once you left it, the only
+                      # way back was re-tapping the same episode)
 
 BG = (12, 12, 20)
 FG = (235, 235, 235)
@@ -1109,6 +1112,15 @@ class App:
                 # nothing to update, and 1/s status HTTP all night is
                 # pure battery waste.
                 self.refresh()
+                # Browsing went idle while something plays: snap back to
+                # now-playing. Only from the browse views — settings/BT
+                # flows have their own long waits (scan, pair) and must
+                # not be yanked away from.
+                if (self.view in ("home", "entries", "episodes")
+                        and self.status.get("playing")
+                        and time.monotonic() - self.last_input
+                        > NOW_RETURN_S):
+                    self.push("now")
             if self.display.on and self.screen_should_sleep():
                 self.display.set_backlight(False)
                 if PNG_PATH:  # dev: make the blanking visible
