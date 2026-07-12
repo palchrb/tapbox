@@ -16,6 +16,8 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   GET  /status     unified now-playing (source, title, position, ...)
   GET  /library    the parent-curated library (sections -> named links)
   PUT  /library    replace the library (validated, atomic write)
+  POST /library/section-logo  {"id": <section>, "data": <base64|null>}
+                   upload/remove a home-screen logo for a category
   GET  /expand?id=<entry>|target=<url>   entry -> playable episode list
                    with titles + cached flags (offline-aware menus)
   GET  /output     current audio output ("bt" or "local")
@@ -71,6 +73,7 @@ Spotify links to go-librespot and everything else to mpv-with-resume.
 The daemon stays a thin, state-owning router.
 """
 
+import base64
 import hashlib
 import json
 import mimetypes
@@ -94,7 +97,7 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
             sys.path.insert(0, _p)
         break
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
-from tapbox.paths import STATE_DIR  # noqa: E402
+from tapbox.paths import ART_DIR, STATE_DIR  # noqa: E402
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
 # these names) keeps calling daemon.<helper>.
@@ -926,6 +929,43 @@ class Handler(BaseHTTPRequestHandler):
                 _spotify.clear_all_bookmarks()
                 r = _spotify.logout()
                 self._send(200 if r.get("ok") else 500, r)
+            elif self.path == "/library/section-logo":
+                # Upload (base64/data-URI) or remove (data: null) a home-
+                # screen logo for one section. The PWA downsizes client-side.
+                sid = str(body.get("id") or "")
+                lib = load_library()
+                sec = next((s for s in lib["sections"] if s["id"] == sid),
+                           None)
+                if not sec:
+                    self._send(404, {"error": f"no section {sid!r}"})
+                    return
+                path = os.path.join(ART_DIR, f"section-{sid}.jpg")
+                data = body.get("data")
+                if not data:  # remove the logo
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    sec.pop("image", None)
+                else:
+                    try:
+                        b64 = data.split(",", 1)[1] \
+                            if data.startswith("data:") else data
+                        raw = base64.b64decode(b64, validate=True)
+                    except (ValueError, AttributeError):
+                        self._send(400, {"error": "invalid image data"})
+                        return
+                    if not 100 <= len(raw) <= 3_000_000:
+                        self._send(400, {"error": "image must be 100B-3MB"})
+                        return
+                    os.makedirs(ART_DIR, exist_ok=True)
+                    with open(path + ".tmp", "wb") as f:
+                        f.write(raw)
+                    os.replace(path + ".tmp", path)
+                    sec["image"] = path
+                save_library(normalize_library(lib))
+                log(f"section logo {'set' if data else 'removed'}: {sid}")
+                self._send(200, lib)
             elif self.path == "/wifi/hotspot":
                 if not isinstance(body.get("enabled"), bool):
                     self._send(400, {"error": "enabled (bool) required"})

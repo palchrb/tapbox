@@ -12,7 +12,7 @@ import threading
 import time
 
 from tapbox import content
-from tapbox.paths import CACHE_DIR
+from tapbox.paths import ART_DIR, CACHE_DIR
 from tapbox.spotify import is_spotify
 
 LIB_FILE = os.environ.get("TAPBOX_LIBRARY", "/etc/tapbox/library.json")
@@ -53,6 +53,11 @@ def normalize_library(obj):
         if not name:
             raise ValueError("section needs a name")
         sec = {"id": str(s.get("id") or _slug(name)), "name": name, "entries": []}
+        image = s.get("image")  # optional section logo (uploaded via PWA)
+        if image:
+            if not isinstance(image, str) or len(image) > 500:
+                raise ValueError("section image must be a short string")
+            sec["image"] = image
         for e in s.get("entries") or []:
             if not isinstance(e, dict):
                 raise ValueError("entry must be an object")
@@ -164,7 +169,15 @@ def _cache_sweeper():
             deliberate = _sync_wake.wait(SYNC_INTERVAL_S)
             _sync_wake.clear()
             continue
-        for s in load_library()["sections"]:
+        lib = load_library()
+        try:
+            # Spotify covers (oEmbed): fetch what's missing, drop orphans.
+            # Cheap once cached — one network round-trip per NEW entry.
+            content.ensure_spotify_art(
+                [e["target"] for s in lib["sections"] for e in s["entries"]])
+        except Exception as exc:
+            log(f"spotify art fetch failed: {exc!r}")
+        for s in lib["sections"]:
             for e in s["entries"]:
                 n = e.get("cache") or 0
                 # n>0 keep newest N, n==-1 keep all, n==0 no offline copies
@@ -214,8 +227,13 @@ EXPAND_TTL_S = 300  # menus re-open constantly; feeds change hourly at most
 def expand_target(target, order="auto", name=None):
     if is_spotify(target):
         # Not expandable without the Web API: a leaf "play all" entry.
+        # The cover (oEmbed, fetched by the sweeper) still shows.
+        try:
+            image = content.collection_image(target)
+        except Exception:
+            image = None
         return {"kind": "spotify", "name": name, "target": target,
-                "order": "auto", "image": None, "episodes": []}
+                "order": "auto", "image": image, "episodes": []}
     key = (target, order, name)
     hit = _EXPAND_CACHE.get(key)
     if hit and time.monotonic() - hit[0] < EXPAND_TTL_S:
@@ -250,9 +268,10 @@ def _expand_target_uncached(target, order, name):
 # --- static files + artwork proxy (the PWA) --------------------------------------
 
 def artwork_roots():
-    """Directories the artwork proxy may serve from: the episode cache and
-    any local folder that is a library target (their cover.jpg files)."""
-    roots = [os.path.realpath(CACHE_DIR)]
+    """Directories the artwork proxy may serve from: the episode cache,
+    uploaded section logos, and any local folder that is a library target
+    (their cover.jpg files)."""
+    roots = [os.path.realpath(CACHE_DIR), os.path.realpath(ART_DIR)]
     for s in load_library()["sections"]:
         for e in s["entries"]:
             if os.path.isdir(e["target"]):

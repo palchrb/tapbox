@@ -254,7 +254,33 @@ async function loadLibrary() {
     const card = document.createElement("div");
     card.className = "card";
     const h = document.createElement("h2");
-    h.textContent = s.name;
+    h.className = "section-head";
+    if (s.image) {  // uploaded logo — shown on the box's home screen too
+      const im = document.createElement("img");
+      im.className = "section-logo";
+      im.src = "/artwork?path=" + encodeURIComponent(s.image)
+             + "&v=" + Date.now();  // bust the cache after re-upload
+      h.appendChild(im);
+    }
+    h.appendChild(document.createTextNode(s.name));
+    const logo = document.createElement("button");
+    logo.className = "logo-btn";
+    logo.textContent = s.image ? "change logo" : "logo";
+    logo.title = "Category picture for the box's home screen";
+    logo.addEventListener("click", () => pickSectionLogo(s));
+    h.appendChild(logo);
+    if (s.image) {
+      const rm = document.createElement("button");
+      rm.className = "logo-btn";
+      rm.textContent = "✕";
+      rm.title = "Remove the logo";
+      rm.addEventListener("click", async () => {
+        LIB = await api("/library/section-logo",
+                        { method: "POST", body: { id: s.id, data: null } });
+        loadLibrary();
+      });
+      h.appendChild(rm);
+    }
     card.appendChild(h);
     for (const e of s.entries) {
       card.appendChild(entryRow(e, s.name));
@@ -264,6 +290,43 @@ async function loadLibrary() {
   if (!LIB.sections.length) {
     wrap.innerHTML = "<div class='card'><p>The library is empty — add the first link below.</p></div>";
   }
+}
+
+/* Category logo: pick an image from the phone, downscale it client-side
+   (a camera photo is 5-10MB; the box screen shows 56px) and upload. */
+function pickSectionLogo(s) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.addEventListener("change", () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const img = new Image();
+    img.onload = async () => {
+      URL.revokeObjectURL(img.src);
+      const size = 300;  // square center-crop, plenty for 56px + PWA
+      const c = document.createElement("canvas");
+      c.width = c.height = size;
+      const scale = size / Math.min(img.width, img.height);
+      c.getContext("2d").drawImage(
+        img,
+        (size - img.width * scale) / 2, (size - img.height * scale) / 2,
+        img.width * scale, img.height * scale);
+      try {
+        LIB = await api("/library/section-logo", {
+          method: "POST",
+          body: { id: s.id, data: c.toDataURL("image/jpeg", 0.85) },
+        });
+        toast(`${s.name}: logo updated`);
+        loadLibrary();
+      } catch (e) {
+        toast(`Logo failed: ${e.message}`);
+      }
+    };
+    img.onerror = () => toast("Could not read that image");
+    img.src = URL.createObjectURL(file);
+  });
+  input.click();
 }
 
 const NEW_SECTION = " new";  // sentinel: "move to a new category…"

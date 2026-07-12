@@ -585,14 +585,13 @@ class App:
             self.artwork_cache[key] = time.monotonic() + 60
             return None
 
-    def entry_art(self):
-        """Cover of the highlighted entry (56px). Loading can hit the
+    def _row_art(self, rows):
+        """Cover of the highlighted list row (56px). Loading can hit the
         network for a non-synced show, so wait until scrolling settles
         — self.dirty retries next tick (the loop clears it pre-render)."""
-        ents = self.section.get("entries") or []
-        if not ents:
+        if not rows:
             return None
-        ref = ents[min(self.sel, len(ents) - 1)].get("image")
+        ref = rows[min(self.sel, len(rows) - 1)].get("image")
         if not ref:
             return None
         if ((ref, 56) not in self.artwork_cache
@@ -600,6 +599,13 @@ class App:
             self.dirty = True
             return None
         return self.artwork(ref, 56)
+
+    def entry_art(self):
+        return self._row_art(self.section.get("entries") or [])
+
+    def section_art(self):
+        """The highlighted category's uploaded logo on the home screen."""
+        return self._row_art((self.library or {}).get("sections") or [])
 
     # -- input ----------------------------------------------------------------
 
@@ -941,8 +947,12 @@ class App:
         d = ImageDraw.Draw(img)
         if self.view == "home":
             self.load_library()
+            art = self.section_art()  # uploaded category logo (PWA)
             draw_list(d, "TapBox", self.current_items(), self.sel, self.system,
-                      hint="A: select   hold A+B: settings")
+                      hint="A: select   hold A+B: settings",
+                      maxlen=17 if art else 24)
+            if art:
+                img.paste(art, (W - art.width - 6, 26))
         elif self.view == "entries":
             art = self.entry_art()
             draw_list(d, self.section["name"], self.current_items(), self.sel,

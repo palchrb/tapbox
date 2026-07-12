@@ -42,6 +42,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -359,7 +360,10 @@ def prune_cache(keep_targets):
     for name in names:
         path = os.path.join(CACHE_DIR, name)
         if os.path.isdir(path):
-            if name not in keep_dirs:
+            # spotify covers live under their own dir with their own
+            # cleanup (ensure_spotify_art) — keyed per entry, not per
+            # cache setting, so this sweep must leave them alone
+            if name not in keep_dirs and name != SPOTIFY_ART_DIR:
                 shutil.rmtree(path, ignore_errors=True)
                 removed.append(name)
         elif name.startswith("catalog-") and name.endswith(".json"):
@@ -376,9 +380,79 @@ def _feed_episode_id(enclosure_url):
     return hashlib.sha1(enclosure_url.encode()).hexdigest()[:12]
 
 
+# --- spotify covers (oEmbed) ------------------------------------------------------
+# go-librespot's API has no playlist metadata, but Spotify's public oEmbed
+# endpoint returns the collection artwork for any share link — for
+# playlists that's the same 4-cover mosaic the official apps show.
+# Downloaded once by the cache sweeper; menus only ever read the file.
+
+SPOTIFY_ART_DIR = "spotify-art"  # under CACHE_DIR; prune_cache skips it
+
+
+def spotify_art_path(target):
+    key = hashlib.sha1(target.encode()).hexdigest()[:12]
+    return os.path.join(CACHE_DIR, SPOTIFY_ART_DIR, f"{key}.jpg")
+
+
+def _is_spotify(target):
+    return ("open.spotify.com" in target or target.startswith("spotify:")
+            or "spotify.link/" in target)
+
+
+def fetch_spotify_art(target):
+    """Download the cover for one Spotify link via oEmbed (network!).
+    Returns the local path, or None. Already-downloaded art is kept."""
+    dest = spotify_art_path(target)
+    if os.path.exists(dest):
+        return dest
+    url = target
+    if url.startswith("spotify:"):  # oEmbed wants the share-link form
+        parts = url.split(":")
+        if len(parts) != 3:
+            return None
+        url = f"https://open.spotify.com/{parts[1]}/{parts[2]}"
+    try:
+        d = json.loads(_get("https://open.spotify.com/oembed?url="
+                            + urllib.parse.quote(url, safe="")))
+        thumb = d.get("thumbnail_url")
+        if not thumb:
+            return None
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        _download(thumb, dest, timeout=30)
+        _log(f"spotify art cached for {url}")
+        return dest
+    except (OSError, ValueError):
+        return None
+
+
+def ensure_spotify_art(targets):
+    """Fetch missing covers for the library's Spotify entries and drop art
+    whose entry is gone. Called from the cache sweeper (network is fine
+    there); everything else reads the files via collection_image."""
+    spot = [t for t in targets if _is_spotify(t)]
+    keep = set()
+    for t in spot:
+        keep.add(os.path.basename(spotify_art_path(t)))
+        fetch_spotify_art(t)
+    art_dir = os.path.join(CACHE_DIR, SPOTIFY_ART_DIR)
+    try:
+        for name in os.listdir(art_dir):
+            if name not in keep:
+                try:
+                    os.remove(os.path.join(art_dir, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def collection_image(target):
     """Artwork for the collection a link points at (menu icon for the
-    screen UI / PWA). Call after expand_entries(target). None when unknown."""
+    screen UI / PWA). Call after expand_entries(target). None when unknown.
+    Local files / in-process caches only — never the network."""
+    if _is_spotify(target):
+        p = spotify_art_path(target)
+        return p if os.path.exists(p) else None
     m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
     if m:
         return _catalog_image(m.group(1), "podcast")

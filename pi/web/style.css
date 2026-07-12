@@ -57,6 +57,15 @@ main { padding: 0 1rem; max-width: 34rem; margin: 0 auto; }
   margin-bottom: 1rem;
 }
 .card h2 { margin: 0 0 0.6rem; font-size: 1.05rem; color: var(--dim); }
+.section-head { display: flex; align-items: center; gap: 0.55rem; }
+.section-head .section-logo {
+  width: 2rem; height: 2rem; border-radius: 0.4rem; object-fit: cover;
+}
+.section-head .logo-btn {
+  margin-left: auto; padding: 0.25rem 0.6rem; font-size: 0.8rem;
+  color: var(--dim);
+}
+.section-head .logo-btn + .logo-btn { margin-left: 0.3rem; }
 
 button {
   background: #26262f;

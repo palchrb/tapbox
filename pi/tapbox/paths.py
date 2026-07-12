@@ -5,6 +5,8 @@ import os
 
 STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
 CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
+# Uploaded section logos — user content, so NOT under CACHE_DIR's pruning
+ART_DIR = os.environ.get("TAPBOX_ART", "/var/lib/tapbox/art")
 SETTINGS_FILE = os.environ.get("TAPBOX_SETTINGS", "/etc/tapbox/settings.json")
 
 
