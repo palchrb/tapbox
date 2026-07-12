@@ -410,11 +410,28 @@ def battery_corner(draw, system):
         draw.rectangle([x + 2, y + 2, x + 2 + fill, y + h - 2], fill=color)
 
 
+MARQUEE_STEP_S = 0.35  # how fast a too-long selected label slides
+
+
+def marquee(text, maxlen):
+    """(visible_window, scrolling?) for a list label. A too-long SELECTED
+    row slides through its text — pause at each end — so the whole name
+    can be read, instead of forever showing just the start."""
+    if len(text) <= maxlen:
+        return text, False
+    span = len(text) - maxlen
+    period = span + 8  # 4 resting steps at each end
+    step = int(time.monotonic() / MARQUEE_STEP_S) % period
+    off = max(0, min(span, step - 4))
+    return text[off:off + maxlen], True
+
+
 def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
     draw.text((10, 4), title, font=F_MED, fill=DIM)
     battery_corner(draw, system)
     top, row_h, visible = 30, 30, 6
     first = max(0, min(sel - 2, len(items) - visible))
+    scrolling = False
     for i, item in enumerate(items[first:first + visible]):
         idx = first + i
         y = top + i * row_h
@@ -422,7 +439,12 @@ def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
             draw.rounded_rectangle([4, y - 2, W - 4, y + row_h - 6],
                                    radius=6, fill=(40, 40, 60))
         label, right = item if isinstance(item, tuple) else (item, None)
-        draw.text((14, y), label[:maxlen], font=F_MED,
+        if idx == sel:
+            label, rolls = marquee(label, maxlen)
+            scrolling = scrolling or rolls
+        else:
+            label = label[:maxlen]
+        draw.text((14, y), label, font=F_MED,
                   fill=FG if idx == sel else DIM)
         if right:
             draw.text((W - 14, y), right, font=F_MED,
@@ -434,6 +456,7 @@ def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
                         W - 3, top + frac_bot * 180], fill=DIM)
     if hint:
         draw.text((10, H - 18), hint, font=F_SMALL, fill=DIM)
+    return scrolling
 
 
 def wrap_two(d, text, fnt, maxw):
@@ -506,6 +529,7 @@ class App:
         self.user_touched = False
         self.dirty = True
         self.last_render = 0.0
+        self.marquee_active = False  # keep repainting while a label slides
         self.artwork_cache = {}
 
     # -- data ---------------------------------------------------------------
@@ -555,10 +579,21 @@ class App:
         except OSError:
             self.library = {"sections": []}
 
+    def _art_key(self, ref, size):
+        """Cache key for one artwork. Local files carry their mtime, so a
+        re-uploaded category logo (same path, new content) refreshes on
+        the next render instead of showing the old picture forever."""
+        if not ref.startswith("http"):
+            try:
+                return (ref, size, int(os.path.getmtime(ref)))
+            except OSError:
+                pass
+        return (ref, size)
+
     def artwork(self, ref, size=110):
         if not ref:
             return None
-        key = (ref, size)
+        key = self._art_key(ref, size)
         cached = self.artwork_cache.get(key)
         if isinstance(cached, float):  # failed earlier — when to retry
             if time.monotonic() < cached:
@@ -575,6 +610,10 @@ class App:
                 img = Image.open(ref)
             img = img.convert("RGB")
             img.thumbnail((size, size))
+            # drop stale versions of the same file (older mtime keys)
+            for k in [k for k in self.artwork_cache
+                      if k[:2] == (ref, size) and k != key]:
+                del self.artwork_cache[k]
             self.artwork_cache[key] = img
             return img
         except Exception as e:
@@ -594,7 +633,7 @@ class App:
         ref = rows[min(self.sel, len(rows) - 1)].get("image")
         if not ref:
             return None
-        if ((ref, 56) not in self.artwork_cache
+        if (self._art_key(ref, 56) not in self.artwork_cache
                 and time.monotonic() - self.last_input < 0.4):
             self.dirty = True
             return None
@@ -945,37 +984,42 @@ class App:
     def render(self):
         img = Image.new("RGB", (W, H), BG)
         d = ImageDraw.Draw(img)
+        rolls = False  # a too-long selected label is sliding -> keep painting
         if self.view == "home":
             self.load_library()
             art = self.section_art()  # uploaded category logo (PWA)
-            draw_list(d, "TapBox", self.current_items(), self.sel, self.system,
-                      hint="A: select   hold A+B: settings",
-                      maxlen=17 if art else 24)
+            rolls = draw_list(d, "TapBox", self.current_items(), self.sel,
+                              self.system,
+                              hint="A: select   hold A+B: settings",
+                              maxlen=17 if art else 24)
             if art:
                 img.paste(art, (W - art.width - 6, 26))
         elif self.view == "entries":
             art = self.entry_art()
-            draw_list(d, self.section["name"], self.current_items(), self.sel,
-                      self.system, maxlen=17 if art else 24)
+            rolls = draw_list(d, self.section["name"], self.current_items(),
+                              self.sel, self.system, maxlen=17 if art else 24)
             if art:
                 img.paste(art, (W - art.width - 6, 26))
         elif self.view == "episodes":
-            draw_list(d, self.expanded.get("name") or "Episoder",
-                      self.current_items(), self.sel, self.system,
-                      hint="✓ = downloaded (plays offline)")
+            rolls = draw_list(d, self.expanded.get("name") or "Episoder",
+                              self.current_items(), self.sel, self.system,
+                              hint="✓ = downloaded (plays offline)")
         elif self.view == "settings":
-            draw_list(d, "Settings", self.current_items(), self.sel,
-                      self.system, hint="A: change   B: back")
+            rolls = draw_list(d, "Settings", self.current_items(), self.sel,
+                              self.system, hint="A: change   B: back")
         elif self.view == "bt":
-            draw_list(d, "Bluetooth speaker", self.current_items(), self.sel,
-                      self.system, hint="● connected   ✓ selected")
+            rolls = draw_list(d, "Bluetooth speaker", self.current_items(),
+                              self.sel, self.system,
+                              hint="● connected   ✓ selected")
         elif self.view == "btscan":
-            draw_list(d, "Nearby devices", self.current_items(), self.sel,
-                      self.system, hint="A: pair and connect   B: back")
+            rolls = draw_list(d, "Nearby devices", self.current_items(),
+                              self.sel, self.system,
+                              hint="A: pair and connect   B: back")
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "now":
             self.render_now(d, img)
+        self.marquee_active = bool(rolls)
         self.display.show(img)
 
     def render_storage(self, d):
@@ -1148,6 +1192,9 @@ class App:
                     self.display.show(Image.new("RGB", (W, H), (0, 0, 0)))
             elif self.display.on and (self.dirty
                                       or time.monotonic() < self.catch_up_until
+                                      or (self.marquee_active
+                                          and time.monotonic()
+                                          - self.last_render >= MARQUEE_STEP_S)
                                       or (self.last_render < self.volume_flash
                                           and time.monotonic()
                                           - self.last_render >= 0.5)):
@@ -1155,8 +1202,9 @@ class App:
                 # playing the 1s status poll moves the progress bar, while
                 # paused NOTHING repaints — a full PIL compose + 115KB SPI
                 # push per identical frame was measurable CPU on the Zero.
-                # The volume overlay is the one time-based exception: keep
-                # painting until one frame lands after it expired.
+                # Time-based exceptions: the volume overlay (paint until one
+                # frame lands after it expired) and a sliding long label in
+                # the menus (marquee_active, ~3 fps while selected).
                 self.dirty = False
                 self.last_render = time.monotonic()
                 self.render()
