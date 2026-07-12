@@ -38,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -63,6 +64,23 @@ CATALOG_TTL_S = 12 * 3600
 # the background sync and the menu's /expand.
 STALE_OK = False
 SYNC_COUNT = 50
+
+
+def _online():
+    """Quick connectivity probe (mirrors player.online), kept local so
+    content.py has no import cycle with player.py. TAPBOX_OFFLINE=1 forces
+    offline (travel switch / tests). Plain IP:port — no DNS to hang on.
+
+    Browsing is offline-first: when this returns False, expand serves the
+    cached listing straight away instead of blocking on a doomed fetch that
+    only times out (8s+) and falls back to the same cache anyway."""
+    if os.environ.get("TAPBOX_OFFLINE"):
+        return False
+    try:
+        socket.create_connection(("1.1.1.1", 443), timeout=2).close()
+        return True
+    except OSError:
+        return False
 
 
 def _get(url, timeout=8):
@@ -216,12 +234,17 @@ def _catalog(slug, kind="podcast"):
         "image" not in cached
         or any(not ep.get("title") or "image" not in ep
                for ep in cached.get("episodes", [])))
+    fresh_cache = bool(cached and cached.get("episodes") and not needs_backfill
+                       and time.time() - cached.get("fetched_at", 0)
+                       < CATALOG_TTL_S)
+    # STALE_OK first, fresh cache next, and only THEN probe connectivity —
+    # so the 2s offline probe runs solely when we would otherwise hit psapi.
     if cached and cached.get("episodes") and (
-            STALE_OK or (not needs_backfill and
-                         time.time() - cached.get("fetched_at", 0)
-                         < CATALOG_TTL_S)):
+            STALE_OK or fresh_cache or not _online()):
         age_h = (time.time() - cached.get("fetched_at", 0)) / 3600
-        _log(f"{slug}: catalog cache {'accepted (playback)' if STALE_OK else 'fresh'} "
+        reason = ("accepted (playback)" if STALE_OK
+                  else "fresh" if fresh_cache else "offline")
+        _log(f"{slug}: catalog cache {reason} "
              f"({len(cached['episodes'])} episodes, {age_h:.1f}h old) — no API calls")
         return cached["episodes"]
 
@@ -469,6 +492,15 @@ def sync_feed(target, count=SYNC_COUNT):
     chan_img, items = _parse_feed(_get(target))
     key = feed_key(target)
     os.makedirs(os.path.join(CACHE_DIR, key), exist_ok=True)
+    # Persist the listing too, so offline browse/playback works even if this
+    # feed was only ever synced, never opened online (expand also writes it).
+    try:
+        feed_cache = os.path.join(CACHE_DIR, key, "feed.json")
+        with open(feed_cache + ".tmp", "w") as f:
+            json.dump({"image": chan_img, "items": items}, f)
+        os.replace(feed_cache + ".tmp", feed_cache)
+    except OSError:
+        pass
     cover = os.path.join(CACHE_DIR, key, "cover.jpg")
     if chan_img and not os.path.exists(cover):
         try:
@@ -638,14 +670,22 @@ def expand_entries(target):
     if target.startswith(("http://", "https://")):
         key = feed_key(target)
         feed_cache = os.path.join(CACHE_DIR, key, "feed.json")
+        have_cache = os.path.exists(feed_cache)
+        # Playback (STALE_OK) always trusts the cache and NEVER probes; the
+        # menu probes once, only when it might reach for the network, and
+        # trusts the cache instead when offline. Offline-first either way:
+        # a doomed fetch just times out (8s+) and falls back here anyway.
+        cache_first = STALE_OK or (have_cache and not _online())
         looks_like_feed = (
             target.lower().split("?")[0].endswith((".rss", ".xml"))
-            or os.path.exists(feed_cache)  # known feed — works offline
-            or _sniffs_like_feed(target))
+            or have_cache  # known feed — works offline
+            # sniff an unknown URL only when browsing online: playback never
+            # sniffs (unknown -> passthrough), and offline it would just hang
+            or (not STALE_OK and _online() and _sniffs_like_feed(target)))
         if looks_like_feed:
             chan_img, items = None, []
-            if STALE_OK and os.path.exists(feed_cache):
-                try:  # playback: the cached listing, no refetch/timeouts
+            if cache_first and have_cache:
+                try:
                     with open(feed_cache) as f:
                         d = json.load(f)
                     chan_img = d.get("image")
@@ -653,9 +693,9 @@ def expand_entries(target):
                 except (OSError, ValueError, KeyError):
                     items = []
             try:
-                if not items:
+                if not items and not cache_first:
                     chan_img, items = _parse_feed(_get(target))
-                if items and not STALE_OK:  # remember for offline replays
+                if items and not cache_first:  # remember for offline replays
                     os.makedirs(os.path.dirname(feed_cache), exist_ok=True)
                     with open(feed_cache + ".tmp", "w") as f:
                         json.dump({"image": chan_img, "items": items}, f)

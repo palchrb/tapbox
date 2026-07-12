@@ -52,6 +52,9 @@ FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
 SYSTEM_POLL_S = 30.0
+CONTROL_TIMEOUT = 5   # play/pause/next/prev hit the LOCAL daemon — if it
+                      # can't answer in 5s the backend is wedged; fail fast
+                      # so buttons keep working instead of freezing the UI
 
 BG = (12, 12, 20)
 FG = (235, 235, 235)
@@ -611,6 +614,16 @@ class App:
         self.last_status = 0.0                     # poll now, not in ~1s
         self.catch_up_until = time.monotonic() + 6
 
+    def _no_internet(self):
+        """Instant offline check from the last /system poll — no network
+        probe. Only reports offline on positive evidence (hotspot mode, wifi
+        off, or a link with no IP); an empty/unpolled status never blocks a
+        play. Used to fail Spotify fast instead of hanging."""
+        w = self.system.get("wifi")
+        if not w:
+            return False
+        return bool(w.get("hotspot")) or not w.get("enabled") or not w.get("ip")
+
     def back(self):
         if self.stack:
             self.view, self.sel = self.stack.pop()
@@ -642,7 +655,7 @@ class App:
         in_vol = time.monotonic() < self.vol_mode_until
         try:
             if ev == "a":
-                api_post("/playpause")
+                api_post("/playpause", timeout=CONTROL_TIMEOUT)
                 self.last_status = 0  # poll immediately
             elif ev == "a_long":
                 self._back_to_episodes()
@@ -654,7 +667,8 @@ class App:
                 if in_vol:
                     self._volume_mode(delta=-5 if ev == "b" else 5)
                 else:
-                    api_post("/prev" if ev == "b" else "/next")
+                    api_post("/prev" if ev == "b" else "/next",
+                             timeout=CONTROL_TIMEOUT)
                     self.last_status = 0
         except OSError as e:
             log(f"control failed: {e}")
@@ -772,8 +786,15 @@ class App:
             elif self.view == "entries":
                 self.entry = self.section["entries"][self.sel]
                 self.draw_message("Fetching episodes ...")
+                # /expand is instant for Spotify (no network) — resolve first,
+                # then guard: Spotify needs the net, so say so instantly
+                # instead of spawning a play that just fails in the background.
                 self.expanded = api_get(f"/expand?id={self.entry['id']}")
                 if self.expanded["kind"] == "spotify" or not self.expanded["episodes"]:
+                    if self.expanded["kind"] == "spotify" and self._no_internet():
+                        self.draw_message("No network —\ncan't play Spotify")
+                        time.sleep(1.2)
+                        return
                     api_post("/play", {"id": self.entry["id"]})
                     self._enter_now()
                 else:
