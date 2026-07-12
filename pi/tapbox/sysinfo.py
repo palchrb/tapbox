@@ -162,9 +162,11 @@ def _smoothed_pct(pct, plugged):
 BATT_RUNTIME_FILE = os.path.join(STATE_DIR, "on-battery-runtime.json")
 
 
-CHARGE_RESET_PCT = 5  # a battery level that ROSE this much means the charger
-                      # was on — even if 'plugged' lied, or the charge happened
-                      # entirely while the box was powered off (tracker asleep)
+CHARGE_RESET_PCT = 10  # a battery level that ROSE this much ACROSS AN OFF
+                       # PERIOD means it was charged while powered off. Only
+                       # trusted on the first tick after boot — the
+                       # voltage-modelled percent swings several points with
+                       # load minute-to-minute, which must not reset the timer.
 
 
 def _load_runtime():
@@ -185,12 +187,16 @@ def _battery_runtime():
     return _load_runtime()[0]
 
 
-def _runtime_step(delta, plugged, charging, pct, prev_accum, prev_pct):
+def _runtime_step(delta, plugged, charging, pct, prev_accum, prev_pct,
+                  first_tick):
     """One tick's decision (pure). Returns None to reset the counter, else
-    (accum_seconds, last_pct) to persist. Any sign of charging resets:
-    plugged in, actively charging, or a battery level that rose past the
-    noise floor (a charge that slipped past, incl. one while powered off)."""
-    rose = (pct is not None and prev_pct is not None
+    (accum_seconds, last_pct) to persist. Charging resets: plugged in, or
+    actively charging (catches a flaky 'plugged'). A risen battery level
+    also resets — but ONLY on the first tick after boot, comparing across
+    the off period to catch a charge that happened while powered off.
+    Mid-session that signal is ignored: the voltage-modelled percent
+    bounces several points with load and would falsely reset the timer."""
+    rose = (first_tick and pct is not None and prev_pct is not None
             and pct > prev_pct + CHARGE_RESET_PCT)
     if plugged == "true" or charging == "true" or rose:
         return None
@@ -208,6 +214,7 @@ def _battery_runtime_tracker():
     wasn't running to see 'plugged'), which otherwise let the counter add
     session onto session into implausible totals."""
     last = time.monotonic()
+    first_tick = True  # the boot-vs-last-session comparison happens once
     while True:
         time.sleep(60)
         try:
@@ -220,7 +227,8 @@ def _battery_runtime_tracker():
             pct = _safe_pct(pisugar_get("battery"))
             prev_accum, prev_pct = _load_runtime()
             step = _runtime_step(delta, plugged, charging, pct,
-                                 prev_accum, prev_pct)
+                                 prev_accum, prev_pct, first_tick)
+            first_tick = False
             if step is None:
                 try:
                     os.remove(BATT_RUNTIME_FILE)
