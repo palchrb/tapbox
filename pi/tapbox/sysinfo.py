@@ -162,22 +162,51 @@ def _smoothed_pct(pct, plugged):
 BATT_RUNTIME_FILE = os.path.join(STATE_DIR, "on-battery-runtime.json")
 
 
+CHARGE_RESET_PCT = 5  # a battery level that ROSE this much means the charger
+                      # was on — even if 'plugged' lied, or the charge happened
+                      # entirely while the box was powered off (tracker asleep)
+
+
+def _load_runtime():
+    """(accum_seconds, last_pct) from disk, or (None, None)."""
+    try:
+        with open(BATT_RUNTIME_FILE) as f:
+            d = json.load(f)
+        return max(0, int(d["accum"])), d.get("last_pct")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+
+
 def _battery_runtime():
     """Accumulated POWERED-ON seconds since the last charge, or None while
     on the charger / without a PiSugar. The box can be switched off in
     between — wall-clock would count sleep as usage, so a daemon thread
     accumulates actual uptime instead (persisted across restarts)."""
-    try:
-        with open(BATT_RUNTIME_FILE) as f:
-            return max(0, int(json.load(f)["accum"]))
-    except (OSError, ValueError, KeyError, TypeError):
+    return _load_runtime()[0]
+
+
+def _runtime_step(delta, plugged, charging, pct, prev_accum, prev_pct):
+    """One tick's decision (pure). Returns None to reset the counter, else
+    (accum_seconds, last_pct) to persist. Any sign of charging resets:
+    plugged in, actively charging, or a battery level that rose past the
+    noise floor (a charge that slipped past, incl. one while powered off)."""
+    rose = (pct is not None and prev_pct is not None
+            and pct > prev_pct + CHARGE_RESET_PCT)
+    if plugged == "true" or charging == "true" or rose:
         return None
+    return int((prev_accum or 0) + delta), pct
 
 
 def _battery_runtime_tracker():
-    """60s ticks: while unplugged, add the elapsed powered-on time to the
-    persisted counter; back on the charger clears it. Cheap — two tiny
-    queries per minute over the persistent pisugar connection."""
+    """60s ticks: while on battery, add the elapsed powered-on time to the
+    persisted counter; reset it whenever the box is (or was) charging.
+
+    Charging is detected three ways so the counter can't run away: the
+    charger is plugged in, the pack is actively charging, OR the battery
+    level has risen since we last looked. That last signal is what catches
+    a charge that happened while the box was switched OFF (this thread
+    wasn't running to see 'plugged'), which otherwise let the counter add
+    session onto session into implausible totals."""
     last = time.monotonic()
     while True:
         time.sleep(60)
@@ -186,17 +215,22 @@ def _battery_runtime_tracker():
             delta, last = now - last, now
             plugged = pisugar_get("battery_power_plugged")
             if plugged is None:
-                continue  # no pisugar on this box
-            if plugged == "true":
+                continue  # no pisugar on this box (or a transient read miss)
+            charging = pisugar_get("battery_charging")
+            pct = _safe_pct(pisugar_get("battery"))
+            prev_accum, prev_pct = _load_runtime()
+            step = _runtime_step(delta, plugged, charging, pct,
+                                 prev_accum, prev_pct)
+            if step is None:
                 try:
                     os.remove(BATT_RUNTIME_FILE)
                 except OSError:
                     pass
                 continue
-            accum = (_battery_runtime() or 0) + delta
+            accum, last_pct = step
             os.makedirs(STATE_DIR, exist_ok=True)
             with open(BATT_RUNTIME_FILE + ".tmp", "w") as f:
-                json.dump({"accum": int(accum)}, f)
+                json.dump({"accum": int(accum), "last_pct": last_pct}, f)
             os.replace(BATT_RUNTIME_FILE + ".tmp", BATT_RUNTIME_FILE)
         except Exception as e:
             log(f"battery runtime tracker error: {e!r}")
