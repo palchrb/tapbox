@@ -4,9 +4,10 @@ four buttons). A pure consumer of the tapboxd API (:3679).
 
 Views:  Home (sections) -> Entries -> Episodes -> Now Playing
         Kid mode (settings.simple_nav): ONE flat carousel instead — a big
-        cover per library entry, B/Y flip, A plays/pauses. No hierarchy,
-        no reading needed; doubles as now-playing (state + progress on
-        the playing tile).
+        cover per library entry, B/Y flip, A plays/pauses, X skips to the
+        next song/episode within it (hold X: volume). No hierarchy, no
+        reading needed; doubles as now-playing (state + progress on the
+        playing tile).
         Settings: hold A+B ~2s (parental lock — a kid must not be able to
         shut the box down or wipe caches)
 
@@ -796,8 +797,10 @@ class App:
 
     def handle_carousel(self, ev):
         """Kid mode: B/Y flip through big covers, A plays (or pauses what
-        is already playing). No hierarchy, no back — settings stay behind
-        the parental A+B hold."""
+        is already playing), X skips to the next song/episode WITHIN it.
+        Volume sits behind hold-X; output switching is parental (settings
+        or the PWA), like settings behind the A+B hold. No hierarchy, no
+        back."""
         ents = self.flat_entries()
         if not ents:
             return
@@ -827,9 +830,12 @@ class App:
                 self.last_status = 0
                 self.catch_up_until = time.monotonic() + 6
             elif ev == "x":
-                self._volume_mode(delta=None)
+                # next song/episode within whatever is playing (the tiles
+                # are whole shows/playlists; this is the track-level skip)
+                api_post("/next", timeout=CONTROL_TIMEOUT)
+                self.last_status = 0
             elif ev == "x_long":
-                self._toggle_output()
+                self._volume_mode(delta=None)
         except OSError as e:
             log(f"carousel action failed: {e}")
 
@@ -1226,6 +1232,9 @@ class App:
         # flip arrows (B / Y), drawn dim at the bottom corners
         d.polygon([(24, 222), (24, 236), (12, 229)], fill=DIM)
         d.polygon([(W - 24, 222), (W - 24, 236), (W - 12, 229)], fill=DIM)
+        # X (top right, under the battery): next song/episode ⏭
+        d.polygon([(W - 28, 27), (W - 28, 41), (W - 18, 34)], fill=DIM)
+        d.rectangle([W - 16, 27, W - 14, 41], fill=DIM)
         name, rolls = marquee(e["name"], 20)
         d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
         st = self.status or {}
@@ -1300,7 +1309,9 @@ class App:
             self.view = "now"
         log("ready")
         while True:
-            self.inputs.gesture_mode = (self.view == "now")
+            # short-vs-hold resolution (B, X) applies in the playback
+            # views; menus get instant presses
+            self.inputs.gesture_mode = self.view in ("now", "carousel")
             # Screen off = deep idle: long ticks, and a button press sets
             # the wake event so poll() returns INSTANTLY — no latency, and
             # 8x fewer wakeups than the old 0.6s polling

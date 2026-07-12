@@ -77,4 +77,13 @@ app.handle_carousel("a")
 assert posts and posts[0][0] == "/playpause", posts
 print("5. A on the playing tile pauses (no restart) OK")
 
-print("KID MODE OK — flat carousel, flip/play/pause, live mode switch.")
+# 6. X skips WITHIN the playing entry (next song/episode); hold-X is
+# the volume card — and neither one moves the carousel
+posts.clear()
+sel = app.car_sel
+app.handle_carousel("x")
+assert posts == [("/next", None)], posts
+assert app.car_sel == sel, "track skip must not flip the tile"
+print("6. X = next song/episode, tile unchanged OK")
+
+print("KID MODE OK — flat carousel, flip/play/pause/skip, live mode switch.")
