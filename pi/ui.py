@@ -7,11 +7,11 @@ Views:  Home (sections) -> Entries -> Episodes -> Now Playing
         shut the box down or wipe caches)
 
 Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
-  menus:        A=back    B=select X=up      Y=down
-  now playing:  B=play/pause (the same physical button as select — picking
+  menus:        A=select  B=back   X=up      Y=down
+  now playing:  A=play/pause (the same physical button as select — picking
                              something and pausing it feel like one action)
-                A: press=previous, hold=back to menu (so back is A
-                   everywhere: short in menus, hold here)
+                B: press=previous, hold=back to the episode list (so back
+                   is B everywhere: short in menus, hold here)
                 X: press=volume mode (then B=down, Y=up; closes after 3s)
                    hold=switch output (bt speaker <-> built-in)
                 Y=next  (instant single press)
@@ -24,7 +24,7 @@ brightness (% backlight via PWM on BCM13).
 Dev mode (no HAT needed):
   TAPBOX_UI_PNG=/tmp/frame.png   render frames to a PNG instead of SPI
   TAPBOX_UI_INPUT=/tmp/ui-fifo   read button events from a fifo: one char
-                                 per event: a/b/x/y = press, l = long-A,
+                                 per event: a/b/x/y = press, l = long-B,
                                  s = settings
 """
 
@@ -160,7 +160,7 @@ def make_display():
 # --- input backends ---------------------------------------------------------------
 
 class FifoInput:
-    """Dev input: one char per event on a fifo (a/b/x/y press, l=long-A,
+    """Dev input: one char per event on a fifo (a/b/x/y press, l=long-B,
     s=settings)."""
 
     def __init__(self, path):
@@ -179,7 +179,7 @@ class FifoInput:
             if ch in "abxy":
                 events.append(ch)
             elif ch == "l":
-                events.append("a_long")
+                events.append("b_long")
             elif ch == "o":
                 events.append("x_long")
             elif ch == "s":
@@ -196,13 +196,13 @@ class GpioInput:
     never reaches HOLD_S is swallowed as a failed combo attempt, not
     delivered as two commands. X/Y stay instant single presses.
 
-    In gesture_mode (the now-playing view) A resolves short-vs-hold:
-    release before LONG_S -> 'a', held LONG_S -> 'a_long' (fires while
-    still held — but never while B is also down: that's a combo)."""
+    In gesture_mode (the now-playing view) B resolves short-vs-hold:
+    release before LONG_S -> 'b', held LONG_S -> 'b_long' (fires while
+    still held — but never while A is also down: that's a combo)."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
     HOLD_S = 2.0      # A+B settings combo
-    LONG_S = 0.8      # A held this long = back to menu
+    LONG_S = 0.8      # B held this long = back to menu
 
     def __init__(self):
         from gpiozero import Button
@@ -212,8 +212,8 @@ class GpioInput:
         self.gesture_mode = False
         self.down = {}        # a/b -> press timestamp while held
         self.tainted = set()  # a/b releases to swallow (combo attempt)
-        self._a_long_sent = False
-        self._a_gesture = False   # gesture_mode when A was pressed
+        self._b_long_sent = False
+        self._b_gesture = False   # gesture_mode when B was pressed
         self._x_long_sent = False
         self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
@@ -233,13 +233,13 @@ class GpioInput:
             # now-playing: short X = volume card, held X = output toggle
             self._x_long_sent = False
             return
-        if name == "a":
-            self._a_long_sent = False
-            # judge the RELEASE by the mode the press STARTED in: a_long
+        if name == "b":
+            self._b_long_sent = False
+            # judge the RELEASE by the mode the press STARTED in: b_long
             # navigates away from now-playing while still held, flipping
             # gesture_mode off — the release must not then be re-read as
             # a menu press (field bug: it re-selected the episode)
-            self._a_gesture = self.gesture_mode
+            self._b_gesture = self.gesture_mode
 
     def _released(self, name):
         self.wake.set()
@@ -259,15 +259,15 @@ class GpioInput:
             # attempt, not two commands — swallow the other one too
             self.tainted.add(other)
             return
-        if name == "a" and self._a_gesture:
-            if not self._a_long_sent:
-                self.queue.append("a")
+        if name == "b" and self._b_gesture:
+            if not self._b_long_sent:
+                self.queue.append("b")
             return
         self.queue.append(name)
 
     def poll(self, timeout):
         # a button callback sets the event -> instant reaction; otherwise
-        # this is the tick for hold-timing (combo, a_long)
+        # this is the tick for hold-timing (combo, b_long)
         self.wake.wait(timeout)
         self.wake.clear()
         return self._events()
@@ -281,12 +281,12 @@ class GpioInput:
                 self.down.clear()
                 self.queue.clear()
                 return ["settings"]
-        elif (self._a_gesture and "a" in self.down
-                and not self._a_long_sent
-                and now - self.down["a"] >= self.LONG_S):
+        elif (self._b_gesture and "b" in self.down
+                and not self._b_long_sent
+                and now - self.down["b"] >= self.LONG_S):
             # long press fires while still held — no waiting for release
-            self._a_long_sent = True
-            self.queue.append("a_long")
+            self._b_long_sent = True
+            self.queue.append("b_long")
         if ("x" in self.down and not self._x_long_sent
                 and now - self.down["x"] >= self.LONG_S):
             self._x_long_sent = True
@@ -325,8 +325,8 @@ class LgpioInput(GpioInput):
         self.gesture_mode = False
         self.down = {}
         self.tainted = set()
-        self._a_long_sent = False
-        self._a_gesture = False
+        self._b_long_sent = False
+        self._b_gesture = False
         self._x_long_sent = False
         self.wake = threading.Event()  # set by inherited handlers; unused
         self._level = {n: 1 for n in self.PINS}   # pull-up: 1 = released
@@ -645,34 +645,34 @@ class App:
         if self.view == "now":
             self.handle_now(ev)
             return
-        if ev == "a_long":
-            ev = "a"  # the hold gesture only means something while playing
+        if ev == "b_long":
+            ev = "b"  # the hold gesture only means something while playing
         items = self.current_items()
         if ev == "x":
             self.sel = (self.sel - 1) % max(1, len(items))
         elif ev == "y":
             self.sel = (self.sel + 1) % max(1, len(items))
         elif ev == "a":
-            self.back()   # A backs out everywhere — matching hold-A
+            self.select()  # A acts everywhere: select here, play/pause in now
         elif ev == "b":
-            self.select()
+            self.back()    # B backs out everywhere — matching hold-B in now
 
     def handle_now(self, ev):
-        # B = play/pause: the same physical button that selects in the
-        # menus — pick something / pause it feel like one action. A is
-        # previous (hold = back to the menu, mirroring short-A in menus).
+        # A = play/pause: the same physical button that selects in the
+        # menus — pick something / pause it feel like one action. B is
+        # previous (hold = back to the menu, mirroring short-B in menus).
         in_vol = time.monotonic() < self.vol_mode_until
         try:
-            if ev == "b":
+            if ev == "a":
+                api_post("/playpause", timeout=CONTROL_TIMEOUT)
+                self.last_status = 0  # poll immediately
+            elif ev == "b":
                 if in_vol:  # volume card open: B/Y are - / +
                     self._volume_mode(delta=-5)
                 else:
-                    api_post("/playpause", timeout=CONTROL_TIMEOUT)
-                    self.last_status = 0  # poll immediately
-            elif ev == "a":
-                api_post("/prev", timeout=CONTROL_TIMEOUT)
-                self.last_status = 0
-            elif ev == "a_long":
+                    api_post("/prev", timeout=CONTROL_TIMEOUT)
+                    self.last_status = 0
+            elif ev == "b_long":
                 self._back_to_episodes()
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
@@ -862,7 +862,7 @@ class App:
             # row 7 = Shut down, row 8 = Restart (an inverted flag here
             # made Restart power the box off — field-reported)
             action = "Restarting" if i == 8 else "Shutting down"
-            self.draw_message(f"{action} ... (B confirms, A cancels)")
+            self.draw_message(f"{action} ... (A confirms, B cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
                 api_post("/system/shutdown", {"restart": i == 8})
@@ -911,9 +911,9 @@ class App:
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for ev in self.inputs.poll(0.1):
-                if ev == "b":
+                if ev == "a":   # A acts, B backs out — same as everywhere
                     return True
-                if ev == "a":
+                if ev == "b":
                     return False
         return False
 
@@ -942,7 +942,7 @@ class App:
         if self.view == "home":
             self.load_library()
             draw_list(d, "TapBox", self.current_items(), self.sel, self.system,
-                      hint="B: select   hold A+B: settings")
+                      hint="A: select   hold A+B: settings")
         elif self.view == "entries":
             art = self.entry_art()
             draw_list(d, self.section["name"], self.current_items(), self.sel,
@@ -955,13 +955,13 @@ class App:
                       hint="✓ = downloaded (plays offline)")
         elif self.view == "settings":
             draw_list(d, "Settings", self.current_items(), self.sel,
-                      self.system, hint="B: change   A: back")
+                      self.system, hint="A: change   B: back")
         elif self.view == "bt":
             draw_list(d, "Bluetooth speaker", self.current_items(), self.sel,
                       self.system, hint="● connected   ✓ selected")
         elif self.view == "btscan":
             draw_list(d, "Nearby devices", self.current_items(), self.sel,
-                      self.system, hint="B: pair and connect   A: back")
+                      self.system, hint="A: pair and connect   B: back")
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "now":
@@ -1039,15 +1039,15 @@ class App:
         # no media glyphs). X (top right, below the battery): volume.
         d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
                    (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
-        # A (top left): previous
-        d.rectangle([12, 27, 14, 41], fill=DIM)
-        d.polygon([(28, 27), (28, 41), (16, 34)], fill=DIM)
-        # B (bottom left): the action a press takes — pause while playing
+        # A (top left): the action a press takes — pause while playing
         if st.get("playing"):
-            d.rectangle([12, 222, 16, 236], fill=DIM)
-            d.rectangle([20, 222, 24, 236], fill=DIM)
+            d.rectangle([12, 27, 16, 41], fill=DIM)
+            d.rectangle([20, 27, 24, 41], fill=DIM)
         else:
-            d.polygon([(12, 221), (12, 237), (26, 229)], fill=DIM)
+            d.polygon([(12, 26), (12, 42), (26, 34)], fill=DIM)
+        # B (bottom left): previous
+        d.rectangle([12, 222, 14, 236], fill=DIM)
+        d.polygon([(28, 222), (28, 236), (16, 229)], fill=DIM)
         # Y (bottom right): next
         d.polygon([(W - 28, 222), (W - 28, 236), (W - 16, 229)], fill=DIM)
         d.rectangle([W - 14, 222, W - 12, 236], fill=DIM)
