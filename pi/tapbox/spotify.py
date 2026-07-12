@@ -1,11 +1,15 @@
 """go-librespot client — the ONE place that talks to the Spotify daemon."""
 
+import glob
+import hashlib
 import json
 import os
 import subprocess
 import re
 import time
 import urllib.request
+
+from tapbox.paths import STATE_DIR
 
 API = os.environ.get("TAPBOX_GO_API", "http://127.0.0.1:3678")
 CONFIG = os.environ.get("TAPBOX_GO_CONFIG", "")
@@ -22,13 +26,20 @@ def is_spotify(target):
             or "spotify.link/" in target)
 
 
+_SHORTLINKS = {}  # resolved spotify.link redirects — to_uri runs in status
+                  # polls and bookmark ticks, which must never re-fetch
+
+
 def to_uri(target):
     """A share link/URI -> spotify:<type>:<id>, or None."""
     if URI_RE.match(target):
         return target
     if "spotify.link/" in target:  # short links redirect to open.spotify.com
-        with urllib.request.urlopen(target, timeout=10) as r:
-            target = r.url
+        if target in _SHORTLINKS:
+            target = _SHORTLINKS[target]
+        else:
+            with urllib.request.urlopen(target, timeout=10) as r:
+                _SHORTLINKS[target] = target = r.url
     m = LINK_RE.search(target)
     return f"spotify:{m.group(1)}:{m.group(2)}" if m else None
 
@@ -144,6 +155,85 @@ def status(timeout=5):
 def playing(st=None):
     st = status() if st is None else st
     return bool(st.get("track")) and not st.get("paused") and not st.get("stopped")
+
+
+# --- resume bookmarks ------------------------------------------------------------
+# Spotify's cloud only remembers positions for its own clients, so tapboxd
+# bookkeeps track+position while the box plays. One file PER CONTEXT: with
+# the old single file, alternating between two playlist cards wiped each
+# other's position ("it started from the top again").
+
+LEGACY_BM_FILE = os.path.join(STATE_DIR, "spotify-bookmark.json")
+
+
+def bm_path(context_uri):
+    """The bookmark file for one context (playlist/album/show URI)."""
+    h = hashlib.sha1(context_uri.encode()).hexdigest()[:12]
+    return os.path.join(STATE_DIR, f"spotify-bm-{h}.json")
+
+
+def bookmark_step(st, context_uri):
+    """One bookmarker tick's decision (pure): the bookmark dict to persist
+    for context_uri, or None to leave the file alone. Only a box-initiated
+    session may write — go-librespot stamps play_origin 'go-librespot' on
+    plays from OUR api; a phone streaming its own music through the box
+    (Spotify Connect) carries the phone's origin, and used to get the box
+    context stamped over the phone's track/position, corrupting resume."""
+    track = st.get("track") or {}
+    if not track or st.get("paused") or st.get("stopped"):
+        return None
+    if not context_uri:
+        return None  # nothing to resume against later
+    origin = st.get("play_origin")
+    if origin and origin != "go-librespot":
+        return None  # phone-driven — don't clobber the box bookmark
+    return {"context_uri": context_uri,
+            "uri": track.get("uri"),
+            "position": track.get("position") or 0,
+            "duration": track.get("duration") or 0,
+            "name": track.get("name"),
+            "artists": track.get("artist_names") or [],
+            "artwork": track.get("album_cover_url"),
+            "updated": time.time()}
+
+
+def save_bookmark(bm):
+    path = bm_path(bm["context_uri"])
+    with open(path + ".tmp", "w") as f:
+        json.dump(bm, f)
+    os.replace(path + ".tmp", path)
+
+
+def read_bookmark(context_uri):
+    """The raw bookmark dict for a context (per-context file first, then the
+    pre-per-context single file), or None. No validation — callers apply
+    their own accept rules (threshold, context match)."""
+    for path in (bm_path(context_uri), LEGACY_BM_FILE):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def clear_bookmark(context_uri):
+    """Forget one context's position (stop / play --fresh)."""
+    for path in (bm_path(context_uri), LEGACY_BM_FILE):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def clear_all_bookmarks():
+    """Forget every position — the bookmarks belong to the old account."""
+    for path in glob.glob(os.path.join(STATE_DIR, "spotify-bm-*.json")) \
+            + [LEGACY_BM_FILE]:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def command(action):

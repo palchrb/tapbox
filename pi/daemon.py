@@ -107,7 +107,6 @@ mpv_ipc = _mpv.ipc
 mpv_get = _mpv.get
 
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
-SPOT_BM_FILE = os.path.join(STATE_DIR, "spotify-bookmark.json")
 VOL_FILE = os.path.join(STATE_DIR, "volume.json")
 NOW_FILE = os.path.join(STATE_DIR, "now-playing.json")
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
@@ -523,7 +522,8 @@ class Orchestrator:
             # must not wipe the Spotify playlist's position (or vice versa)
             if self.target and is_spotify(self.target):
                 try:
-                    os.remove(SPOT_BM_FILE)
+                    _spotify.clear_bookmark(
+                        _spotify.to_uri(self.target) or self.target)
                 except OSError:
                     pass
             elif self.target:
@@ -642,9 +642,9 @@ class Orchestrator:
         # "nothing playing". Pressing play resumes exactly there.
         if out["title"] is None and target and is_spotify(target):
             try:
-                with open(SPOT_BM_FILE) as f:
-                    bm = json.load(f)
-            except (OSError, ValueError):
+                bm = _spotify.read_bookmark(
+                    _spotify.to_uri(target) or target)
+            except OSError:
                 bm = None
             if bm and bm.get("uri") and (bm.get("position") or 0) > 20000:
                 out["playing"] = mpv_alive  # a spawn in flight IS starting
@@ -922,10 +922,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/system/shutdown":
                 self._send(200, shutdown(bool(body.get("restart"))))
             elif self.path == "/spotify/logout":
-                try:  # the bookmark belongs to the old account
-                    os.remove(SPOT_BM_FILE)
-                except OSError:
-                    pass
+                # the bookmarks belong to the old account
+                _spotify.clear_all_bookmarks()
                 r = _spotify.logout()
                 self._send(200 if r.get("ok") else 500, r)
             elif self.path == "/wifi/hotspot":
@@ -1044,7 +1042,9 @@ def _spotify_bookmarker():
     """Spotify's cloud remembers positions for ITS clients only — so we
     bookkeep like we do for mpv: while Spotify plays, snapshot the track,
     position and (when the box started it) the context every few seconds.
-    play {uri, skip_to_uri} + seek replays it exactly, queue intact."""
+    play {uri, skip_to_uri} + seek replays it exactly, queue intact.
+    The per-tick accept rules (box-initiated only, per-context files) live
+    in spotify.bookmark_step/save_bookmark."""
     interval = 5
     while True:
         time.sleep(interval)
@@ -1056,32 +1056,20 @@ def _spotify_bookmarker():
             # 12x/min around the clock. A live (even paused) session keeps
             # the 5s cadence so resume stays accurate.
             interval = 30 if (not track or st.get("stopped")) else 5
-            if not track or st.get("paused") or st.get("stopped"):
-                continue
-            if ORCH.source != "mpv" or not ORCH._mpv_alive():
-                pass  # spotify owns playback (or nothing does) — bookkeep
-            else:
+            if ORCH.source == "mpv" and ORCH._mpv_alive():
                 # mpv owns playback but spotify still reports playing: this
                 # is the switch race — /play set target+source to the mpv
                 # target instantly, while player.py takes a moment to pause
-                # spotify. Writing now would stamp context None over a
+                # spotify. Writing now would stamp the wrong context over a
                 # perfectly resumable bookmark. Skip the tick.
                 continue
             context = None
             if ORCH.source == "spotify" and ORCH.target \
                     and is_spotify(ORCH.target):
                 context = _spotify.to_uri(ORCH.target)
-            bm = {"context_uri": context,
-                  "uri": track.get("uri"),
-                  "position": track.get("position") or 0,
-                  "duration": track.get("duration") or 0,
-                  "name": track.get("name"),
-                  "artists": track.get("artist_names") or [],
-                  "artwork": track.get("album_cover_url"),
-                  "updated": time.time()}
-            with open(SPOT_BM_FILE + ".tmp", "w") as f:
-                json.dump(bm, f)
-            os.replace(SPOT_BM_FILE + ".tmp", SPOT_BM_FILE)
+            bm = _spotify.bookmark_step(st, context)
+            if bm is not None:
+                _spotify.save_bookmark(bm)
         except Exception:
             pass
 
@@ -1182,9 +1170,9 @@ def _on_term(*_args):
 
 def _boot_resume():
     """Power on -> the story continues where it stopped (setting-gated).
-    mpv content resumes at the exact second via the bookmark; a Spotify
-    context restarts from its beginning (positional resume needs the Web
-    API context — documented limitation)."""
+    Both mpv content and Spotify resume at the exact second via their
+    bookmarks (player.py replays the Spotify context with skip_to_uri
+    + seek from the per-context bookmark)."""
     if not load_settings().get("resume_on_boot"):
         return
     try:

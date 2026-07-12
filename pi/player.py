@@ -157,7 +157,6 @@ def online():
         return False
 
 
-SPOT_BM_FILE = os.path.join(STATE_DIR, "spotify-bookmark.json")
 SPOT_RESUME_MIN_MS = 20000
 
 
@@ -189,17 +188,11 @@ def play_spotify(target, fresh=False):
     # play {uri, skip_to_uri} keeps the queue intact, then seek.
     bm = None
     if fresh:
-        try:
-            os.remove(SPOT_BM_FILE)
-        except OSError:
-            pass
+        spotify.clear_bookmark(uri)
     else:
-        try:
-            with open(SPOT_BM_FILE) as f:
-                bm = json.load(f)
-        except (OSError, ValueError):
+        bm = spotify.read_bookmark(uri)
+        if bm is None:
             log("no spotify bookmark on disk — starting from the top")
-            bm = None
         if bm is not None:
             # say WHY a bookmark is rejected — invaluable when 'it started
             # over' reports come in from the field
@@ -254,8 +247,10 @@ def play_spotify(target, fresh=False):
     _apply_box_volume()
 
     if bm:
-        # seek once the right track has actually loaded
-        for _ in range(12):
+        # seek once the right track has actually loaded — after a cold boot
+        # (dealer warm-up, BT audio) that can take well over the old 6s
+        # window, which silently skipped the seek and "resumed" at 0:00
+        for _ in range(40):  # up to 20s
             time.sleep(0.5)
             track = spotify.status().get("track") or {}
             if track.get("uri") == bm["uri"]:
@@ -266,7 +261,7 @@ def play_spotify(target, fresh=False):
                     log("seek failed — continuing from the track start")
                 break
         else:
-            log("resume track never loaded — playing the context from start")
+            log("resume track never loaded in 20s — playing it from the start")
         try:
             spotify.go("/player/resume")
         except OSError:
