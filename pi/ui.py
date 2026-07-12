@@ -8,10 +8,13 @@ Views:  Home (sections) -> Entries -> Episodes -> Now Playing
 
 Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
   menus:        A=back    B=select X=up      Y=down
-  now playing:  A: press=play/pause, hold=back to menu
+  now playing:  B=play/pause (the same physical button as select — picking
+                             something and pausing it feel like one action)
+                A: press=previous, hold=back to menu (so back is A
+                   everywhere: short in menus, hold here)
                 X: press=volume mode (then B=down, Y=up; closes after 3s)
                    hold=switch output (bt speaker <-> built-in)
-                B=previous  Y=next  (instant single presses)
+                Y=next  (instant single press)
 
 The battery indicator is drawn in the top-right corner of every view.
 The screen blanks after settings.screen_timeout_s (0 = never); the
@@ -655,23 +658,31 @@ class App:
             self.select()
 
     def handle_now(self, ev):
+        # B = play/pause: the same physical button that selects in the
+        # menus — pick something / pause it feel like one action. A is
+        # previous (hold = back to the menu, mirroring short-A in menus).
         in_vol = time.monotonic() < self.vol_mode_until
         try:
-            if ev == "a":
-                api_post("/playpause", timeout=CONTROL_TIMEOUT)
-                self.last_status = 0  # poll immediately
+            if ev == "b":
+                if in_vol:  # volume card open: B/Y are - / +
+                    self._volume_mode(delta=-5)
+                else:
+                    api_post("/playpause", timeout=CONTROL_TIMEOUT)
+                    self.last_status = 0  # poll immediately
+            elif ev == "a":
+                api_post("/prev", timeout=CONTROL_TIMEOUT)
+                self.last_status = 0
             elif ev == "a_long":
                 self._back_to_episodes()
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
             elif ev == "x_long":
                 self._toggle_output()
-            elif ev in ("b", "y"):
+            elif ev == "y":
                 if in_vol:
-                    self._volume_mode(delta=-5 if ev == "b" else 5)
+                    self._volume_mode(delta=5)
                 else:
-                    api_post("/prev" if ev == "b" else "/next",
-                             timeout=CONTROL_TIMEOUT)
+                    api_post("/next", timeout=CONTROL_TIMEOUT)
                     self.last_status = 0
         except OSError as e:
             log(f"control failed: {e}")
@@ -1028,15 +1039,15 @@ class App:
         # no media glyphs). X (top right, below the battery): volume.
         d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
                    (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
-        # A (top left): the action a press takes — pause while playing
+        # A (top left): previous
+        d.rectangle([12, 27, 14, 41], fill=DIM)
+        d.polygon([(28, 27), (28, 41), (16, 34)], fill=DIM)
+        # B (bottom left): the action a press takes — pause while playing
         if st.get("playing"):
-            d.rectangle([12, 27, 16, 41], fill=DIM)
-            d.rectangle([20, 27, 24, 41], fill=DIM)
+            d.rectangle([12, 222, 16, 236], fill=DIM)
+            d.rectangle([20, 222, 24, 236], fill=DIM)
         else:
-            d.polygon([(12, 26), (12, 42), (26, 34)], fill=DIM)
-        # B (bottom left): previous
-        d.rectangle([12, 222, 14, 236], fill=DIM)
-        d.polygon([(28, 222), (28, 236), (16, 229)], fill=DIM)
+            d.polygon([(12, 221), (12, 237), (26, 229)], fill=DIM)
         # Y (bottom right): next
         d.polygon([(W - 28, 222), (W - 28, 236), (W - 16, 229)], fill=DIM)
         d.rectangle([W - 14, 222, W - 12, 236], fill=DIM)
