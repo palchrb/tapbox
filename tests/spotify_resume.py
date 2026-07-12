@@ -139,4 +139,27 @@ out = player.accept_spot_bookmark(bm, PL_A, exact=True)
 assert out["position"] == 9000, out
 print("12. --exact honors a sub-threshold position (output switch) OK")
 
+# 13. prev follows mpv semantics: deep into the track -> restart it
+# (seek 0); near the start -> the actual previous track (double-press
+# forced when go-librespot's own prev only rewound)
+calls2, stati = [], []
+s.go = lambda path, timeout=5, body=None: calls2.append((path, body))
+s.status = lambda timeout=5: stati.pop(0)
+s.time.sleep = lambda n: None
+
+stati[:] = [{"track": {"uri": "spotify:track:a", "position": 90000}}]
+s.command("prev")
+assert calls2 == [("/player/seek", {"position": 0})], calls2
+calls2.clear()
+stati[:] = [{"track": {"uri": "spotify:track:a", "position": 3000}},
+            {"track": {"uri": "spotify:track:a", "position": 100}}]
+s.command("prev")
+assert calls2 == [("/player/prev", None), ("/player/prev", None)], calls2
+calls2.clear()
+stati[:] = [{"track": {"uri": "spotify:track:a", "position": 3000}},
+            {"track": {"uri": "spotify:track:PREV", "position": 0}}]
+s.command("prev")
+assert calls2 == [("/player/prev", None)], calls2
+print("13. prev: deep=restart track, early=previous track (mpv parity) OK")
+
 print("SPOTIFY RESUME OK — per-context bookmarks, phone can't corrupt them.")

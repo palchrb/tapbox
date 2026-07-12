@@ -236,14 +236,25 @@ def clear_all_bookmarks():
             pass
 
 
+PREV_RESTART_MS = 5000  # >5s into the track: prev restarts it — the same
+                        # semantics the mpv side uses (daemon command())
+
+
 def command(action):
-    """playpause/next/prev. Spotify's prev only rewinds the current track
-    first; since a button is one gesture, send the second prev ourselves
-    when the first one only rewound."""
+    """playpause/next/prev. prev follows standard player semantics, same
+    as the mpv side: deep into the track it restarts it (seek 0); near
+    the start it goes to the actual previous track. go-librespot's own
+    prev applies its own rewind-vs-skip rule, so both halves are forced
+    explicitly: seek for the restart, double-press when its first prev
+    only rewound instead of skipping."""
     if action != "prev":
         go({"playpause": "/player/playpause", "next": "/player/next"}[action])
         return
-    before = (status().get("track") or {}).get("uri")
+    track = status().get("track") or {}
+    if (track.get("position") or 0) > PREV_RESTART_MS:
+        go("/player/seek", body={"position": 0})
+        return
+    before = track.get("uri")
     go("/player/prev")
     time.sleep(0.4)
     after = status().get("track") or {}
