@@ -1270,12 +1270,16 @@ class App:
                                 fill=color)
             d.text((W // 2, ay + 88), (e["name"][:1] or "?").upper(),
                    font=font(96), fill=FG, anchor="mm")
-        # flip arrows (B / Y), drawn dim at the bottom corners
-        d.polygon([(24, 222), (24, 236), (12, 229)], fill=DIM)
-        d.polygon([(W - 24, 222), (W - 24, 236), (W - 12, 229)], fill=DIM)
+        # Markers sit where the PHYSICAL buttons are: the Pirate Audio
+        # buttons are inset from the screen corners — centers land around
+        # y=55 (A/X) and y=185 (B/Y) on the 240px panel (field-calibrated;
+        # corner-aligned markers pointed well past the actual buttons).
+        # flip arrows (B / Y), dim, beside the art in the side margins
+        d.polygon([(24, 178), (24, 192), (12, 185)], fill=DIM)
+        d.polygon([(W - 24, 178), (W - 24, 192), (W - 12, 185)], fill=DIM)
         # A (top left): play the selected tile — THE action here, so it
-        # gets the highlight color and a bigger glyph than the dim hints
-        d.polygon([(10, 24), (10, 46), (30, 35)], fill=HILITE)
+        # gets the highlight color; small enough to clear the album art
+        d.polygon([(12, 47), (12, 63), (26, 55)], fill=HILITE)
         name, rolls = marquee(e["name"], 20)
         d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
         st = self.status or {}
