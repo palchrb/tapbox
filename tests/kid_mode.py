@@ -54,7 +54,8 @@ app._apply_nav_mode()
 assert app.view == "settings", "settings view must be left alone"
 print("3. mode flip swaps home<->carousel, leaves settings alone OK")
 
-# 4. buttons: Y forward (wraps), B back, A plays the selected tile
+# 4. buttons: Y forward (wraps), B back, A plays the tile AND opens the
+# normal now-playing view (kept as-is per field feedback)
 posts = []
 ui.api_post = lambda path, body=None, timeout=15: (posts.append((path, body)), {})[1]
 app.settings = {"simple_nav": 1}
@@ -68,22 +69,27 @@ app.handle_carousel("b")
 assert app.car_sel == 2, "B must go backwards (wrapping)"
 app.handle_carousel("a")
 assert posts == [("/play", {"id": "f2"})], posts
-print("4. Y/B flip with wrap, A plays the tile OK")
+assert app.view == "now", "A must open now-playing"
+assert app.stack and app.stack[-1][0] == "carousel", \
+    "back from now-playing must return to the carousel"
+print("4. Y/B flip with wrap, A plays + opens now-playing OK")
 
-# 5. A on the tile that is already playing toggles pause instead
+# 5. A on the tile that is ALREADY playing just opens now-playing —
+# no restart, no toggle (pause lives in the now view)
 posts.clear()
+app.view, app.stack = "carousel", []
 app.status = {"target": "https://ex.com/feed.rss", "playing": True}
 app.handle_carousel("a")
-assert posts and posts[0][0] == "/playpause", posts
-print("5. A on the playing tile pauses (no restart) OK")
+assert posts == [], f"must not restart or toggle: {posts}"
+assert app.view == "now"
+print("5. A on the playing tile opens now-playing, no restart OK")
 
-# 6. X skips WITHIN the playing entry (next song/episode); hold-X is
-# the volume card — and neither one moves the carousel
-posts.clear()
-sel = app.car_sel
-app.handle_carousel("x")
-assert posts == [("/next", None)], posts
-assert app.car_sel == sel, "track skip must not flip the tile"
-print("6. X = next song/episode, tile unchanged OK")
+# 6. hold-B in now-playing returns to the carousel, on the playing tile
+app.settings = {"simple_nav": 1}
+app.view = "now"
+app._back_to_episodes()
+assert app.view == "carousel" and app.stack == []
+assert app.car_sel == 2, "should land on the playing tile"
+print("6. hold-B in now-playing lands on the playing carousel tile OK")
 
-print("KID MODE OK — flat carousel, flip/play/pause/skip, live mode switch.")
+print("KID MODE OK — carousel browses, now-playing plays, hold-B returns.")

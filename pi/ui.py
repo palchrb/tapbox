@@ -3,11 +3,11 @@
 four buttons). A pure consumer of the tapboxd API (:3679).
 
 Views:  Home (sections) -> Entries -> Episodes -> Now Playing
-        Kid mode (settings.simple_nav): ONE flat carousel instead — a big
-        cover per library entry, B/Y flip, A plays/pauses, X skips to the
-        next song/episode within it (hold X: volume). No hierarchy, no
-        reading needed; doubles as now-playing (state + progress on the
-        playing tile).
+        Kid mode (settings.simple_nav): the browse hierarchy is replaced
+        by ONE flat carousel — a big cover per library entry, B/Y flip,
+        X volume, A plays and opens the normal Now Playing view (which
+        keeps all its controls); hold-B there returns to the carousel.
+        No categories, no reading needed.
         Settings: hold A+B ~2s (parental lock — a kid must not be able to
         shut the box down or wipe caches)
 
@@ -587,7 +587,8 @@ class App:
         swapped; an open settings/bt view is left alone and reconciles
         the moment it is left."""
         simple = bool(self.settings.get("simple_nav"))
-        if simple and self.view in ("home", "entries", "episodes", "now"):
+        if simple and self.view in ("home", "entries", "episodes"):
+            # (now-playing is shared by both modes — left alone)
             self.stack, self.view = [], "carousel"
             self.dirty = True
         elif not simple and self.view == "carousel":
@@ -775,6 +776,17 @@ class App:
         resets the stack to [home], which made hold-A land on the home
         screen instead of the episodes (field: 'jumps back several
         pages')."""
+        if self.settings.get("simple_nav"):
+            # kid mode: the carousel IS the browse level — land on the
+            # playing tile
+            tgt = (self.status or {}).get("target")
+            for i, e in enumerate(self.flat_entries()):
+                if e["target"] == tgt:
+                    self.car_sel = i
+                    break
+            self.stack, self.view = [], "carousel"
+            self.dirty = True
+            return
         if self.stack and self.stack[-1][0] == "episodes":
             self.back()
             return
@@ -796,11 +808,11 @@ class App:
         self.back()
 
     def handle_carousel(self, ev):
-        """Kid mode: B/Y flip through big covers, A plays (or pauses what
-        is already playing), X skips to the next song/episode WITHIN it.
-        Volume sits behind hold-X; output switching is parental (settings
-        or the PWA), like settings behind the A+B hold. No hierarchy, no
-        back."""
+        """Kid mode's browse level: B/Y flip through big covers, X is the
+        volume card, and A opens the tile in the NORMAL now-playing view
+        (starting playback first unless the tile is already what's
+        playing) — hold-B there comes back here. Settings stay behind
+        the parental A+B hold."""
         ents = self.flat_entries()
         if not ents:
             return
@@ -818,24 +830,16 @@ class App:
                     self.car_sel = (self.car_sel - 1) % len(ents)
             elif ev == "a":
                 e = ents[self.car_sel % len(ents)]
-                if (self.status or {}).get("target") == e["target"]:
-                    api_post("/playpause", timeout=CONTROL_TIMEOUT)
-                else:
+                if (self.status or {}).get("target") != e["target"]:
                     if "spotify" in e["target"] and self._no_internet():
                         self.draw_message("No network —\ncan't play Spotify")
                         time.sleep(1.2)
                         return
                     api_post("/play", {"id": e["id"]},
                              timeout=CONTROL_TIMEOUT)
-                self.last_status = 0
-                self.catch_up_until = time.monotonic() + 6
+                self._enter_now()
             elif ev == "x":
-                # next song/episode within whatever is playing (the tiles
-                # are whole shows/playlists; this is the track-level skip)
-                api_post("/next", timeout=CONTROL_TIMEOUT)
-                self.last_status = 0
-            elif ev == "x_long":
-                self._volume_mode(delta=None)
+                self._volume_mode(delta=None)  # open/extend the volume card
         except OSError as e:
             log(f"carousel action failed: {e}")
 
@@ -1232,9 +1236,9 @@ class App:
         # flip arrows (B / Y), drawn dim at the bottom corners
         d.polygon([(24, 222), (24, 236), (12, 229)], fill=DIM)
         d.polygon([(W - 24, 222), (W - 24, 236), (W - 12, 229)], fill=DIM)
-        # X (top right, under the battery): next song/episode ⏭
-        d.polygon([(W - 28, 27), (W - 28, 41), (W - 18, 34)], fill=DIM)
-        d.rectangle([W - 16, 27, W - 14, 41], fill=DIM)
+        # X (top right, under the battery): volume — same glyph as now view
+        d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
+                   (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
         name, rolls = marquee(e["name"], 20)
         d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
         st = self.status or {}
@@ -1296,22 +1300,23 @@ class App:
         except (OSError, ValueError):
             self.status = {}
         if self.settings.get("simple_nav"):
-            # kid mode: straight into the carousel, positioned on whatever
-            # is (or last was) playing
-            self.stack, self.view = [], "carousel"
+            # kid mode: carousel is the root, positioned on whatever is
+            # (or last was) playing — which opens on now-playing if live
             tgt = self.status.get("target")
             for i, e in enumerate(self.flat_entries()):
                 if e["target"] == tgt:
                     self.car_sel = i
                     break
+            if self.status.get("title"):
+                self.stack, self.view = [("carousel", 0)], "now"
+            else:
+                self.stack, self.view = [], "carousel"
         elif self.status.get("title"):
             self.stack = [("home", 0)]
             self.view = "now"
         log("ready")
         while True:
-            # short-vs-hold resolution (B, X) applies in the playback
-            # views; menus get instant presses
-            self.inputs.gesture_mode = self.view in ("now", "carousel")
+            self.inputs.gesture_mode = (self.view == "now")
             # Screen off = deep idle: long ticks, and a button press sets
             # the wake event so poll() returns INSTANTLY — no latency, and
             # 8x fewer wakeups than the old 0.6s polling
@@ -1336,7 +1341,7 @@ class App:
                 # now-playing. Only from the browse views — settings/BT
                 # flows have their own long waits (scan, pair) and must
                 # not be yanked away from.
-                if (self.view in ("home", "entries", "episodes")
+                if (self.view in ("home", "entries", "episodes", "carousel")
                         and self.status.get("playing")
                         and time.monotonic() - self.last_input
                         > NOW_RETURN_S):
