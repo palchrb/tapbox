@@ -90,4 +90,29 @@ assert s.read_bookmark(PL_B) is None
 assert not os.path.exists(s.LEGACY_BM_FILE)
 print("9. logout clears every bookmark OK")
 
+# 10. replaying the target that is ALREADY loaded continues in place:
+# paused -> one /player/resume; playing -> no-op. Never a respawn (which
+# reloads the context + seeks — an audible hiccup for nothing).
+os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+                                            "lib.json")
+os.environ.setdefault("TAPBOX_CACHE", os.environ["TAPBOX_STATE"])
+import daemon  # noqa: E402
+
+calls = []
+daemon.go_status = lambda: {"track": {"uri": "t"}, "paused": True,
+                            "stopped": False}
+daemon.go = lambda path, **k: calls.append(path)
+orch = daemon.ORCH
+orch.target, orch.source = "https://open.spotify.com/playlist/xyz", "spotify"
+orch._spawn = lambda *a, **k: (_ for _ in ()).throw(
+    AssertionError("same-target replay must not respawn"))
+r = orch.play("https://open.spotify.com/playlist/xyz")
+assert r.get("resumed") and calls == ["/player/resume"], (r, calls)
+calls.clear()
+daemon.go_status = lambda: {"track": {"uri": "t"}, "paused": False,
+                            "stopped": False}
+r = orch.play("https://open.spotify.com/playlist/xyz")
+assert r.get("resumed") and calls == [], (r, calls)
+print("10. same-target spotify replay = unpause/no-op, never a respawn OK")
+
 print("SPOTIFY RESUME OK — per-context bookmarks, phone can't corrupt them.")

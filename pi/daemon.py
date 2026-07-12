@@ -330,6 +330,21 @@ class Orchestrator:
                                 "resumed": True}
                 except OSError:
                     pass  # IPC gone but child alive? fall through to respawn
+            # Same shortcut for Spotify: a live session for this target
+            # continues in place (unpause) — a respawn would reload the
+            # context and seek, an audible 2-3s hiccup for nothing.
+            if (not fresh and not episode and target == self.target
+                    and self.source == "spotify" and is_spotify(target)):
+                try:
+                    st = go_status()
+                    if (st.get("track") or {}) and not st.get("stopped"):
+                        if st.get("paused"):
+                            go("/player/resume")
+                        log(f"play (already loaded) -> resume: {target}")
+                        return {"source": "spotify", "target": target,
+                                "resumed": True}
+                except OSError:
+                    pass  # session gone — fall through to respawn (bookmark)
             self._stop_child()
             self._spawn(target, fresh, episode, reverse, cache, resume)
             self.mpv_shuffle = False  # fresh queue plays in order

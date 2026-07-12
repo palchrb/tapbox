@@ -809,10 +809,12 @@ class App:
 
     def handle_carousel(self, ev):
         """Kid mode's browse level: B/Y flip through big covers, X is the
-        volume card, and A opens the tile in the NORMAL now-playing view
-        (starting playback first unless the tile is already what's
-        playing) — hold-B there comes back here. Settings stay behind
-        the parental A+B hold."""
+        volume card, and A = "play this tile" — one meaning: it resumes
+        the entry at its own bookmark and opens the NORMAL now-playing
+        view. The daemon makes a replay of what's already loaded a plain
+        unpause/no-op, so A never restarts anything. Hold-B in
+        now-playing comes back here; settings stay behind the parental
+        A+B hold."""
         ents = self.flat_entries()
         if not ents:
             return
@@ -830,13 +832,11 @@ class App:
                     self.car_sel = (self.car_sel - 1) % len(ents)
             elif ev == "a":
                 e = ents[self.car_sel % len(ents)]
-                if (self.status or {}).get("target") != e["target"]:
-                    if "spotify" in e["target"] and self._no_internet():
-                        self.draw_message("No network —\ncan't play Spotify")
-                        time.sleep(1.2)
-                        return
-                    api_post("/play", {"id": e["id"]},
-                             timeout=CONTROL_TIMEOUT)
+                if "spotify" in e["target"] and self._no_internet():
+                    self.draw_message("No network —\ncan't play Spotify")
+                    time.sleep(1.2)
+                    return
+                api_post("/play", {"id": e["id"]}, timeout=CONTROL_TIMEOUT)
                 self._enter_now()
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card

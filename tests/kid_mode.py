@@ -74,15 +74,16 @@ assert app.stack and app.stack[-1][0] == "carousel", \
     "back from now-playing must return to the carousel"
 print("4. Y/B flip with wrap, A plays + opens now-playing OK")
 
-# 5. A on the tile that is ALREADY playing just opens now-playing —
-# no restart, no toggle (pause lives in the now view)
+# 5. A has ONE meaning — "play this tile" — also when it's already the
+# playing target (the daemon turns a same-target replay into a plain
+# unpause/no-op, so nothing restarts)
 posts.clear()
 app.view, app.stack = "carousel", []
 app.status = {"target": "https://ex.com/feed.rss", "playing": True}
 app.handle_carousel("a")
-assert posts == [], f"must not restart or toggle: {posts}"
+assert posts == [("/play", {"id": "f2"})], posts
 assert app.view == "now"
-print("5. A on the playing tile opens now-playing, no restart OK")
+print("5. A always means play-this-tile (daemon absorbs replays) OK")
 
 # 6. hold-B in now-playing returns to the carousel, on the playing tile
 app.settings = {"simple_nav": 1}
