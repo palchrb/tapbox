@@ -37,6 +37,7 @@ SETTING_SPECS = {
     "spotify_cache_gb": (20, 1, 100),
     "resume_on_boot": (1, 0, 1),
     "wifi_auto_off_min": (15, 0, 240),  # 0 = never auto-off
+    "simple_nav": (0, 0, 1),  # 1 = kid mode: flat big-cover carousel
 }
 
 

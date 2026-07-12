@@ -509,6 +509,7 @@ async function loadSettings() {
   $("#set-idle").value = String(s.idle_shutdown_min);
   $("#set-spotcache").value = String(s.spotify_cache_gb);
   $("#set-resume").value = String(s.resume_on_boot);
+  $("#set-kidnav").value = String(s.simple_nav || 0);
   $("#set-wifioff").value = String(s.wifi_auto_off_min);
 }
 
@@ -518,6 +519,7 @@ for (const [id, key] of [["#set-screen", "screen_timeout_s"],
                          ["#set-idle", "idle_shutdown_min"],
                          ["#set-spotcache", "spotify_cache_gb"],
                          ["#set-resume", "resume_on_boot"],
+                         ["#set-kidnav", "simple_nav"],
                          ["#set-wifioff", "wifi_auto_off_min"]]) {
   $(id).addEventListener("change", async () => {
     try {

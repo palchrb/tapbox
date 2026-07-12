@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Gate kid mode (simple_nav): the flat big-cover carousel. B/Y flip
+through every entry across sections, A plays the tile (or pauses the one
+already playing), the mode setting validates, and flipping it swaps the
+view both ways without touching an open settings screen."""
+import os
+import sys
+import time
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "pi"))
+os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+
+import ui  # noqa: E402
+from tapbox import sysinfo  # noqa: E402
+
+# 1. the setting exists, defaults off, clamps to 0/1
+assert sysinfo.SETTING_SPECS["simple_nav"] == (0, 0, 1)
+print("1. simple_nav setting registered (default off) OK")
+
+
+class FakeDisplay:
+    on = True
+    def show(self, img): pass
+    def set_backlight(self, on): pass
+    def set_brightness(self, b): pass
+
+
+app = ui.App(FakeDisplay(), None)
+app._lib_at = time.monotonic() + 999
+app.library = {"sections": [
+    {"name": "Musikk", "entries": [
+        {"id": "m1", "name": "Sanger", "target": "spotify:playlist:a"}]},
+    {"name": "Fortellinger", "entries": [
+        {"id": "f1", "name": "Fanto", "target": "https://radio.nrk.no/podkast/x"},
+        {"id": "f2", "name": "Bablo", "target": "https://ex.com/feed.rss"}]}]}
+
+# 2. the carousel is FLAT: all entries across sections, library order
+assert [e["id"] for e in app.flat_entries()] == ["m1", "f1", "f2"]
+print("2. carousel flattens every section in order OK")
+
+# 3. flipping the setting swaps the view both ways...
+app.settings = {"simple_nav": 1}
+app.view = "home"
+app._apply_nav_mode()
+assert app.view == "carousel" and app.stack == []
+app.settings = {"simple_nav": 0}
+app._apply_nav_mode()
+assert app.view == "home"
+# ...but never yanks an open settings screen
+app.settings = {"simple_nav": 1}
+app.view = "settings"
+app._apply_nav_mode()
+assert app.view == "settings", "settings view must be left alone"
+print("3. mode flip swaps home<->carousel, leaves settings alone OK")
+
+# 4. buttons: Y forward (wraps), B back, A plays the selected tile
+posts = []
+ui.api_post = lambda path, body=None, timeout=15: (posts.append((path, body)), {})[1]
+app.settings = {"simple_nav": 1}
+app.view, app.car_sel, app.status = "carousel", 0, {}
+app.handle_carousel("y")
+app.handle_carousel("y")
+assert app.car_sel == 2
+app.handle_carousel("y")
+assert app.car_sel == 0, "must wrap around"
+app.handle_carousel("b")
+assert app.car_sel == 2, "B must go backwards (wrapping)"
+app.handle_carousel("a")
+assert posts == [("/play", {"id": "f2"})], posts
+print("4. Y/B flip with wrap, A plays the tile OK")
+
+# 5. A on the tile that is already playing toggles pause instead
+posts.clear()
+app.status = {"target": "https://ex.com/feed.rss", "playing": True}
+app.handle_carousel("a")
+assert posts and posts[0][0] == "/playpause", posts
+print("5. A on the playing tile pauses (no restart) OK")
+
+print("KID MODE OK — flat carousel, flip/play/pause, live mode switch.")
