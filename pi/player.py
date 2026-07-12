@@ -177,13 +177,17 @@ def _apply_box_volume():
         pass
 
 
-def accept_spot_bookmark(bm, uri):
+def accept_spot_bookmark(bm, uri, exact=False):
     """The bookmark to resume from, or None for a clean start. Rejections
     are logged with WHY — invaluable when 'it started over' reports come
     in from the field. An early position keeps the TRACK and only drops
     the seek: rejecting the whole bookmark restarted the entire playlist
-    when the box replayed within the first 20s of a song (field: output
-    switch early in a track sent the queue back to the top)."""
+    when the box replayed within the first 20s of a song.
+
+    exact=True (an output switch resuming an interrupted session, not a
+    user re-tap) skips the below-threshold zeroing entirely: the music
+    was audibly at 0:08 a second ago — coming back at 0:00 reads as
+    'it restarted' (field report), not as a convenience."""
     if bm is None:
         log("no spotify bookmark on disk — starting from the top")
         return None
@@ -194,14 +198,14 @@ def accept_spot_bookmark(bm, uri):
     if not bm.get("uri"):
         log("bookmark has no track uri — clean start")
         return None
-    if (bm.get("position") or 0) <= SPOT_RESUME_MIN_MS:
+    if not exact and (bm.get("position") or 0) <= SPOT_RESUME_MIN_MS:
         log(f"bookmark position {int((bm.get('position') or 0) / 1000)}s "
             f"is early — keeping the track, playing it from 0:00")
         bm = {**bm, "position": 0}
     return bm
 
 
-def play_spotify(target, fresh=False):
+def play_spotify(target, fresh=False, exact=False):
     uri = spotify.to_uri(target)
     if not uri:
         log(f"could not parse spotify link: {target}")
@@ -214,7 +218,7 @@ def play_spotify(target, fresh=False):
     if fresh:
         spotify.clear_bookmark(uri)
     else:
-        bm = accept_spot_bookmark(spotify.read_bookmark(uri), uri)
+        bm = accept_spot_bookmark(spotify.read_bookmark(uri), uri, exact)
 
     # go-librespot may have JUST been restarted (an output switch rewrites
     # asound.conf and bounces the service) — wait for the session before
@@ -291,13 +295,17 @@ def main():
     episode = None   # explicit episode pick from the menu (tapboxd /play)
     cache_n = None   # library entry cache setting; None = legacy behaviour
     no_resume = False  # library 'from start' setting: never remember position
+    exact = False    # output-switch resume: honor even a sub-threshold pos
     while args and args[0] in ("--fresh", "--reverse", "--episode", "--cache",
-                               "--no-resume"):
+                               "--no-resume", "--exact"):
         if args[0] == "--fresh":
             fresh = True
             args = args[1:]
         elif args[0] == "--no-resume":
             no_resume = True
+            args = args[1:]
+        elif args[0] == "--exact":
+            exact = True
             args = args[1:]
         elif args[0] == "--reverse":
             reverse = True
@@ -315,13 +323,14 @@ def main():
             episode = args[1]
             args = args[2:]
     if not args:
-        print("usage: player.py [--fresh] [--no-resume] [--reverse] "
-              "[--episode <id>] [--cache N] <target> [url...]", file=sys.stderr)
+        print("usage: player.py [--fresh] [--no-resume] [--exact] "
+              "[--reverse] [--episode <id>] [--cache N] <target> [url...]",
+              file=sys.stderr)
         sys.exit(1)
     target, urls = args[0], args[1:]
 
     if is_spotify(target):
-        play_spotify(target, fresh=fresh)
+        play_spotify(target, fresh=fresh, exact=exact)
         return
 
     titles, ids, images = {}, {}, {}

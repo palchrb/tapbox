@@ -297,12 +297,14 @@ class Orchestrator:
         self.child = None
 
     def _spawn(self, target, fresh=False, episode=None, reverse=False,
-               cache=None, resume=True):
+               cache=None, resume=True, exact=False):
         args = [sys.executable, player_path()]
         if fresh:
             args.append("--fresh")
         if not resume:
             args.append("--no-resume")
+        if exact:
+            args.append("--exact")
         if reverse:
             args.append("--reverse")
         if episode:
@@ -497,8 +499,10 @@ class Orchestrator:
                     # unlike mpv (live IPC retarget), the restart killed
                     # the session mid-song — bring the music back where
                     # it was (player.py waits for the session, then
-                    # resumes from the bookmark, track + position)
-                    self._spawn(self.target, resume=self.resume)
+                    # resumes from the bookmark). --exact: this is an
+                    # interruption, not a re-tap — even 0:08 into a song
+                    # must come back at 0:08, or it reads as a restart
+                    self._spawn(self.target, resume=self.resume, exact=True)
                     log("output switch: resuming spotify from the bookmark")
             log(f"output -> {device} (pcm {pcm}, "
                 f"mpv {'switched' if mpv_switched else 'n/a'}, "

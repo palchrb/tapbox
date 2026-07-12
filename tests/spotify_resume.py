@@ -132,4 +132,11 @@ assert player.accept_spot_bookmark({"context_uri": PL_A}, PL_A) is None
 assert player.accept_spot_bookmark(None, PL_A) is None
 print("11. early bookmark keeps the track (queue never restarts) OK")
 
+# 12. exact resume (an output switch, not a re-tap): even a position
+# below the threshold is honored to the millisecond — the music was
+# audibly at 0:09 a second ago; coming back at 0:00 reads as a restart
+out = player.accept_spot_bookmark(bm, PL_A, exact=True)
+assert out["position"] == 9000, out
+print("12. --exact honors a sub-threshold position (output switch) OK")
+
 print("SPOTIFY RESUME OK — per-context bookmarks, phone can't corrupt them.")
