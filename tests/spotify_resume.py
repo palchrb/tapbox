@@ -115,4 +115,21 @@ r = orch.play("https://open.spotify.com/playlist/xyz")
 assert r.get("resumed") and calls == [], (r, calls)
 print("10. same-target spotify replay = unpause/no-op, never a respawn OK")
 
+# 11. the play-side accept rules: an EARLY position keeps the TRACK and
+# only drops the seek — rejecting the whole bookmark restarted the whole
+# playlist when replaying within a song's first 20s (field: an output
+# switch early in a track sent the queue back to the top)
+import player  # noqa: E402
+
+bm = {"context_uri": PL_A, "uri": "spotify:track:5", "position": 9000}
+out = player.accept_spot_bookmark(bm, PL_A)
+assert out and out["uri"] == "spotify:track:5" and out["position"] == 0, out
+assert bm["position"] == 9000, "input dict must not be mutated"
+out = player.accept_spot_bookmark({**bm, "position": 90000}, PL_A)
+assert out["position"] == 90000, "a deep position must pass through"
+assert player.accept_spot_bookmark(bm, PL_B) is None, "wrong context kept"
+assert player.accept_spot_bookmark({"context_uri": PL_A}, PL_A) is None
+assert player.accept_spot_bookmark(None, PL_A) is None
+print("11. early bookmark keeps the track (queue never restarts) OK")
+
 print("SPOTIFY RESUME OK — per-context bookmarks, phone can't corrupt them.")

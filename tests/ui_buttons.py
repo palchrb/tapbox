@@ -21,9 +21,8 @@ def fresh(gesture):
     inp.gesture_mode = gesture
     inp.down = {}
     inp.tainted = set()
-    inp._b_long_sent = False
+    inp._long_sent = {}
     inp._b_gesture = False
-    inp._x_long_sent = False
     inp.wake = threading.Event()
     return inp
 
@@ -71,5 +70,22 @@ inp._released("a")
 inp._released("b")
 assert inp._events() == [], "failed combo must not select/back"
 print("5. failed combo swallowed OK")
+
+# 6. now-playing: quick Y = next (on release); held Y = the episode
+# picker, exactly once, release swallowed. In menus Y stays instant.
+inp = fresh(gesture=True)
+inp._pressed("y")
+assert inp._events() == [], "y must not fire while held (gesture mode)"
+inp._released("y")
+assert inp._events() == ["y"]
+inp._pressed("y")
+inp.down["y"] = time.monotonic() - (ui.GpioInput.LONG_S + 0.1)
+assert inp._events() == ["y_long"]
+inp._released("y")
+assert inp._events() == [], "release after y_long must be swallowed"
+inp = fresh(gesture=False)
+inp._pressed("y")
+assert inp._events() == ["y"], "menu Y must stay an instant press"
+print("6. Y: quick=next, hold=episode picker, instant in menus OK")
 
 print("UI BUTTONS OK — A selects/plays, B backs/rewinds, hold-B goes back.")

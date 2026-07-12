@@ -484,7 +484,22 @@ class Orchestrator:
                 # coexistence load that crashes the Zero's BT firmware)
                 restarted = False
             else:
+                st = go_status()
+                # box-initiated playback only: a phone streaming its own
+                # music through the box must not get hijacked into the
+                # box's old target after the restart
+                spot_was_playing = (spotify_playing(st)
+                                    and st.get("play_origin")
+                                    in ("go-librespot", "", None))
                 restarted = _retarget_go_librespot(pcm)
+                if restarted and spot_was_playing and self.target \
+                        and is_spotify(self.target):
+                    # unlike mpv (live IPC retarget), the restart killed
+                    # the session mid-song — bring the music back where
+                    # it was (player.py waits for the session, then
+                    # resumes from the bookmark, track + position)
+                    self._spawn(self.target, resume=self.resume)
+                    log("output switch: resuming spotify from the bookmark")
             log(f"output -> {device} (pcm {pcm}, "
                 f"mpv {'switched' if mpv_switched else 'n/a'}, "
                 f"go-librespot {'restarted' if restarted else 'unchanged'})")

@@ -19,7 +19,8 @@ Buttons (BCM 5=A, 6=B, 16=X, 24=Y):
                    is B everywhere: short in menus, hold here)
                 X: press=volume mode (then B=down, Y=up; closes after 3s)
                    hold=switch output (bt speaker <-> built-in)
-                Y=next  (instant single press)
+                Y: press=next, hold=episode picker (the same list the
+                   full menus use — also kid mode's hidden episode way)
 
 The battery indicator is drawn in the top-right corner of every view.
 The screen blanks after settings.screen_timeout_s (0 = never); the
@@ -166,7 +167,7 @@ def make_display():
 
 class FifoInput:
     """Dev input: one char per event on a fifo (a/b/x/y press, l=long-B,
-    s=settings)."""
+    e=long-Y, o=long-X, s=settings)."""
 
     def __init__(self, path):
         if not os.path.exists(path):
@@ -187,6 +188,8 @@ class FifoInput:
                 events.append("b_long")
             elif ch == "o":
                 events.append("x_long")
+            elif ch == "e":
+                events.append("y_long")
             elif ch == "s":
                 events.append("settings")
         return events
@@ -201,13 +204,14 @@ class GpioInput:
     never reaches HOLD_S is swallowed as a failed combo attempt, not
     delivered as two commands. X/Y stay instant single presses.
 
-    In gesture_mode (the now-playing view) B resolves short-vs-hold:
-    release before LONG_S -> 'b', held LONG_S -> 'b_long' (fires while
-    still held — but never while A is also down: that's a combo)."""
+    In gesture_mode (the now-playing view) B, X and Y resolve
+    short-vs-hold: release before LONG_S -> the plain press, held LONG_S
+    -> '<name>_long' (fires while still held — but never while the A+B
+    combo is forming)."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
     HOLD_S = 2.0      # A+B settings combo
-    LONG_S = 0.8      # B held this long = back to menu
+    LONG_S = 0.8      # B/X/Y held this long = the hold action
 
     def __init__(self):
         from gpiozero import Button
@@ -215,31 +219,29 @@ class GpioInput:
                         for name, pin in self.PINS.items()}
         self.queue = []
         self.gesture_mode = False
-        self.down = {}        # a/b -> press timestamp while held
+        self.down = {}        # name -> press timestamp while held
         self.tainted = set()  # a/b releases to swallow (combo attempt)
-        self._b_long_sent = False
+        self._long_sent = {}  # name -> the hold already fired
         self._b_gesture = False   # gesture_mode when B was pressed
-        self._x_long_sent = False
         self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
-        for name in ("a", "b", "x"):
-            self.buttons[name].when_released = \
-                lambda n=name: self._released(n)
+            btn.when_released = lambda n=name: self._released(n)
         log("gpio buttons ready (BCM 5/6/16/24)")
 
     def _pressed(self, name):
         self.wake.set()  # end the current poll() immediately
-        if name == "y" or (name == "x" and not self.gesture_mode):
-            self.queue.append(name)
+        if name in ("x", "y") and not self.gesture_mode:
+            self.queue.append(name)  # menus: instant single presses
             return
         self.down[name] = time.monotonic()
-        if name == "x":
-            # now-playing: short X = volume card, held X = output toggle
-            self._x_long_sent = False
+        if name in ("x", "y"):
+            # now-playing: short X = volume, held X = output;
+            #              short Y = next, held Y = episode picker
+            self._long_sent[name] = False
             return
         if name == "b":
-            self._b_long_sent = False
+            self._long_sent["b"] = False
             # judge the RELEASE by the mode the press STARTED in: b_long
             # navigates away from now-playing while still held, flipping
             # gesture_mode off — the release must not then be re-read as
@@ -254,9 +256,9 @@ class GpioInput:
             return
         if held_since is None:
             return
-        if name == "x":
-            if not self._x_long_sent:
-                self.queue.append("x")
+        if name in ("x", "y"):
+            if not self._long_sent.get(name):
+                self.queue.append(name)
             return
         other = "b" if name == "a" else "a"
         if other in self.down:
@@ -265,14 +267,14 @@ class GpioInput:
             self.tainted.add(other)
             return
         if name == "b" and self._b_gesture:
-            if not self._b_long_sent:
+            if not self._long_sent.get("b"):
                 self.queue.append("b")
             return
         self.queue.append(name)
 
     def poll(self, timeout):
         # a button callback sets the event -> instant reaction; otherwise
-        # this is the tick for hold-timing (combo, b_long)
+        # this is the tick for hold-timing (combo, the _long gestures)
         self.wake.wait(timeout)
         self.wake.clear()
         return self._events()
@@ -287,15 +289,16 @@ class GpioInput:
                 self.queue.clear()
                 return ["settings"]
         elif (self._b_gesture and "b" in self.down
-                and not self._b_long_sent
+                and not self._long_sent.get("b")
                 and now - self.down["b"] >= self.LONG_S):
             # long press fires while still held — no waiting for release
-            self._b_long_sent = True
+            self._long_sent["b"] = True
             self.queue.append("b_long")
-        if ("x" in self.down and not self._x_long_sent
-                and now - self.down["x"] >= self.LONG_S):
-            self._x_long_sent = True
-            self.queue.append("x_long")
+        for name in ("x", "y"):
+            if (name in self.down and not self._long_sent.get(name)
+                    and now - self.down[name] >= self.LONG_S):
+                self._long_sent[name] = True
+                self.queue.append(f"{name}_long")
         ev, self.queue = self.queue[:], []
         return ev
 
@@ -330,9 +333,8 @@ class LgpioInput(GpioInput):
         self.gesture_mode = False
         self.down = {}
         self.tainted = set()
-        self._b_long_sent = False
+        self._long_sent = {}
         self._b_gesture = False
-        self._x_long_sent = False
         self.wake = threading.Event()  # set by inherited handlers; unused
         self._level = {n: 1 for n in self.PINS}   # pull-up: 1 = released
         self._edge_at = {n: 0.0 for n in self.PINS}
@@ -587,8 +589,9 @@ class App:
         swapped; an open settings/bt view is left alone and reconciles
         the moment it is left."""
         simple = bool(self.settings.get("simple_nav"))
-        if simple and self.view in ("home", "entries", "episodes"):
-            # (now-playing is shared by both modes — left alone)
+        if simple and self.view in ("home", "entries"):
+            # (now-playing AND the hold-Y episode picker are shared by
+            # both modes — left alone)
             self.stack, self.view = [], "carousel"
             self.dirty = True
         elif not simple and self.view == "carousel":
@@ -767,8 +770,42 @@ class App:
                 else:
                     api_post("/next", timeout=CONTROL_TIMEOUT)
                     self.last_status = 0
+            elif ev == "y_long":
+                self._open_episodes()
         except OSError as e:
             log(f"control failed: {e}")
+
+    def _open_episodes(self):
+        """Hold-Y in now-playing: the episode picker for whatever is
+        playing — the same list view the full menus use. In kid mode this
+        is the (deliberately hidden) way to jump between episodes; back
+        from the list returns to now-playing."""
+        target = (self.status or {}).get("target")
+        if not target:
+            return
+        self.load_library(ttl=0)  # fresh — we might not have browsed yet
+        for sec in (self.library or {}).get("sections", []):
+            for e in sec.get("entries", []):
+                if e.get("target") != target:
+                    continue
+                self.draw_message("Fetching episodes ...")
+                try:
+                    self.expanded = api_get(f"/expand?id={e['id']}")
+                except (OSError, ValueError):
+                    self.draw_message("Network error — try again")
+                    time.sleep(1)
+                    return
+                if not self.expanded.get("episodes"):
+                    return  # spotify etc: no episode list exists
+                self.section, self.entry = sec, e
+                self.push("episodes")
+                now_id = (self.status or {}).get("episode_id")
+                if now_id:  # land on the playing episode
+                    for i, ep in enumerate(self.expanded["episodes"]):
+                        if ep.get("id") == now_id:
+                            self.sel = i + 1  # row 0 = "Play all"
+                            break
+                return
 
     def _back_to_episodes(self):
         """Leave now-playing for the episode list of whatever is playing.

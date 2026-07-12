@@ -177,6 +177,30 @@ def _apply_box_volume():
         pass
 
 
+def accept_spot_bookmark(bm, uri):
+    """The bookmark to resume from, or None for a clean start. Rejections
+    are logged with WHY — invaluable when 'it started over' reports come
+    in from the field. An early position keeps the TRACK and only drops
+    the seek: rejecting the whole bookmark restarted the entire playlist
+    when the box replayed within the first 20s of a song (field: output
+    switch early in a track sent the queue back to the top)."""
+    if bm is None:
+        log("no spotify bookmark on disk — starting from the top")
+        return None
+    if bm.get("context_uri") != uri:
+        log(f"bookmark is for another context "
+            f"({bm.get('context_uri')!r} != {uri!r}) — clean start")
+        return None
+    if not bm.get("uri"):
+        log("bookmark has no track uri — clean start")
+        return None
+    if (bm.get("position") or 0) <= SPOT_RESUME_MIN_MS:
+        log(f"bookmark position {int((bm.get('position') or 0) / 1000)}s "
+            f"is early — keeping the track, playing it from 0:00")
+        bm = {**bm, "position": 0}
+    return bm
+
+
 def play_spotify(target, fresh=False):
     uri = spotify.to_uri(target)
     if not uri:
@@ -190,23 +214,7 @@ def play_spotify(target, fresh=False):
     if fresh:
         spotify.clear_bookmark(uri)
     else:
-        bm = spotify.read_bookmark(uri)
-        if bm is None:
-            log("no spotify bookmark on disk — starting from the top")
-        if bm is not None:
-            # say WHY a bookmark is rejected — invaluable when 'it started
-            # over' reports come in from the field
-            if bm.get("context_uri") != uri:
-                log(f"bookmark is for another context "
-                    f"({bm.get('context_uri')!r} != {uri!r}) — clean start")
-                bm = None
-            elif not bm.get("uri"):
-                log("bookmark has no track uri — clean start")
-                bm = None
-            elif (bm.get("position") or 0) <= SPOT_RESUME_MIN_MS:
-                log(f"bookmark position {int((bm.get('position') or 0) / 1000)}s"
-                    f" is below the resume threshold — clean start")
-                bm = None
+        bm = accept_spot_bookmark(spotify.read_bookmark(uri), uri)
 
     # go-librespot may have JUST been restarted (an output switch rewrites
     # asound.conf and bounces the service) — wait for the session before
@@ -224,8 +232,10 @@ def play_spotify(target, fresh=False):
         body["skip_to_uri"] = bm["uri"]
         # Load silently and unpause only after the seek — otherwise the
         # first 1-2s of the track play audibly from 0:00 while we wait
-        # for it to load.
-        body["paused"] = True
+        # for it to load. (An early bookmark plays the track from 0:00
+        # anyway — no seek needed, start audibly right away.)
+        if bm["position"]:
+            body["paused"] = True
     # Even with the session up, the FIRST request after a restart can be
     # slow server-side (dealer/audio-key fetch still warming: 'context
     # deadline exceeded' in go-librespot's log) — retry instead of dying.
@@ -246,7 +256,7 @@ def play_spotify(target, fresh=False):
         + (f" (resuming {bm['uri']} at {bm['position'] // 1000}s)" if bm else ""))
     _apply_box_volume()
 
-    if bm:
+    if bm and bm["position"]:
         # seek once the right track has actually loaded — after a cold boot
         # (dealer warm-up, BT audio) that can take well over the old 6s
         # window, which silently skipped the seek and "resumed" at 0:00
