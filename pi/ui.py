@@ -1287,19 +1287,18 @@ class App:
         d.line([(W - 17, 177), (W - 6, 185), (W - 17, 193)], fill=DIM,
                width=3, joint="curve")
         # A (top left): play the selected tile — THE action here, so it
-        # gets the highlight color; small enough to clear the album art
-        d.polygon([(12, 47), (12, 63), (26, 55)], fill=HILITE)
+        # gets the highlight color; hugs the edge like the chevrons
+        d.polygon([(5, 47), (5, 63), (19, 55)], fill=HILITE)
         name, rolls = marquee(e["name"], 20)
         d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
         st = self.status or {}
         if st.get("target") == e["target"]:
-            # this tile is what's (or was) playing: a frame around the
-            # art — orange while audible, dim grey when paused. No extra
-            # glyphs (a bottom play/pause mark clashed with the art and
-            # drowned in the other arrows).
-            color = HILITE if st.get("playing") else DIM
-            d.rounded_rectangle([ax - 5, ay - 5, ax + 181, ay + 181],
-                                radius=12, outline=color, width=3)
+            # this tile is what's (or was) playing: a thick orange
+            # underline beneath the name (playing or paused alike) — a
+            # frame around the art read as clutter, per field feedback
+            tl = d.textlength(name, font=F_MED)
+            d.rounded_rectangle([(W - tl) / 2, 228, (W + tl) / 2, 232],
+                                radius=2, fill=HILITE)
             pos, dur = st.get("position"), st.get("duration")
             if pos and dur:
                 frac = max(0.0, min(1.0, pos / dur))
