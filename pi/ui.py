@@ -1293,14 +1293,13 @@ class App:
         d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
         st = self.status or {}
         if st.get("target") == e["target"]:
-            # this tile is what's (or was) playing: state + progress
-            cy = 229
-            if st.get("playing"):
-                d.rectangle([W // 2 - 6, cy - 7, W // 2 - 2, cy + 7], fill=FG)
-                d.rectangle([W // 2 + 2, cy - 7, W // 2 + 7, cy + 7], fill=FG)
-            else:
-                d.polygon([(W // 2 - 5, cy - 8), (W // 2 - 5, cy + 8),
-                           (W // 2 + 8, cy)], fill=FG)
+            # this tile is what's (or was) playing: a frame around the
+            # art — orange while audible, dim grey when paused. No extra
+            # glyphs (a bottom play/pause mark clashed with the art and
+            # drowned in the other arrows).
+            color = HILITE if st.get("playing") else DIM
+            d.rounded_rectangle([ax - 5, ay - 5, ax + 181, ay + 181],
+                                radius=12, outline=color, width=3)
             pos, dur = st.get("position"), st.get("duration")
             if pos and dur:
                 frac = max(0.0, min(1.0, pos / dur))
