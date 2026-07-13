@@ -873,7 +873,14 @@ class App:
                     self.draw_message("No network —\ncan't play Spotify")
                     time.sleep(1.2)
                     return
-                api_post("/play", {"id": e["id"]}, timeout=CONTROL_TIMEOUT)
+                r = api_post("/play", {"id": e["id"]},
+                             timeout=CONTROL_TIMEOUT)
+                if r.get("error") == "no-internet":
+                    # wifi is up but the WAN is down — the daemon's probe
+                    # is the authority (the local check above can't tell)
+                    self.draw_message("No internet —\ncan't play Spotify")
+                    time.sleep(1.2)
+                    return
                 self._enter_now()
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
@@ -977,7 +984,12 @@ class App:
                         self.draw_message("No network —\ncan't play Spotify")
                         time.sleep(1.2)
                         return
-                    api_post("/play", {"id": self.entry["id"]})
+                    r = api_post("/play", {"id": self.entry["id"]})
+                    if r.get("error") == "no-internet":
+                        # wifi up, WAN down — the daemon's probe knows
+                        self.draw_message("No internet —\ncan't play Spotify")
+                        time.sleep(1.2)
+                        return
                     self._enter_now()
                 else:
                     self.push("episodes")

@@ -116,6 +116,11 @@ QUEUE_FILE = os.path.join(STATE_DIR, "now-queue.json")
 
 _QUEUE_CACHE = {"mtime": None, "data": None}
 
+# poked on spotify plays: the bookmarker idles at a 30s heartbeat between
+# sessions, which let a short play (<30s) end entirely between ticks —
+# no bookmark ever written ("no spotify bookmark on disk" later)
+_bm_wake = threading.Event()
+
 
 def _queue_map():
     """player.py's url -> {id,title,image} map for the running queue,
@@ -319,6 +324,27 @@ class Orchestrator:
                 self.child.kill()
         self.child = None
 
+    def _ensure_spotify_backend(self):
+        """go-librespot may be parked by the offline supervisor (its tick
+        is 60s — far too slow for a play tap). True when the unit is (or
+        was just) started, False when there is genuinely no internet so
+        the caller can fail FAST instead of a 30s silent session-wait."""
+        try:
+            if subprocess.run(["systemctl", "is-active", "--quiet",
+                               "go-librespot"], timeout=10).returncode == 0:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            return True  # can't tell — let the normal path try
+        if not _internet_up():
+            return False
+        try:
+            subprocess.run(["systemctl", "start", "go-librespot"],
+                           timeout=30)
+            log("go-librespot was parked — started for the play request")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return True
+
     def _spawn(self, target, fresh=False, episode=None, reverse=False,
                cache=None, resume=True, exact=False):
         args = [sys.executable, player_path()]
@@ -370,6 +396,13 @@ class Orchestrator:
                                 "resumed": True}
                 except OSError:
                     pass  # session gone — fall through to respawn (bookmark)
+            if is_spotify(target) and not self._ensure_spotify_backend():
+                # parked and genuinely offline: say so NOW — spawning a
+                # player that waits 30s for a session that cannot come
+                # just looks like a dead box (field report)
+                log("play: no internet — spotify can't start")
+                return {"source": "spotify", "target": target,
+                        "error": "no-internet"}
             self._stop_child()
             self._spawn(target, fresh, episode, reverse, cache, resume)
             self.mpv_shuffle = False  # fresh queue plays in order
@@ -387,6 +420,7 @@ class Orchestrator:
                 except Exception:
                     pre = None
                 self.spot_pending = {"pre_uri": pre, "at": time.monotonic()}
+                _bm_wake.set()  # bookmark even a short session
             self._persist()
             log(f"play [{self.source}] {target}"
                 + (f" (episode {episode})" if episode else ""))
@@ -663,6 +697,10 @@ class Orchestrator:
                     pass
             # 4) dead session + remembered target -> bring it back (resumes)
             if self.target and not self._mpv_alive():
+                if is_spotify(self.target) \
+                        and not self._ensure_spotify_backend():
+                    log(f"{action}: no internet — spotify can't start")
+                    return {"routed": None, "error": "no-internet"}
                 self._spawn(self.target, reverse=self.reverse,
                             resume=self.resume)
                 log(f"{action} -> resuming last: {self.target}")
@@ -1224,7 +1262,8 @@ def _spotify_bookmarker():
     in spotify.bookmark_step/save_bookmark."""
     interval = 5
     while True:
-        time.sleep(interval)
+        woke = _bm_wake.wait(interval)
+        _bm_wake.clear()
         try:
             st = go_status()
             track = st.get("track") or {}
@@ -1233,6 +1272,8 @@ def _spotify_bookmarker():
             # 12x/min around the clock. A live (even paused) session keeps
             # the 5s cadence so resume stays accurate.
             interval = 30 if (not track or st.get("stopped")) else 5
+            if woke:
+                interval = 5  # a play was just issued — watch closely
             if ORCH.source == "mpv" and ORCH._mpv_alive():
                 # mpv owns playback but spotify still reports playing: this
                 # is the switch race — /play set target+source to the mpv

@@ -143,6 +143,36 @@ out = player.accept_spot_bookmark(bm, PL_A, exact=True)
 assert out["position"] == 9000, out
 print("12. --exact honors a sub-threshold position (output switch) OK")
 
+# 12b. go-librespot parked by the offline supervisor: a play tap must
+# fail FAST with a clear error when there is no internet (not spawn a
+# player that waits 30s for a session that cannot come), and must START
+# the parked unit itself when the net is back (the supervisor's 60s tick
+# is far too slow for a button press)
+import subprocess as _sp
+
+orch2 = daemon.ORCH
+orch2.target = orch2.source = None
+orch2._spawn = lambda *a, **k: spawns.append(a)
+orch2._stop_child = lambda: None
+spawns = []
+daemon.subprocess.run = lambda *a, **k: type("R", (), {"returncode": 3})()
+daemon._internet_up = lambda: False
+r = orch2.play("https://open.spotify.com/playlist/offline1")
+assert r.get("error") == "no-internet" and spawns == [], (r, spawns)
+print("12b. parked + offline: fast error, no zombie player OK")
+
+started = []
+daemon.subprocess.run = lambda cmd, **k: (
+    started.append(cmd),
+    type("R", (), {"returncode": 3 if "is-active" in cmd else 0})())[1]
+daemon._internet_up = lambda: True
+daemon.go_status = lambda: {}
+r = orch2.play("https://open.spotify.com/playlist/online1")
+assert r.get("error") is None and len(spawns) == 1, (r, spawns)
+assert any("start" in c for c in started), "parked unit never started"
+print("12c. parked + net back: unit started by the tap itself OK")
+daemon.subprocess.run = _sp.run
+
 # 13. prev follows mpv semantics: deep into the track -> restart it
 # (seek 0); near the start -> the actual previous track (double-press
 # forced when go-librespot's own prev only rewound)
