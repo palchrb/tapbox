@@ -85,4 +85,46 @@ st = orch.status()
 assert st["title"] != "Feil serie", "stale publish from another target used"
 print("5. another target's stale publish is ignored OK")
 
+# 6. a freshly tapped spotify target: go-librespot still describes the
+# PREVIOUS context — /status must show the tapped entry's identity
+# (bookmark name + cached mosaic), never the old track
+from tapbox import content, spotify as sp  # noqa: E402
+
+orch._mpv_alive = lambda: False
+NEW = "https://open.spotify.com/playlist/bbbbbbbbbbbbbbbbbbbbbb"
+NEW_URI = "spotify:playlist:bbbbbbbbbbbbbbbbbbbbbb"
+sp.save_bookmark({"context_uri": NEW_URI, "uri": "spotify:track:b3",
+                  "position": 120000, "duration": 200000,
+                  "name": "Regnvaersanger", "artists": [],
+                  "artwork": "http://scdn/b3.jpg", "updated": 1})
+mosaic = content.spotify_art_path(NEW)
+os.makedirs(os.path.dirname(mosaic), exist_ok=True)
+open(mosaic, "wb").write(b"jpg")
+daemon.go_status = lambda: {"track": {"uri": "spotify:track:OLD",
+                                      "name": "Gammel sang",
+                                      "position": 5000, "duration": 100000,
+                                      "album_cover_url": "http://scdn/old.jpg"},
+                            "paused": False, "stopped": False,
+                            "play_origin": "go-librespot"}
+orch._stop_child = lambda: None
+orch._spawn = lambda *a, **k: None
+orch.play(NEW)
+st = orch.status()
+assert st["title"] == "Regnvaersanger", f"old context leaked: {st['title']}"
+assert st["artwork"] == mosaic, st["artwork"]
+assert st["position"] == 120.0 and st["playing"] is True
+print("6. new spotify tap shows ITS identity, not the old context OK")
+
+# 7. ...and the moment the loaded track changes, live status takes over
+daemon.go_status = lambda: {"track": {"uri": "spotify:track:b3",
+                                      "name": "Regnvaersanger (live)",
+                                      "position": 1000, "duration": 200000,
+                                      "album_cover_url": "http://scdn/b3.jpg"},
+                            "paused": False, "stopped": False,
+                            "play_origin": "go-librespot"}
+st = orch.status()
+assert st["title"] == "Regnvaersanger (live)", st["title"]
+assert orch.spot_pending is None, "pending never cleared"
+print("7. live track replaces the pending identity on load OK")
+
 print("NOW PLAYING OK — no filename flashes, art bridges track changes.")

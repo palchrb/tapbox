@@ -190,6 +190,9 @@ class Orchestrator:
         self.reverse = False
         self.resume = True  # library 'from start' entries set this False
         self.mpv_shuffle = False  # mpv has no queryable shuffle state
+        self.spot_pending = None  # a freshly tapped spotify target is
+        # loading: go-librespot still describes the PREVIOUS context —
+        # /status shows the tapped entry's own identity meanwhile
         try:
             with open(LAST_FILE) as f:
                 d = json.load(f)
@@ -374,6 +377,16 @@ class Orchestrator:
             self.reverse = reverse
             self.resume = resume
             self.source = "spotify" if is_spotify(target) else "mpv"
+            self.spot_pending = None
+            if self.source == "spotify":
+                # remember what go-librespot is switching FROM: until the
+                # loaded track changes, its /status still describes the
+                # previous context and must not reach the now-playing card
+                try:
+                    pre = (go_status().get("track") or {}).get("uri")
+                except Exception:
+                    pre = None
+                self.spot_pending = {"pre_uri": pre, "at": time.monotonic()}
             self._persist()
             log(f"play [{self.source}] {target}"
                 + (f" (episode {episode})" if episode else ""))
@@ -730,6 +743,40 @@ class Orchestrator:
             # position lives on the track object (ms, live-extrapolated)
             out["position"] = (track.get("position") or 0) / 1000
             out["artwork"] = out["spotify"]["artwork"]
+        # A freshly tapped spotify target is still loading: go-librespot's
+        # /status keeps describing the PREVIOUS context for a few seconds,
+        # which put another playlist's cover and title on the card (kids:
+        # "wrong picture!"). Until the loaded track actually changes (or
+        # 20s passes), present the tapped entry's own identity instead:
+        # its bookmark's track + position and its pre-cached mosaic.
+        p = self.spot_pending
+        if p and source == "spotify" and target and is_spotify(target):
+            if ((track.get("uri") and track.get("uri") != p.get("pre_uri"))
+                    or time.monotonic() - p["at"] > 20):
+                self.spot_pending = None  # the new context took over
+            else:
+                try:
+                    uri = _spotify.to_uri(target)
+                    bm = _spotify.read_bookmark(uri) if uri else None
+                except OSError:
+                    bm = None
+                name = (bm or {}).get("name")
+                if not name:
+                    e = next((e for s in load_library().get("sections", [])
+                              for e in s.get("entries", [])
+                              if e.get("target") == target), None)
+                    name = (e or {}).get("name") or "Spotify"
+                out["source"], out["playing"] = "spotify", True
+                out["title"] = name
+                out["position"] = (bm.get("position") or 0) / 1000 \
+                    if bm else None
+                out["duration"] = ((bm.get("duration") or 0) / 1000 or None) \
+                    if bm else None
+                try:  # the entry's own mosaic is pre-cached on disk
+                    out["artwork"] = content.collection_image(target) \
+                        or (bm or {}).get("artwork")
+                except Exception:
+                    out["artwork"] = (bm or {}).get("artwork")
         # Ghost sessions: nothing is live, but a bookmarked target is
         # remembered -> present it as paused-at-position instead of
         # "nothing playing". Pressing play resumes exactly there.

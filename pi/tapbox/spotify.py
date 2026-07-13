@@ -205,15 +205,19 @@ def save_bookmark(bm):
 
 
 def read_bookmark(context_uri):
-    """The raw bookmark dict for a context (per-context file first, then the
-    pre-per-context single file), or None. No validation — callers apply
-    their own accept rules (threshold, context match)."""
+    """The bookmark dict for a context (per-context file first, then the
+    pre-per-context single file), or None. The legacy file may hold ANY
+    old context, so it only counts when its context matches — serving it
+    unchecked put another playlist's title/art/position on the now-
+    playing card (field: 'shows something completely different')."""
     for path in (bm_path(context_uri), LEGACY_BM_FILE):
         try:
             with open(path) as f:
-                return json.load(f)
+                bm = json.load(f)
         except (OSError, ValueError):
             continue
+        if bm.get("context_uri") == context_uri:
+            return bm
     return None
 
 

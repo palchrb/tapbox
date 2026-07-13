@@ -75,7 +75,11 @@ lg = s.read_bookmark(legacy_ctx)
 assert lg and lg["uri"] == "spotify:track:old", lg
 # ...but a per-context file wins over the legacy one
 assert s.read_bookmark(PL_A)["uri"] == "spotify:track:a3"
-print("7. legacy single-file bookmark still readable, new files win OK")
+# ...and the legacy file NEVER answers for a different context — that
+# put another playlist's title/art/position on the now-playing card
+assert s.read_bookmark("spotify:album:eeeeeeeeeeeeeeeeeeeeee") is None, \
+    "legacy bookmark served for the wrong context"
+print("7. legacy bookmark readable for ITS context only, new files win OK")
 
 # 8. clear_bookmark forgets ONE context (stop / --fresh), others survive
 s.clear_bookmark(PL_A)
