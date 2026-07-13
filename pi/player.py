@@ -407,6 +407,24 @@ def main():
             name = titles.get(urls[0]) or f"episode {idx + 1}"
             log(f"resuming '{name}' at {int(start_pos)}s")
 
+    # Publish the FIRST item before mpv even starts: tapboxd's /status
+    # then serves the right episode name + artwork from the first frame,
+    # instead of flashing a raw .mp3 filename and the show cover while
+    # mpv loads and the poll loop gets around to its first write.
+    os.makedirs(STATE_DIR, exist_ok=True)
+    now_file = os.path.join(STATE_DIR, "now-playing.json")
+    if urls:
+        try:
+            with open(now_file + ".tmp", "w") as f:
+                json.dump({"id": ids.get(urls[0]), "url": urls[0],
+                           "title": titles.get(urls[0]),
+                           "image": images.get(urls[0]),
+                           "paused": False, "duration": None,
+                           "target": target}, f)
+            os.replace(now_file + ".tmp", now_file)
+        except OSError:
+            pass
+
     # Fixed socket path so the button daemon (tapbox-buttons) can find us
     sock_dir = "/run" if os.access("/run", os.W_OK) else "/tmp"
     sock = os.environ.get("TAPBOX_MPV_SOCK",
@@ -545,8 +563,6 @@ def main():
             "(position saved; any play command resumes)")
 
     # Poll position and persist it until mpv exits; log track changes
-    os.makedirs(STATE_DIR, exist_ok=True)
-    now_file = os.path.join(STATE_DIR, "now-playing.json")
     last_np = None
     last_title = None
     last_beat = 0.0

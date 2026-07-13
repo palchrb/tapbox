@@ -654,9 +654,22 @@ class Orchestrator:
             try:  # which episode (player.py publishes it; match on path)
                 with open(NOW_FILE) as f:
                     now = json.load(f)
-                if now.get("url") == mpv_get("path"):
+                mpath = mpv_get("path")
+                if now.get("url") == mpath:
                     out["episode_id"] = now.get("id")
                     out["title"] = now.get("title") or out["title"]
+                    out["artwork"] = now.get("image")
+                elif now.get("target") == target:
+                    # Transition: mpv is still loading (no path yet), or
+                    # just advanced a track and player.py's publish is one
+                    # poll (<=3s) behind. Serve the last published name and
+                    # art rather than flashing a raw .mp3 filename and the
+                    # show cover — media-title is only kept when it is a
+                    # real title, not the file's basename.
+                    if (mpath is None or not out["title"]
+                            or out["title"] == os.path.basename(mpath)
+                            or out["title"] == mpath):
+                        out["title"] = now.get("title") or out["title"]
                     out["artwork"] = now.get("image")
             except (OSError, ValueError):
                 pass
