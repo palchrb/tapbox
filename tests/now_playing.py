@@ -45,15 +45,30 @@ st = orch.status()
 assert st["episode_id"] == "e2" and st["title"] == "Fantorangen og natta"
 print("2. exact match resolves episode id + title OK")
 
-# 3. mpv advanced to the next file; publish is one poll behind: the raw
-# filename must be suppressed and the art must not fall back to nothing
+# 3. mpv advanced to the next file; publish is one poll behind — the
+# queue map resolves the LIVE path instantly: NEW title+art, same second
+with open(daemon.QUEUE_FILE, "w") as f:
+    json.dump({"target": orch.target, "items": {
+        E2: {"id": "e2", "title": "Fantorangen og natta",
+             "image": "/cache/show/e2f00baa.jpg"},
+        "/cache/show/9abc.mp3": {"id": "e3", "title": "Fantorangen og dagen",
+                                 "image": "/cache/show/9abc.jpg"}}}, f)
 mpv["path"], mpv["media-title"] = "/cache/show/9abc.mp3", "9abc.mp3"
+st = orch.status()
+assert st["title"] == "Fantorangen og dagen", \
+    f"queue map not used: {st['title']}"
+assert st["artwork"] == "/cache/show/9abc.jpg"
+assert st["episode_id"] == "e3"
+print("3. track change: queue map serves the NEW title+art instantly OK")
+
+# 3b. a path OUTSIDE the queue map still bridges with the last publish
+mpv["path"], mpv["media-title"] = "/cache/show/unknown.mp3", "unknown.mp3"
 st = orch.status()
 assert st["title"] == "Fantorangen og natta", \
     f"raw filename leaked: {st['title']}"
 assert st["artwork"] == "/cache/show/e2f00baa.jpg", "art flashed away"
 assert st["episode_id"] is None, "stale episode id kept"
-print("3. track-change gap: filename suppressed, art bridged OK")
+print("3b. unknown path: filename suppressed, art bridged OK")
 
 # 4. a REAL media-title (stream with metadata) is kept on mismatch
 mpv["media-title"] = "NRK Super direkte"

@@ -411,6 +411,9 @@ def main():
     # then serves the right episode name + artwork from the first frame,
     # instead of flashing a raw .mp3 filename and the show cover while
     # mpv loads and the poll loop gets around to its first write.
+    # The WHOLE queue map (url -> id/title/image) goes out too: with it,
+    # tapboxd resolves mpv's live path itself, so a track change shows
+    # the new name the same second the audio changes — no 3s poll gap.
     os.makedirs(STATE_DIR, exist_ok=True)
     now_file = os.path.join(STATE_DIR, "now-playing.json")
     if urls:
@@ -422,6 +425,14 @@ def main():
                            "paused": False, "duration": None,
                            "target": target}, f)
             os.replace(now_file + ".tmp", now_file)
+            qf = os.path.join(STATE_DIR, "now-queue.json")
+            with open(qf + ".tmp", "w") as f:
+                json.dump({"target": target,
+                           "items": {u: {"id": ids.get(u),
+                                         "title": titles.get(u),
+                                         "image": images.get(u)}
+                                     for u in urls}}, f)
+            os.replace(qf + ".tmp", qf)
         except OSError:
             pass
 

@@ -112,6 +112,26 @@ mpv_get = _mpv.get
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
 VOL_FILE = os.path.join(STATE_DIR, "volume.json")
 NOW_FILE = os.path.join(STATE_DIR, "now-playing.json")
+QUEUE_FILE = os.path.join(STATE_DIR, "now-queue.json")
+
+_QUEUE_CACHE = {"mtime": None, "data": None}
+
+
+def _queue_map():
+    """player.py's url -> {id,title,image} map for the running queue,
+    parsed once per spawn (mtime-cached — /status polls every second)."""
+    try:
+        m = os.path.getmtime(QUEUE_FILE)
+    except OSError:
+        return None
+    if _QUEUE_CACHE["mtime"] != m:
+        try:
+            with open(QUEUE_FILE) as f:
+                _QUEUE_CACHE["data"] = json.load(f)
+            _QUEUE_CACHE["mtime"] = m
+        except (OSError, ValueError):
+            return None
+    return _QUEUE_CACHE["data"]
 PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
 PORTAL_PORT = int(os.environ.get("TAPBOX_PORTAL_PORT", "80"))
 # The parent PWA is served to the LAN (http://tapbox.local:3679). Keep this
@@ -655,17 +675,27 @@ class Orchestrator:
                 with open(NOW_FILE) as f:
                     now = json.load(f)
                 mpath = mpv_get("path")
+                q = _queue_map()
+                item = (q.get("items") or {}).get(mpath) \
+                    if q and q.get("target") == target else None
                 if now.get("url") == mpath:
                     out["episode_id"] = now.get("id")
                     out["title"] = now.get("title") or out["title"]
                     out["artwork"] = now.get("image")
+                elif item:
+                    # mpv advanced (or was skipped) and player.py's publish
+                    # is a poll behind — the queue map resolves the LIVE
+                    # path instantly, so the new name/art show the same
+                    # second the audio changes
+                    out["episode_id"] = item.get("id")
+                    out["title"] = item.get("title") or out["title"]
+                    out["artwork"] = item.get("image")
                 elif now.get("target") == target:
                     # Transition: mpv is still loading (no path yet), or
-                    # just advanced a track and player.py's publish is one
-                    # poll (<=3s) behind. Serve the last published name and
-                    # art rather than flashing a raw .mp3 filename and the
-                    # show cover — media-title is only kept when it is a
-                    # real title, not the file's basename.
+                    # plays something outside the map. Serve the last
+                    # published name and art rather than flashing a raw
+                    # .mp3 filename and the show cover — media-title is
+                    # only kept when it is a real title, not a basename.
                     if (mpath is None or not out["title"]
                             or out["title"] == os.path.basename(mpath)
                             or out["title"] == mpath):
