@@ -121,6 +121,11 @@ _QUEUE_CACHE = {"mtime": None, "data": None}
 # no bookmark ever written ("no spotify bookmark on disk" later)
 _bm_wake = threading.Event()
 
+# the supervisor's (and play-path's) verdict on actual internet — surfaced
+# in /status as spotify_offline so the clients can SAY "no internet"
+# instead of silently failing (wifi can be up while the WAN is dead)
+_SPOT_OFFLINE = [False]
+
 
 def _queue_map():
     """player.py's url -> {id,title,image} map for the running queue,
@@ -336,7 +341,9 @@ class Orchestrator:
         except (OSError, subprocess.TimeoutExpired):
             return True  # can't tell — let the normal path try
         if not _internet_up():
+            _SPOT_OFFLINE[0] = True
             return False
+        _SPOT_OFFLINE[0] = False
         try:
             subprocess.run(["systemctl", "start", "go-librespot"],
                            timeout=30)
@@ -715,6 +722,7 @@ class Orchestrator:
         out = {"source": source, "target": target, "playing": False,
                "title": None, "position": None, "duration": None,
                "artwork": None, "episode_id": None, "shuffle": False,
+               "spotify_offline": bool(_SPOT_OFFLINE[0]),
                "output": current_output()["output"]}
         if mpv_alive:
             out["shuffle"] = self.mpv_shuffle
@@ -1324,9 +1332,11 @@ def _spotify_supervisor():
     output switch rewrote its config) get re-parked on the next tick."""
     parked = False
     while True:
-        time.sleep(60)
+        time.sleep(20)  # a cheap TCP probe; 60s made "no internet" and
+        # the recovery lag a button-press generation behind reality
         try:
             if _internet_up():
+                _SPOT_OFFLINE[0] = False
                 if parked:
                     subprocess.run(["systemctl", "start", "go-librespot"],
                                    timeout=30)
@@ -1339,6 +1349,7 @@ def _spotify_supervisor():
                     log("spotify: locked to the logged-in account "
                         "(zeroconf closed — box can't be hijacked)")
             else:
+                _SPOT_OFFLINE[0] = True
                 subprocess.run(["systemctl", "stop", "go-librespot"],
                                timeout=30)
                 if not parked:

@@ -130,7 +130,10 @@ async function pollStatus() {
     $("#np-title").textContent = st.title || "Nothing playing";
     const artists = (st.spotify && st.spotify.playing
       ? (st.spotify.artists || []).join(", ") : "");
-    $("#np-sub").textContent = artists || (st.source ? `source: ${st.source}` : "");
+    const offline = st.spotify_offline && st.source === "spotify";
+    $("#np-sub").textContent = offline
+      ? "No internet — Spotify reconnects when it's back"
+      : artists || (st.source ? `source: ${st.source}` : "");
     const art = $("#np-art");
     if (st.artwork) {
       const src = st.artwork.startsWith("http")

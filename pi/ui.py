@@ -1187,6 +1187,11 @@ class App:
     def render_now(self, d, img):
         st = self.status or {}
         battery_corner(d, self.system)
+        if st.get("spotify_offline") and st.get("source") == "spotify":
+            # spotify NEEDS the net: say so up front instead of a silent
+            # ghost card ("reconnecting" — the supervisor retries itself)
+            d.text((10, 4), "No internet - reconnecting", font=F_SMALL,
+                   fill=WARN)
         # THE episode's own image first when it's already on disk (the
         # sync caches per-episode art next to the audio); otherwise the
         # local show cover beats a remote episode URL — offline-proof,
@@ -1275,6 +1280,10 @@ class App:
             return False
         self.car_sel %= len(ents)
         e = ents[self.car_sel]
+        if "spotify" in e["target"] \
+                and (self.status or {}).get("spotify_offline"):
+            # warn BEFORE the kid presses play on a tile that can't work
+            d.text((10, 4), "No internet", font=F_SMALL, fill=WARN)
         art = self.artwork(e.get("image"), 176)
         ax, ay = (W - 176) // 2, 24
         if art:
