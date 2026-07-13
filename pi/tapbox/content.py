@@ -477,6 +477,15 @@ def _local_or_remote(slug, ep, kind="podcast"):
     return local if os.path.exists(local) else ep["url"]
 
 
+def _image_local_or_remote(dirname, eid, remote):
+    """The cached episode artwork when synced, else the remote URL."""
+    if eid:
+        local = _episode_image_file(dirname, eid)
+        if os.path.exists(local):
+            return local
+    return remote
+
+
 def _catalog_entry(slug, episode_id, kind="podcast"):
     try:
         return next((ep for ep in _catalog(slug, kind)
@@ -488,7 +497,8 @@ def _catalog_entry(slug, episode_id, kind="podcast"):
 def _podcast(slug, episode_id=None):
     if episode_id:
         cat = _catalog_entry(slug, episode_id)
-        title, image = cat.get("title"), cat.get("image")
+        title = cat.get("title")
+        image = _image_local_or_remote(slug, episode_id, cat.get("image"))
         local = _episode_file(slug, episode_id)
         if os.path.exists(local):
             return [{"url": local, "title": title, "id": episode_id,
@@ -539,7 +549,8 @@ def _queue(slug, kind, newest_first):
             mark = "  [cached]" if u.startswith("/") else ""
             _log(f"  {i:3d}. {ep.get('title') or ep['id']}{mark}")
     return [{"url": u, "title": ep.get("title"), "id": ep["id"],
-             "image": ep.get("image")}
+             "image": _image_local_or_remote(slug, ep["id"],
+                                             ep.get("image"))}
             for ep, u in zip(episodes, urls)]
 
 
@@ -558,6 +569,48 @@ def _download(url, dest, timeout=120):
                 break
             f.write(chunk)
     os.replace(tmp, dest)
+
+
+def _episode_image_file(dirname, eid):
+    """Cached per-episode artwork, next to the episode's audio file."""
+    return os.path.join(CACHE_DIR, dirname, f"{eid}.jpg")
+
+
+def _download_image(url, dest, size=300):
+    """Fetch artwork downscaled to <=size px — podcast art is often
+    1500-3000px, ~50x what the 240px screen and PWA thumbnails need.
+    Falls back to storing the original bytes when PIL is unavailable."""
+    raw = _get(url, timeout=30)
+    try:
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((size, size))
+        img.save(dest + ".part", "JPEG", quality=85)
+    except Exception:
+        with open(dest + ".part", "wb") as f:
+            f.write(raw)
+    os.replace(dest + ".part", dest)
+
+
+def _sync_episode_images(dirname, wanted):
+    """Cache the per-episode artwork for the episodes kept offline —
+    [(eid, image_url)] — so now-playing shows THE episode's picture
+    even offline, not just the show cover."""
+    n = 0
+    for eid, src in wanted:
+        if not src or not str(src).startswith("http"):
+            continue
+        dest = _episode_image_file(dirname, eid)
+        if os.path.exists(dest):
+            continue
+        try:
+            _download_image(src, dest)
+            n += 1
+        except OSError:
+            pass
+    if n:
+        _log(f"{dirname}: cached {n} episode image(s)")
 
 
 def sync_feed(target, count=SYNC_COUNT):
@@ -587,6 +640,8 @@ def sync_feed(target, count=SYNC_COUNT):
         os.path.join(CACHE_DIR, key, f"{_feed_episode_id(u)}.mp3")))
     _log(f"{key}: sync (feed) — {len(wanted)} newest wanted, {have} already "
          f"cached, {len(wanted) - have} to download")
+    _sync_episode_images(key, [(_feed_episode_id(u), img)
+                               for u, _t, img in wanted])
     for u, t, _img in wanted:
         dest = os.path.join(CACHE_DIR, key, f"{_feed_episode_id(u)}.mp3")
         if os.path.exists(dest):
@@ -624,6 +679,8 @@ def sync(slug, count=SYNC_COUNT, kind="podcast"):
             _log(f"{slug}: downloaded cover art")
         except OSError:
             pass
+    _sync_episode_images(slug, [(ep["id"], ep.get("image"))
+                                for ep in wanted])
     for ep in reversed(wanted):  # newest first
         dest = _episode_file(slug, ep["id"], kind)
         if os.path.exists(dest):
@@ -793,7 +850,8 @@ def expand_entries(target):
                     local = os.path.join(CACHE_DIR, key, f"{eid}.mp3")
                     out.append({"url": local if os.path.exists(local) else u,
                                 "title": t, "id": eid,
-                                "image": img or chan_img})
+                                "image": _image_local_or_remote(
+                                    key, eid, img or chan_img)})
                 n_local = sum(1 for e in out if not e["url"].startswith("http"))
                 if n_local:
                     _log(f"  {n_local} episode(s) from local cache")

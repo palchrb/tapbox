@@ -81,4 +81,32 @@ lib["sections"][0].pop("image")
 assert "image" not in library.normalize_library(lib)["sections"][0]
 print("5. section logo field validated, optional OK")
 
+# 6. episode images: sync caches one per kept episode, and expansion
+# then serves the LOCAL file (now-playing shows the episode's own
+# picture offline); un-synced episodes keep their remote URL
+imgs = []
+content._download_image = lambda url, dest, size=300: (
+    imgs.append(url), open(dest, "wb").write(b"jpg"))
+content._catalog = lambda slug, kind: [
+    {"id": "e1", "url": "http://x/1.mp3", "title": "En",
+     "image": "http://img/1.jpg"},
+    {"id": "e2", "url": "http://x/2.mp3", "title": "To",
+     "image": "http://img/2.jpg"}]
+content._episode_file = lambda slug, i, kind: os.path.join(
+    CACHE, slug, f"{i}.mp3")
+content._download = lambda url, dest, **k: open(dest, "wb").write(b"mp3")
+content.sync("show", count=1, kind="podcast")   # keep newest 1 (= e2)
+assert imgs == ["http://img/2.jpg"], imgs
+assert os.path.exists(content._episode_image_file("show", "e2"))
+assert not os.path.exists(content._episode_image_file("show", "e1"))
+content.sync("show", count=1, kind="podcast")   # second sync: no refetch
+assert len(imgs) == 1, "episode image re-downloaded"
+print("6. sync caches per-episode artwork once, only for kept episodes OK")
+
+entries = content._queue("show", "podcast", newest_first=True)
+by_id = {e["id"]: e for e in entries}
+assert by_id["e2"]["image"] == content._episode_image_file("show", "e2")
+assert by_id["e1"]["image"] == "http://img/1.jpg", by_id["e1"]
+print("7. expansion serves the cached episode image, remote for the rest OK")
+
 print("COVERS OK — spotify mosaics cached, section logos validated.")

@@ -1175,10 +1175,17 @@ class App:
     def render_now(self, d, img):
         st = self.status or {}
         battery_corner(d, self.system)
-        # local cover first (synced shows have it on disk — works offline
-        # and never waits on gfx.nrk.no), episode image as the fallback
-        art = (self.artwork(st.get("artwork_local"), 128)
-               or self.artwork(st.get("artwork"), 128))
+        # THE episode's own image first when it's already on disk (the
+        # sync caches per-episode art next to the audio); otherwise the
+        # local show cover beats a remote episode URL — offline-proof,
+        # never waits on gfx.nrk.no. Remote is the online-only fallback.
+        ep_art = st.get("artwork")
+        art = None
+        if ep_art and not str(ep_art).startswith("http"):
+            art = self.artwork(ep_art, 128)
+        if art is None:
+            art = (self.artwork(st.get("artwork_local"), 128)
+                   or self.artwork(ep_art, 128))
         if art:
             img.paste(art, ((W - art.width) // 2, 24))
             ty = 156
