@@ -64,4 +64,23 @@ except ValueError:
     pass
 print("6. per-entry resume flag validated + defaults on OK")
 
+# 7. THE queue-rotation rule: the bookmarked episode ALWAYS plays first,
+# even seconds into it — finishing episode N rolls the bookmark onto
+# N+1 at ~0s, and the old pos>threshold gate sent the replay back to
+# the queue top ('why is it playing episode 1 again?'). Only the SEEK
+# respects the threshold.
+urls = ["u1", "u2", "u3"]
+by_id = {"e1": "u1", "e2": "u2", "e3": "u3"}
+q, pos = player.rotate_to_bookmark(urls, {"id": "e3", "url": "u3",
+                                          "pos": 5.0}, by_id)
+assert q == ["u3", "u1", "u2"] and pos == 0.0, (q, pos)
+q, pos = player.rotate_to_bookmark(urls, {"id": "e3", "pos": 300.0}, by_id)
+assert q[0] == "u3" and pos == 300.0
+q, pos = player.rotate_to_bookmark(urls, {"url": "u2", "pos": 50.0}, {})
+assert q[0] == "u2" and pos == 50.0, "url fallback lost"
+q, pos = player.rotate_to_bookmark(urls, {"id": "zz", "url": "x",
+                                          "pos": 99.0}, by_id)
+assert q == urls and pos == 0.0, "unknown bookmark must not rotate"
+print("7. bookmarked episode always first; early pos only skips the seek OK")
+
 print("EPISODE RESUME OK — position remembered per episode, configurable.")

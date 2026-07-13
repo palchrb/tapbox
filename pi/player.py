@@ -145,6 +145,23 @@ def output_pcm():
         return "tapbox_bt"
 
 
+def rotate_to_bookmark(urls, st, url_by_id):
+    """(queue, start_pos) for a whole-feed bookmark: rotate the queue so
+    the bookmarked EPISODE always comes first — finishing episode N rolls
+    the bookmark onto N+1 at ~0s, and skipping the rotation for an early
+    position sent the replay back to the queue top ('why is it playing
+    episode 1 again?'). Only the SEEK is gated by RESUME_MIN_S."""
+    idx = None
+    if st.get("id") and url_by_id.get(st["id"]) in urls:
+        idx = urls.index(url_by_id[st["id"]])
+    if idx is None and st.get("url") in urls:
+        idx = urls.index(st["url"])
+    if idx is None:
+        return urls, 0.0
+    pos = float(st.get("pos") or 0)
+    return urls[idx:] + urls[:idx], (pos if pos > RESUME_MIN_S else 0.0)
+
+
 def online():
     """Quick connectivity probe. TAPBOX_OFFLINE=1 forces offline mode
     (manual travel switch / tests). Plain IP:port — no DNS to hang on."""
@@ -395,17 +412,16 @@ def main():
             name = titles.get(picked) or episode
             log(f"starting at '{name}'"
                 + (f", {int(start_pos)}s" if start_pos else ""))
-    elif st and st.get("pos", 0) > RESUME_MIN_S:
-        idx = None
-        if st.get("id") and url_by_id.get(st["id"]) in urls:
-            idx = urls.index(url_by_id[st["id"]])
-        if idx is None and st.get("url") in urls:
-            idx = urls.index(st["url"])
-        if idx is not None:
-            urls = urls[idx:] + urls[:idx]
-            start_pos = float(st["pos"])
-            name = titles.get(urls[0]) or f"episode {idx + 1}"
-            log(f"resuming '{name}' at {int(start_pos)}s")
+    elif st:
+        urls, start_pos = rotate_to_bookmark(urls, st, url_by_id)
+        if start_pos:
+            log(f"resuming '{titles.get(urls[0]) or urls[0]}' "
+                f"at {int(start_pos)}s")
+        elif urls and (st.get("id") or st.get("url")) \
+                and (url_by_id.get(st.get("id")) == urls[0]
+                     or st.get("url") == urls[0]):
+            log(f"continuing at '{titles.get(urls[0]) or urls[0]}' "
+                "(from its start)")
 
     # Publish the FIRST item before mpv even starts: tapboxd's /status
     # then serves the right episode name + artwork from the first frame,
