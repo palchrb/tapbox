@@ -1281,9 +1281,11 @@ class App:
         # buttons are inset from the screen corners — centers land around
         # y=55 (A/X) and y=185 (B/Y) on the 240px panel (field-calibrated;
         # corner-aligned markers pointed well past the actual buttons).
-        # flip arrows (B / Y), dim, beside the art in the side margins
-        d.polygon([(24, 178), (24, 192), (12, 185)], fill=DIM)
-        d.polygon([(W - 24, 178), (W - 24, 192), (W - 12, 185)], fill=DIM)
+        # flip chevrons < > (B / Y), dim outlines beside the art
+        d.line([(24, 177), (13, 185), (24, 193)], fill=DIM, width=3,
+               joint="curve")
+        d.line([(W - 24, 177), (W - 13, 185), (W - 24, 193)], fill=DIM,
+               width=3, joint="curve")
         # A (top left): play the selected tile — THE action here, so it
         # gets the highlight color; small enough to clear the album art
         d.polygon([(12, 47), (12, 63), (26, 55)], fill=HILITE)
