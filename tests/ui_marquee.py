@@ -75,4 +75,33 @@ assert len([k for k in app.artwork_cache if k[0] == logo]) == 1, \
     "stale cache entry not dropped"
 print("4. re-uploaded logo refreshes (mtime-keyed cache) OK")
 
+# 5. remote covers never block the render thread: artwork_async returns
+# immediately and the image lands via a background fetch (+ repaint)
+import io  # noqa: E402
+import urllib.request  # noqa: E402
+
+buf = io.BytesIO()
+Image.new("RGB", (40, 40), (10, 10, 200)).save(buf, "JPEG")
+
+
+class SlowResp:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): time.sleep(0.3); return buf.getvalue()
+
+
+urllib.request.urlopen = lambda url, timeout=10: SlowResp()
+app.dirty = False
+t0 = real_mono()
+assert app.artwork_async("http://art/cover.jpg", 176) is None
+assert real_mono() - t0 < 0.2, "artwork_async blocked on the network"
+for _ in range(100):  # the background fetch fills the cache
+    if app.artwork_async("http://art/cover.jpg", 176) is not None:
+        break
+    time.sleep(0.05)
+assert app.artwork_async("http://art/cover.jpg", 176) is not None, \
+    "background fetch never landed"
+assert app.dirty, "no repaint requested after the cover arrived"
+print("5. remote covers load off-thread, render never blocks OK")
+
 print("UI MARQUEE + ART OK — names readable, logos never stuck.")

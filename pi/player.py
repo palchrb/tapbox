@@ -503,19 +503,13 @@ def main():
             and target.startswith(("http://", "https://")):
         sync_args = ["sync-feed", target, str(cache_n)]
     if sync_args:
-        from tapbox.library import _on_battery
-        if _on_battery():
-            # same policy as the scheduled sweeps: downloading episodes is
-            # exactly the background work that shouldn't spend battery —
-            # and it competed with mpv startup on every single play
-            log("background sync skipped — on battery (runs when charging)")
-        else:
-            # content.py is stdlib-only and runs fine as a plain script
-            subprocess.Popen([sys.executable, content.__file__, *sync_args],
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL,
-                             preexec_fn=lambda: os.nice(19))  # never compete
-            log(f"background sync started: {' '.join(sync_args)}")
+        # content.py is stdlib-only and runs fine as a plain script.
+        # Runs on battery too — nice-19 keeps it from competing with mpv.
+        subprocess.Popen([sys.executable, content.__file__, *sync_args],
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         preexec_fn=lambda: os.nice(19))  # never compete
+        log(f"background sync started: {' '.join(sync_args)}")
 
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):

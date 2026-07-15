@@ -536,6 +536,7 @@ class App:
         self.marquee_active = False  # keep repainting while a label slides
         self.car_sel = 0            # kid mode: index into the flat carousel
         self.artwork_cache = {}
+        self._art_pending = set()   # remote covers being fetched off-thread
         self._lib_at = 0.0          # last /library fetch (TTL'd)
 
     # -- data ---------------------------------------------------------------
@@ -658,6 +659,46 @@ class App:
             log(f"artwork failed ({e.__class__.__name__}): {ref[:80]}")
             self.artwork_cache[key] = time.monotonic() + 60
             return None
+
+    def artwork_async(self, ref, size=110):
+        """artwork() that never touches the network on the render thread:
+        a remote cover is fetched in the background and the view repaints
+        when it lands. Local files still decode inline."""
+        if not ref:
+            return None
+        if not ref.startswith("http"):
+            return self.artwork(ref, size)
+        key = self._art_key(ref, size)
+        cached = self.artwork_cache.get(key)
+        if isinstance(cached, float):  # failed recently — retry when due
+            if time.monotonic() < cached:
+                return None
+        elif key in self.artwork_cache:
+            return cached
+        if key not in self._art_pending:
+            self._art_pending.add(key)
+
+            def fetch():
+                try:
+                    self.artwork(ref, size)
+                finally:
+                    self._art_pending.discard(key)
+                    self.dirty = True
+            threading.Thread(target=fetch, daemon=True).start()
+        return None
+
+    def _prewarm_art(self):
+        """Decode every carousel/menu cover once, right after boot. Lazy
+        decoding made the first pass through the carousel stutter tile by
+        tile (a full-size JPEG takes ~0.5s at 600 MHz powersave)."""
+        time.sleep(2.0)  # let the first paint and status fetch win the CPU
+        for e in self.flat_entries():
+            ref = e.get("image")
+            if ref and not ref.startswith("http"):
+                for size in (176, 56):
+                    self.artwork(ref, size)
+                time.sleep(0.05)
+        self.dirty = True
 
     def _row_art(self, rows):
         """Cover of the highlighted list row (56px). Loading can hit the
@@ -1290,7 +1331,7 @@ class App:
                 and (self.status or {}).get("spotify_offline"):
             # warn BEFORE the kid presses play on a tile that can't work
             d.text((10, 4), "No internet", font=F_SMALL, fill=WARN)
-        art = self.artwork(e.get("image"), 176)
+        art = self.artwork_async(e.get("image"), 176)
         ax, ay = (W - 176) // 2, 24
         if art:
             img.paste(art, ((W - art.width) // 2, ay))
@@ -1368,6 +1409,7 @@ class App:
             pass  # refresh() fills it in on the next tick
         self.display.set_brightness(self.settings.get("screen_brightness", 100))
         self.load_library()
+        threading.Thread(target=self._prewarm_art, daemon=True).start()
         # Come back where we were: a live session (boot resume) or a
         # bookmarked-paused ghost puts the screen straight on now-playing.
         try:

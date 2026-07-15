@@ -33,6 +33,7 @@ enable offline playback (this is the spec's "auto-cache podcasts" story):
 Unknown URLs pass through untouched (mpv + yt-dlp handles them).
 """
 
+import glob
 import hashlib
 import json
 import os
@@ -418,7 +419,7 @@ def fetch_spotify_art(target):
         if not thumb:
             return None
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        _download(thumb, dest, timeout=30)
+        _download_image(thumb, dest)
         _log(f"spotify art cached for {url}")
         return dest
     except (OSError, ValueError):
@@ -593,6 +594,35 @@ def _download_image(url, dest, size=300):
     os.replace(dest + ".part", dest)
 
 
+def shrink_covers(max_px=400, size=300):
+    """Downscale covers that were stored full-size before _download_image
+    handled them — decoding a 3000px JPEG per tile made the first pass
+    through the carousel crawl. Idempotent and cheap when there is
+    nothing to do (PIL reads just the header for the size check)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return 0
+    paths = glob.glob(os.path.join(CACHE_DIR, "*", "cover.jpg"))
+    paths += glob.glob(os.path.join(CACHE_DIR, SPOTIFY_ART_DIR, "*.jpg"))
+    n = 0
+    for p in paths:
+        try:
+            with Image.open(p) as img:
+                if max(img.size) <= max_px:
+                    continue
+                img = img.convert("RGB")
+                img.thumbnail((size, size))
+                img.save(p + ".part", "JPEG", quality=85)
+            os.replace(p + ".part", p)
+            n += 1
+        except (OSError, ValueError):
+            continue
+    if n:
+        _log(f"shrunk {n} oversized cover(s) to <={size}px")
+    return n
+
+
 def _sync_episode_images(dirname, wanted):
     """Cache the per-episode artwork for the episodes kept offline —
     [(eid, image_url)] — so now-playing shows THE episode's picture
@@ -631,7 +661,7 @@ def sync_feed(target, count=SYNC_COUNT):
     cover = os.path.join(CACHE_DIR, key, "cover.jpg")
     if chan_img and not os.path.exists(cover):
         try:
-            _download(chan_img, cover, timeout=30)
+            _download_image(chan_img, cover)
             _log(f"{key}: downloaded cover art")
         except OSError:
             pass
@@ -673,9 +703,7 @@ def sync(slug, count=SYNC_COUNT, kind="podcast"):
     img_url = _catalog_image(slug, kind)
     if not os.path.exists(cover) and img_url and img_url.startswith("http"):
         try:
-            with open(cover + ".part", "wb") as f:
-                f.write(_get(img_url, timeout=30))
-            os.replace(cover + ".part", cover)
+            _download_image(img_url, cover)
             _log(f"{slug}: downloaded cover art")
         except OSError:
             pass

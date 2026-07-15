@@ -26,13 +26,13 @@ content._get = lambda url, timeout=8: json.dumps(
     {"thumbnail_url": "https://i.scdn.co/image/mosaic123"}).encode()
 
 
-def fake_download(url, dest, timeout=120):
+def fake_download(url, dest, size=300):
     fetched.append(url)
     with open(dest, "wb") as f:
         f.write(b"jpegdata")
 
 
-content._download = fake_download
+content._download_image = fake_download
 
 # 1. ensure_spotify_art fetches ONLY spotify targets, once
 content.ensure_spotify_art([PL, PL2, POD])
@@ -55,12 +55,12 @@ assert content.SPOTIFY_ART_DIR not in removed
 print("3. prune_cache leaves spotify-art alone OK")
 
 # 4. ...ensure_spotify_art drops art for entries no longer in the library
-def fake_dl2(url, dest, timeout=120):
+def fake_dl2(url, dest, size=300):
     with open(dest, "wb") as f:
         f.write(b"jpegdata")
 content._get = lambda url, timeout=8: json.dumps(
     {"thumbnail_url": "x"}).encode()
-content._download = fake_dl2
+content._download_image = fake_dl2
 content.ensure_spotify_art([PL2])
 assert not os.path.exists(content.spotify_art_path(PL)), "orphan art kept"
 assert os.path.exists(content.spotify_art_path(PL2))
@@ -108,5 +108,21 @@ by_id = {e["id"]: e for e in entries}
 assert by_id["e2"]["image"] == content._episode_image_file("show", "e2")
 assert by_id["e1"]["image"] == "http://img/1.jpg", by_id["e1"]
 print("7. expansion serves the cached episode image, remote for the rest OK")
+
+# 8. shrink_covers: old full-size covers on disk get downscaled once,
+# already-small ones are left untouched (decoding 3000px art per tile
+# made the carousel's first pass crawl)
+from PIL import Image  # noqa: E402
+big = os.path.join(CACHE, "bigshow", "cover.jpg")
+small = os.path.join(CACHE, "smallshow", "cover.jpg")
+os.makedirs(os.path.dirname(big)), os.makedirs(os.path.dirname(small))
+Image.new("RGB", (2000, 2000)).save(big, "JPEG")
+Image.new("RGB", (300, 300)).save(small, "JPEG")
+small_mtime = os.path.getmtime(small)
+assert content.shrink_covers() == 1
+assert max(Image.open(big).size) <= 300, "big cover not shrunk"
+assert os.path.getmtime(small) == small_mtime, "small cover rewritten"
+assert content.shrink_covers() == 0, "second pass must be a no-op"
+print("8. oversized covers shrunk once, small ones untouched OK")
 
 print("COVERS OK — spotify mosaics cached, section logos validated.")

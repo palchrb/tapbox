@@ -152,23 +152,12 @@ def _sync_args_for(target, n):
     return None  # spotify (global cache) / local folders (already offline)
 
 
-def _on_battery():
-    from tapbox.sysinfo import pisugar_get  # deferred: avoids an import cycle
-    return pisugar_get("battery_power_plugged") == "false"
-
-
 def _cache_sweeper():
+    # Sweeps run on battery too: a box that mostly lives off the charger
+    # otherwise never syncs at all — no fresh episodes, no covers. The
+    # downloads run nice-19 so playback always wins the CPU.
     time.sleep(SYNC_DELAY_S)  # let wifi come up after boot
-    deliberate = False  # True when a library save woke us (sync now)
     while True:
-        if not deliberate and _on_battery():
-            # scheduled sweeps can wait for the charger: downloading new
-            # episodes is exactly the kind of background work that should
-            # not spend battery (or hotspot data) on a trip
-            log("cache sweep skipped — on battery (runs when charging)")
-            deliberate = _sync_wake.wait(SYNC_INTERVAL_S)
-            _sync_wake.clear()
-            continue
         lib = load_library()
         try:
             # Spotify covers (oEmbed): fetch what's missing, drop orphans.
@@ -177,6 +166,10 @@ def _cache_sweeper():
                 [e["target"] for s in lib["sections"] for e in s["entries"]])
         except Exception as exc:
             log(f"spotify art fetch failed: {exc!r}")
+        try:
+            content.shrink_covers()  # one-time downscale of old full-size art
+        except Exception as exc:
+            log(f"cover shrink failed: {exc!r}")
         for s in lib["sections"]:
             for e in s["entries"]:
                 n = e.get("cache") or 0
@@ -193,7 +186,7 @@ def _cache_sweeper():
                         preexec_fn=lambda: os.nice(19))
                 except (OSError, subprocess.TimeoutExpired) as exc:
                     log(f"cache sweep failed for {e['name']}: {exc!r}")
-        deliberate = _sync_wake.wait(SYNC_INTERVAL_S)
+        _sync_wake.wait(SYNC_INTERVAL_S)  # a library save wakes us early
         _sync_wake.clear()
 
 
