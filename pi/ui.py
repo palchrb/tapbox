@@ -1209,7 +1209,9 @@ class App:
         else:
             ty = 70
         title = st.get("title") or "(nothing playing)"
-        lines = wrap_two(d, title, F_MED, W - 20)
+        # width capped so a two-line title never runs under the side
+        # markers (they sit at the physical button heights, x < 22)
+        lines = wrap_two(d, title, F_MED, W - 44)
         d.text((W // 2, ty), lines[0], font=F_MED, fill=FG, anchor="ma")
         if len(lines) > 1:
             d.text((W // 2, ty + 19), lines[1], font=F_MED, fill=FG,
@@ -1223,7 +1225,7 @@ class App:
         if sub:
             d.text((W // 2, ty + 22), sub[:30], font=F_SMALL, fill=DIM, anchor="ma")
         pos, dur = st.get("position"), st.get("duration")
-        bar_y = H - 46
+        bar_y = H - 34  # below the B/Y markers (y 178-192) — no overlap
         d.rectangle([14, bar_y, W - 14, bar_y + 5], fill=(50, 50, 65))
         if pos and dur:
             frac = max(0.0, min(1.0, pos / dur))
@@ -1232,30 +1234,24 @@ class App:
         right = "live" if (pos is not None and dur is None) else fmt_time(dur)
         d.text((14, bar_y + 10), left, font=F_SMALL, fill=DIM)
         d.text((W - 14, bar_y + 10), right, font=F_SMALL, fill=DIM, anchor="ra")
-        # Drawn shapes, not glyphs — DejaVu lacks the media symbols
-        cy = bar_y + 16
+        # Button markers sit where the PHYSICAL buttons are — the same
+        # spots the carousel uses (A/X centers ~y=55, B/Y ~y=185, hugging
+        # the screen edges). Drawn shapes: DejaVu has no media glyphs.
+        # A (top left): play/pause — THE action, in the highlight color
         if st.get("playing"):
-            d.rectangle([W // 2 - 7, cy - 7, W // 2 - 2, cy + 7], fill=FG)
-            d.rectangle([W // 2 + 2, cy - 7, W // 2 + 7, cy + 7], fill=FG)
+            d.rectangle([6, 47, 10, 63], fill=HILITE)
+            d.rectangle([14, 47, 18, 63], fill=HILITE)
         else:
-            d.polygon([(W // 2 - 6, cy - 8), (W // 2 - 6, cy + 8),
-                       (W // 2 + 8, cy)], fill=FG)
-        # physical-button hints along the edges (drawn shapes — DejaVu has
-        # no media glyphs). X (top right, below the battery): volume.
-        d.polygon([(W - 26, 30), (W - 20, 30), (W - 13, 24),
-                   (W - 13, 42), (W - 20, 36), (W - 26, 36)], fill=DIM)
-        # A (top left): the action a press takes — pause while playing
-        if st.get("playing"):
-            d.rectangle([12, 27, 16, 41], fill=DIM)
-            d.rectangle([20, 27, 24, 41], fill=DIM)
-        else:
-            d.polygon([(12, 26), (12, 42), (26, 34)], fill=DIM)
-        # B (bottom left): previous
-        d.rectangle([12, 222, 14, 236], fill=DIM)
-        d.polygon([(28, 222), (28, 236), (16, 229)], fill=DIM)
-        # Y (bottom right): next
-        d.polygon([(W - 28, 222), (W - 28, 236), (W - 16, 229)], fill=DIM)
-        d.rectangle([W - 14, 222, W - 12, 236], fill=DIM)
+            d.polygon([(5, 47), (5, 63), (19, 55)], fill=HILITE)
+        # X (top right): volume
+        d.polygon([(W - 19, 52), (W - 13, 52), (W - 6, 46),
+                   (W - 6, 64), (W - 13, 58), (W - 19, 58)], fill=DIM)
+        # B (bottom left): previous |<
+        d.rectangle([5, 178, 7, 192], fill=DIM)
+        d.polygon([(19, 178), (19, 192), (9, 185)], fill=DIM)
+        # Y (bottom right): next >|
+        d.polygon([(W - 19, 178), (W - 19, 192), (W - 9, 185)], fill=DIM)
+        d.rectangle([W - 7, 178, W - 5, 192], fill=DIM)
         self._volume_overlay(d)
 
     def _volume_overlay(self, d):
