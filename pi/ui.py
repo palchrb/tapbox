@@ -1206,27 +1206,33 @@ class App:
         else:
             ty = 70
         title = st.get("title") or "(nothing playing)"
-        # width capped so a two-line title never runs under the side
-        # markers (they sit at the physical button heights, x < 22)
+        # width capped so the text never runs under the side markers
+        # (they sit at the physical button heights, x < 22)
         rolls = False
-        lines = wrap_two(d, title, F_MED, W - 44)
-        d.text((W // 2, ty), lines[0], font=F_MED, fill=FG, anchor="ma")
-        if len(lines) > 1:
-            l2 = lines[1]
-            if d.textlength(l2, font=F_MED) > W - 44:
-                # a title too long even for two lines: the tail slides,
-                # same marquee as the menus — nothing is just cut off
-                l2, rolls = marquee(l2, 20)
-            d.text((W // 2, ty + 19), l2, font=F_MED, fill=FG,
-                   anchor="ma")
-        # artists only when spotify is the ACTIVE source — /status keeps
-        # the paused-spotify block around during mpv playback, and its
-        # last artist has nothing to do with the podcast episode showing.
-        # A two-line title uses the artist row's space (titles win).
-        sub = "" if (st.get("source") != "spotify" or len(lines) > 1) else \
-            ", ".join((st.get("spotify") or {}).get("artists") or [])
-        if sub:
-            d.text((W // 2, ty + 22), sub[:30], font=F_SMALL, fill=DIM, anchor="ma")
+        if st.get("source") == "spotify":
+            # Spotify: ONE line — sliding when too long — so the artist
+            # is ALWAYS visible beneath (field pick). Only when spotify
+            # is the ACTIVE source: /status keeps the paused-spotify
+            # block around during mpv playback, and its last artist has
+            # nothing to do with the podcast episode showing.
+            if d.textlength(title, font=F_MED) > W - 44:
+                title, rolls = marquee(title, 20)
+            d.text((W // 2, ty), title, font=F_MED, fill=FG, anchor="ma")
+            sub = ", ".join((st.get("spotify") or {}).get("artists") or [])
+            if sub:
+                d.text((W // 2, ty + 22), sub[:30], font=F_SMALL,
+                       fill=DIM, anchor="ma")
+        else:
+            # podcasts: up to two lines (long episode names matter most);
+            # a tail that doesn't fit even then slides, never cut off
+            lines = wrap_two(d, title, F_MED, W - 44)
+            d.text((W // 2, ty), lines[0], font=F_MED, fill=FG, anchor="ma")
+            if len(lines) > 1:
+                l2 = lines[1]
+                if d.textlength(l2, font=F_MED) > W - 44:
+                    l2, rolls = marquee(l2, 20)
+                d.text((W // 2, ty + 19), l2, font=F_MED, fill=FG,
+                       anchor="ma")
         pos, dur = st.get("position"), st.get("duration")
         bar_y = H - 34  # below the B/Y markers (y 178-192) — no overlap
         d.rectangle([14, bar_y, W - 14, bar_y + 5], fill=(50, 50, 65))
