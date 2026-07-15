@@ -467,9 +467,9 @@ def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
 
 
 def wrap_two(d, text, fnt, maxw):
-    """Split text onto up to two lines that fit maxw px (word-wrapped,
-    second line hard-truncated) — long episode titles were cut at 26
-    chars, which lost the part that tells kids' episodes apart."""
+    """Split text onto up to two lines (word-wrapped). The second line is
+    returned IN FULL — the caller marquees it when it overflows, so the
+    part that tells kids' episodes apart is never simply cut off."""
     if d.textlength(text, font=fnt) <= maxw:
         return [text]
     words = text.split()
@@ -485,10 +485,7 @@ def wrap_two(d, text, fnt, maxw):
         while d.textlength(first, font=fnt) > maxw and len(first) > 1:
             first = first[:-1]
         words = [text[len(first):]]
-    rest = " ".join(words)
-    while d.textlength(rest, font=fnt) > maxw and len(rest) > 1:
-        rest = rest[:-1]
-    return [first, rest]
+    return [first, " ".join(words)]
 
 
 def fmt_time(s):
@@ -1157,7 +1154,7 @@ class App:
             self.load_library()
             rolls = self.render_carousel(d, img)
         elif self.view == "now":
-            self.render_now(d, img)
+            rolls = self.render_now(d, img)
         self.marquee_active = bool(rolls)
         self.display.show(img)
 
@@ -1211,10 +1208,16 @@ class App:
         title = st.get("title") or "(nothing playing)"
         # width capped so a two-line title never runs under the side
         # markers (they sit at the physical button heights, x < 22)
+        rolls = False
         lines = wrap_two(d, title, F_MED, W - 44)
         d.text((W // 2, ty), lines[0], font=F_MED, fill=FG, anchor="ma")
         if len(lines) > 1:
-            d.text((W // 2, ty + 19), lines[1], font=F_MED, fill=FG,
+            l2 = lines[1]
+            if d.textlength(l2, font=F_MED) > W - 44:
+                # a title too long even for two lines: the tail slides,
+                # same marquee as the menus — nothing is just cut off
+                l2, rolls = marquee(l2, 20)
+            d.text((W // 2, ty + 19), l2, font=F_MED, fill=FG,
                    anchor="ma")
         # artists only when spotify is the ACTIVE source — /status keeps
         # the paused-spotify block around during mpv playback, and its
@@ -1253,6 +1256,7 @@ class App:
         d.polygon([(W - 19, 178), (W - 19, 192), (W - 9, 185)], fill=DIM)
         d.rectangle([W - 7, 178, W - 5, 192], fill=DIM)
         self._volume_overlay(d)
+        return rolls
 
     def _volume_overlay(self, d):
         """The transient volume card (X opened it; B/Y adjust)."""
