@@ -374,6 +374,7 @@ class Orchestrator:
     def play(self, target, fresh=False, episode=None, reverse=False,
              cache=None, resume=True):
         with self.lock:
+            _kick_bt_connect()  # pressing play = wanting sound NOW
             # Same card back in the slot (or same link replayed): if its
             # session is still loaded, unpause instead of restarting.
             # An explicit episode pick must respawn — the user asked for a
@@ -523,19 +524,10 @@ class Orchestrator:
             with open(OUT_FILE + ".tmp", "w") as f:
                 json.dump({"output": device, "pcm": pcm}, f)
             os.replace(OUT_FILE + ".tmp", OUT_FILE)
-            if device == "bt" and not fallback and not _bt_transport_ready():
-                # The user asked for the speaker NOW, but it's not
-                # connected: poke btwatchd to attempt a connect right away
-                # instead of waiting out its blind-retry backoff (up to
-                # 300s of silence after picking 'bluetooth' otherwise).
-                try:
-                    with open(_bt.KICK_FILE + ".tmp", "w") as f:
-                        f.write(str(time.time()))
-                    os.replace(_bt.KICK_FILE + ".tmp", _bt.KICK_FILE)
-                    log("output -> bt: speaker not connected — kicked "
-                        "btwatchd to connect it now")
-                except OSError:
-                    pass
+            if not fallback:
+                # The user asked for the speaker NOW (OUT_FILE already
+                # says bt, so the helper checks the right output)
+                _kick_bt_connect()
             mpv_switched = False
             if self._mpv_alive():
                 if device == "bt" and not _bt_transport_ready():
@@ -661,6 +653,7 @@ class Orchestrator:
 
     def command(self, action):
         with self.lock:
+            _kick_bt_connect()  # any transport control = sound intent
             # 1) a running mpv session owns the controls
             if self._mpv_alive() and self.source == "mpv":
                 try:
@@ -1312,6 +1305,22 @@ def _bt_transport_ready():
         return bool(mac) and btbus.a2dp_pcm_present(mac)
     except OSError:
         return False
+
+
+def _kick_bt_connect():
+    """Play intent while the BT speaker has no transport: poke btwatchd
+    to attempt a connect right away instead of waiting out its blind-retry
+    backoff — up to 300s of silence after a boot where the speaker came
+    on late. No-op on the built-in output or with the speaker connected."""
+    if current_output()["output"] != "bt" or _bt_transport_ready():
+        return
+    try:
+        with open(_bt.KICK_FILE + ".tmp", "w") as f:
+            f.write(str(time.time()))
+        os.replace(_bt.KICK_FILE + ".tmp", _bt.KICK_FILE)
+        log("speaker not connected — kicked btwatchd to connect it now")
+    except OSError:
+        pass
 
 
 def _internet_up():
