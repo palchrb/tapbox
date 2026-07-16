@@ -85,6 +85,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -97,6 +98,7 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
             sys.path.insert(0, _p)
         break
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
+from tapbox import spotify_web as _spotify_web  # noqa: E402
 from tapbox.paths import ART_DIR, STATE_DIR  # noqa: E402
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
@@ -966,9 +968,34 @@ class Handler(BaseHTTPRequestHandler):
             if st.get("spotify_user") is None:  # /status is None while it
                 st["spotify_user"] = _spotify.logged_in_user()  # reconnects
             st["spotify_open"] = _spotify.zeroconf_open()
+            st["spotify_api"] = _spotify_web.configured()
             self._send(200, st)
         elif url.path == "/bt":
             self._send(200, bt_status())
+        elif url.path == "/spotify/profile":
+            # Live preview of a profile's public playlists — the PWA calls
+            # this to validate a username before saving a follow-section.
+            q = urllib.parse.parse_qs(url.query)
+            user = _spotify_web.parse_user((q.get("user") or [None])[0])
+            if not user:
+                self._send(400, {"error": "user required"})
+            elif not _spotify_web.configured():
+                self._send(503, {"error": (
+                    "Spotify API credentials are not set up on this box — "
+                    "run install.sh and answer the client id/secret prompt "
+                    "(free app at developer.spotify.com/dashboard)")})
+            else:
+                try:
+                    self._send(200, {"user": user, "playlists":
+                                     _spotify_web.user_playlists(user)})
+                except urllib.error.HTTPError as e:
+                    msg = ("no Spotify profile named "
+                           f"{user!r}" if e.code == 404
+                           else f"Spotify API error {e.code}")
+                    self._send(502, {"error": msg})
+                except Exception as e:
+                    log(f"profile preview failed for {user}: {e!r}")
+                    self._send(502, {"error": str(e)})
         elif url.path == "/expand":
             q = urllib.parse.parse_qs(url.query)
             entry_id = (q.get("id") or [None])[0]

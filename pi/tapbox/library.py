@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from tapbox import content
+from tapbox import content, spotify_web
 from tapbox.paths import ART_DIR, CACHE_DIR
 from tapbox.spotify import is_spotify
 
@@ -58,6 +58,11 @@ def normalize_library(obj):
             if not isinstance(image, str) or len(image) > 500:
                 raise ValueError("section image must be a short string")
             sec["image"] = image
+        user = s.get("spotify_user")  # section follows a Spotify profile:
+        if user:                      # its entries are sweeper-managed
+            if not isinstance(user, str) or not 0 < len(user.strip()) <= 100:
+                raise ValueError("spotify_user must be a short string")
+            sec["spotify_user"] = user.strip()
         for e in s.get("entries") or []:
             if not isinstance(e, dict):
                 raise ValueError("entry must be an object")
@@ -128,6 +133,48 @@ def find_entry(lib, entry_id):
     return None
 
 
+# --- profile-follow sections (spotify_user) --------------------------------------
+# A section with a spotify_user is a subscription: its entries mirror that
+# profile's PUBLIC playlists. The parent curates from their phone by making
+# playlists public/private; the sweeper picks the change up here.
+
+def sync_profile_sections():
+    """Refresh every profile-follow section from the Web API. Returns True
+    when the library changed (and was saved). A profile that can't be
+    fetched (offline, no credentials, deleted user) keeps the entries from
+    the last successful sweep — the box never loses content over a blip."""
+    lib = load_library()
+    if not any(s.get("spotify_user") for s in lib["sections"]):
+        return False
+    # Manually curated targets win: a playlist already in a normal section
+    # is skipped here, or normalize_library would reject the duplicate id.
+    seen = {e["target"] for s in lib["sections"]
+            if not s.get("spotify_user") for e in s["entries"]}
+    changed = False
+    for sec in lib["sections"]:
+        user = sec.get("spotify_user")
+        if not user:
+            continue
+        try:
+            playlists = spotify_web.user_playlists(user)
+        except Exception as exc:
+            log(f"profile sync: {user}: {exc!r}")
+            seen.update(e["target"] for e in sec["entries"])
+            continue
+        entries = [{"name": p["name"], "target": p["target"], "order": "auto",
+                    "cache": 0, "resume": True}
+                   for p in playlists if p["target"] not in seen]
+        seen.update(e["target"] for e in entries)
+        if [(e["name"], e["target"]) for e in entries] != \
+           [(e["name"], e["target"]) for e in sec["entries"]]:
+            sec["entries"] = entries
+            changed = True
+            log(f"profile sync: {user}: {len(entries)} public playlist(s)")
+    if changed:
+        save_library(normalize_library(lib))
+    return changed
+
+
 # --- background episode caching (the "offline: keep newest N" setting) ----------
 # Entries with cache > 0 are synced by the daemon itself: right after the
 # library is saved (add a podcast -> download starts immediately) and then
@@ -158,6 +205,11 @@ def _cache_sweeper():
     # downloads run nice-19 so playback always wins the CPU.
     time.sleep(SYNC_DELAY_S)  # let wifi come up after boot
     while True:
+        try:
+            # First, so new playlists get covers in this very sweep.
+            sync_profile_sections()
+        except Exception as exc:
+            log(f"profile sync failed: {exc!r}")
         lib = load_library()
         try:
             # Spotify covers (oEmbed): fetch what's missing, drop orphans.

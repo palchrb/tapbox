@@ -87,6 +87,20 @@
       <button type="submit">Add</button>
     </form>
   </div>
+  <div class="card">
+    <h2>Follow a Spotify profile</h2>
+    <form id="follow-form">
+      <input id="follow-user" placeholder="Profile link or username" required>
+      <input id="follow-section" list="section-names"
+             placeholder="Section on the box (e.g. Dad's picks)" required>
+      <button type="submit">Follow</button>
+    </form>
+    <p class="dim small">The section mirrors that profile's <strong>public</strong>
+    playlists: make a playlist public in the Spotify app and it shows up on
+    the box by itself; make it private and it disappears. Private playlists,
+    Liked Songs and Spotify-made editorial lists are never visible. Needs the
+    one-time Spotify API setup in install.sh.</p>
+  </div>
 </section>
 
 <section id="tab-settings" hidden>

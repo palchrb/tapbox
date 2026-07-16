@@ -266,6 +266,23 @@ async function loadLibrary() {
       h.appendChild(im);
     }
     h.appendChild(document.createTextNode(s.name));
+    if (s.spotify_user) {  // subscription: entries are box-managed
+      const tag = document.createElement("small");
+      tag.className = "dim follow-tag";
+      tag.textContent = ` follows @${s.spotify_user}`;
+      h.appendChild(tag);
+      const un = document.createElement("button");
+      un.className = "logo-btn danger";
+      un.textContent = "unfollow";
+      un.addEventListener("click", async () => {
+        if (!confirm(`Stop following @${s.spotify_user}? ` +
+                     `The section and its playlists leave the box.`)) return;
+        LIB.sections = LIB.sections.filter((x) => x.id !== s.id);
+        await saveLibrary();
+        loadLibrary();
+      });
+      h.appendChild(un);
+    }
     const logo = document.createElement("button");
     logo.className = "logo-btn";
     logo.textContent = s.image ? "change logo" : "logo";
@@ -285,8 +302,15 @@ async function loadLibrary() {
       h.appendChild(rm);
     }
     card.appendChild(h);
+    if (s.spotify_user && !s.entries.length) {
+      const p = document.createElement("p");
+      p.className = "dim";
+      p.textContent = "No public playlists on the profile yet — " +
+        "the box checks again on every sync.";
+      card.appendChild(p);
+    }
     for (const e of s.entries) {
-      card.appendChild(entryRow(e, s.name));
+      card.appendChild(entryRow(e, s.name, !!s.spotify_user));
     }
     wrap.appendChild(card);
   }
@@ -341,10 +365,10 @@ function moveEntry(e, dest) {
   let sec = LIB.sections.find((s) => s.name === dest);
   if (!sec) { sec = { name: dest, entries: [] }; LIB.sections.push(sec); }
   sec.entries.push(e);
-  LIB.sections = LIB.sections.filter((s) => s.entries.length);
+  LIB.sections = LIB.sections.filter((s) => s.entries.length || s.spotify_user);
 }
 
-function entryRow(e, sectionName) {
+function entryRow(e, sectionName, locked) {
   const row = document.createElement("div");
   row.className = "entry";
 
@@ -355,6 +379,23 @@ function entryRow(e, sectionName) {
   const target = document.createElement("small");
   target.textContent = e.target;
   info.append(name, target);
+
+  if (locked) {  // follow-section: the sweeper owns these rows, so no
+    const play = document.createElement("button");  // edit controls that
+    play.textContent = "▶";                         // would be undone
+    play.title = "Play now";
+    play.addEventListener("click", async () => {
+      try {
+        await api("/play", { method: "POST", body: { id: e.id } });
+        toast(`Playing: ${e.name}`);
+      } catch (err) { toast(err.message); }
+    });
+    const actions = document.createElement("div");
+    actions.className = "entry-actions";
+    actions.append(play);
+    row.append(info, actions);
+    return row;
+  }
 
   const order = document.createElement("select");
   for (const [val, label] of Object.entries(ORDER_LABEL)) {
@@ -415,6 +456,7 @@ function entryRow(e, sectionName) {
   const move = document.createElement("select");
   move.title = "Category";
   for (const s of LIB.sections) {
+    if (s.spotify_user) continue;  // sweeper-managed — can't hold manual rows
     const o = document.createElement("option");
     o.value = s.name; o.textContent = s.name;
     if (s.name === sectionName) o.selected = true;
@@ -455,7 +497,7 @@ function entryRow(e, sectionName) {
     for (const s of LIB.sections) {
       s.entries = s.entries.filter((x) => x.id !== e.id);
     }
-    LIB.sections = LIB.sections.filter((s) => s.entries.length);
+    LIB.sections = LIB.sections.filter((s) => s.entries.length || s.spotify_user);
     await saveLibrary();
     loadLibrary();
   });
@@ -486,6 +528,11 @@ $("#add-form").addEventListener("submit", async (ev) => {
   };
   let sec = LIB.sections.find(
     (s) => s.name.toLowerCase() === sectionName.toLowerCase());
+  if (sec && sec.spotify_user) {
+    toast(`“${sec.name}” follows @${sec.spotify_user} — the box manages ` +
+          "its contents. Pick another section.");
+    return;
+  }
   if (!sec) {
     sec = { name: sectionName, entries: [] };
     LIB.sections.push(sec);
@@ -499,6 +546,47 @@ $("#add-form").addEventListener("submit", async (ev) => {
   } catch (e) {
     toast(e.message);
     loadLibrary(); // reload clean state
+  }
+});
+
+/* Follow a Spotify profile: validate against the box (which owns the API
+   credentials), then save a section the sweeper keeps in sync. */
+$("#follow-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const raw = $("#follow-user").value.trim();
+  const sectionName = $("#follow-section").value.trim();
+  const m = raw.match(/user\/([^/?#]+)/);
+  const user = m ? decodeURIComponent(m[1]) : raw.replace(/^spotify:user:/, "");
+  let preview;
+  try {
+    preview = await api(`/spotify/profile?user=${encodeURIComponent(user)}`);
+  } catch (e) {
+    toast(e.message, 8000);
+    return;
+  }
+  let sec = LIB.sections.find(
+    (s) => s.name.toLowerCase() === sectionName.toLowerCase());
+  if (sec && !sec.spotify_user) {
+    toast(`“${sec.name}” already exists with its own content — ` +
+          "pick a new section name for the follow.");
+    return;
+  }
+  if (!sec) {
+    sec = { name: sectionName, entries: [] };
+    LIB.sections.push(sec);
+  }
+  sec.spotify_user = preview.user;
+  sec.entries = [];  // the box's sweeper fills these in seconds
+  try {
+    await saveLibrary();
+    $("#follow-user").value = "";
+    toast(`Following @${preview.user} — ${preview.playlists.length} public ` +
+          "playlist(s) on the way to the box");
+    loadLibrary();
+    setTimeout(loadLibrary, 4000);  // show the sweeper's fill-in
+  } catch (e) {
+    toast(e.message, 6000);
+    loadLibrary();
   }
 });
 

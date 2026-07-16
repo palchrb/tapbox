@@ -615,6 +615,31 @@ EOF
   echo "    wrote /etc/tapbox/rfid.conf (poll mode; edit it to enable slot mode)"
 fi
 
+# Spotify Web API credentials (optional): lets a library section follow a
+# Spotify profile's PUBLIC playlists. One free app registered at
+# https://developer.spotify.com/dashboard serves every box in the household
+# (client credentials read public data only — no user login involved).
+# Provide via TAPBOX_SPOTIFY_ID/TAPBOX_SPOTIFY_SECRET env or the one-time
+# prompt. Re-runs keep the existing file; delete it to be asked again.
+SPOTIFY_API_FILE=/etc/tapbox/spotify-api.json
+if [[ -f $SPOTIFY_API_FILE ]]; then
+  echo "    keeping existing $SPOTIFY_API_FILE"
+else
+  SP_ID="${TAPBOX_SPOTIFY_ID:-}"
+  SP_SECRET="${TAPBOX_SPOTIFY_SECRET:-}"
+  if [[ -z $SP_ID && -t 0 ]]; then
+    read -r -p "Spotify API client id (blank = skip profile-follow): " SP_ID || true
+    [[ -n $SP_ID ]] && read -r -p "Spotify API client secret: " SP_SECRET || true
+  fi
+  if [[ -n $SP_ID && -n $SP_SECRET ]]; then
+    mkdir -p /etc/tapbox
+    printf '{"client_id": "%s", "client_secret": "%s"}\n' \
+      "$SP_ID" "$SP_SECRET" > "$SPOTIFY_API_FILE"
+    chmod 600 "$SPOTIFY_API_FILE"
+    echo "    wrote $SPOTIFY_API_FILE (root-only; feeds profile-follow sections)"
+  fi
+fi
+
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 # Normalize modes on units written by older installs (mktemp made them 600
 # and unchanged files are never rewritten) — silences systemd's

@@ -66,6 +66,7 @@ main { padding: 0 1rem; max-width: 34rem; margin: 0 auto; }
   color: var(--dim);
 }
 .section-head .logo-btn + .logo-btn { margin-left: 0.3rem; }
+.section-head .follow-tag { font-weight: normal; font-size: 0.75rem; }
 
 button {
   background: #26262f;
