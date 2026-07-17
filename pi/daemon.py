@@ -1423,6 +1423,45 @@ def _bt_transport_ready():
         return False
 
 
+_BT_HEAL = {"lock": threading.Lock(), "last": 0.0}
+BT_HEAL_COOLDOWN_S = float(os.environ.get("TAPBOX_BT_HEAL_COOLDOWN", "300"))
+
+
+def _heal_crashed_controller():
+    """btwatchd is deliberately passive on adapter loss (PLAN-bt-dbus.md
+    §1), so a kick can't fix a CRASHED firmware — its Connect just keeps
+    failing NotReady. Field log 2026-07-17: 'hardware error 0x00' left
+    the speaker dead indefinitely, because playback fell back to the
+    local output and the stall watchdog (the only other healer) never
+    saw a stall. So play intent itself checks the crash signature and
+    runs recovery in the background — cheap when healthy (one hciconfig
+    ioctl; the kernel journal is only read when the controller is down),
+    deduped by the non-blocking lock and cooldown-guarded so button
+    mashing can't stack recoveries. After a successful recovery the
+    bluetooth restart re-enters btwatchd's fast window on its own; the
+    extra kick just shaves the last seconds off."""
+    if not _BT_HEAL["lock"].acquire(blocking=False):
+        return  # a recovery is already running
+    try:
+        if time.monotonic() - _BT_HEAL["last"] < BT_HEAL_COOLDOWN_S:
+            return  # recently tried — a wedge needing a power cycle
+        if not _bt._hci_crashed():
+            return  # plain speaker-away: btwatchd's job, not ours
+        _BT_HEAL["last"] = time.monotonic()
+        log("play intent found a crashed BT controller — recovering")
+        _bt_recover("recover")
+        try:
+            with open(_bt.KICK_FILE + ".tmp", "w") as f:
+                f.write(str(time.time()))
+            os.replace(_bt.KICK_FILE + ".tmp", _bt.KICK_FILE)
+        except OSError:
+            pass
+    except Exception as e:  # a dead healer = the field bug comes back
+        log(f"bt heal error: {e!r}")
+    finally:
+        _BT_HEAL["lock"].release()
+
+
 def _kick_bt_connect():
     """Play intent while the BT speaker has no transport: poke btwatchd
     to attempt a connect right away instead of waiting out its blind-retry
@@ -1437,6 +1476,9 @@ def _kick_bt_connect():
         log("speaker not connected — kicked btwatchd to connect it now")
     except OSError:
         pass
+    # a kick alone can't help a crashed controller — check off-thread
+    # (zero added latency on the button) and self-heal if needed
+    threading.Thread(target=_heal_crashed_controller, daemon=True).start()
 
 
 def _internet_up():

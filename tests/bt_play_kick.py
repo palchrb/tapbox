@@ -63,5 +63,57 @@ daemon.ORCH.command("playpause")
 assert not kicked(), "kicked on the built-in output"
 print("4. built-in output never kicks OK")
 
+
+# --- crash self-heal: a kick can't fix a dead firmware (field log
+# --- 2026-07-17: 'hardware error 0x00' left the speaker dead for good —
+# --- btwatchd is passive by design and the stall watchdog never saw a
+# --- stall once playback fell back to the local output) ---------------------
+
+import time  # noqa: E402
+
+
+def wait_for(what, pred, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return
+        time.sleep(0.02)
+    raise SystemExit(f"TIMEOUT waiting for: {what}")
+
+
+CRASHED = [False]
+RECOVERED = []
+daemon._bt._hci_crashed = lambda: CRASHED[0]
+daemon._bt_recover = lambda verb: RECOVERED.append(verb)
+set_output("bt")
+
+# 5. healthy controller: play intent never runs recovery
+daemon.ORCH.command("playpause")
+time.sleep(0.5)  # give the async heal check time to conclude
+assert RECOVERED == [], "recovery ran on a healthy controller"
+print("5. healthy controller: kick only, no recovery OK")
+
+# 6. crash signature: exactly one recovery despite button mashing,
+# and btwatchd gets re-kicked after it
+CRASHED[0] = True
+kicked()  # clear the kick file so the re-kick is observable
+for _ in range(5):
+    daemon.ORCH.command("playpause")
+wait_for("crash recovery", lambda: RECOVERED)
+time.sleep(0.5)  # the other presses' heal threads must all conclude
+assert RECOVERED == ["recover"], f"recovery must run ONCE: {RECOVERED}"
+wait_for("re-kick after recovery", kicked)
+print("6. crashed controller: one recovery per cooldown + re-kick OK")
+
+# 7. still crashed within the cooldown: no second recovery; after the
+# cooldown expires a new crash is healed again
+daemon.ORCH.command("playpause")
+time.sleep(0.5)
+assert RECOVERED == ["recover"], "cooldown did not hold"
+daemon._BT_HEAL["last"] = 0.0  # cooldown over
+daemon.ORCH.command("playpause")
+wait_for("second recovery after cooldown", lambda: len(RECOVERED) == 2)
+print("7. cooldown gates retries; a later crash heals again OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
-      "not after the backoff.")
+      "not after the backoff, and heals a crashed controller.")
