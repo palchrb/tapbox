@@ -1519,13 +1519,22 @@ def _bt_blip_resume():
     Outside the blip window the popup's 'press A' stays — blasting
     audio when a speaker reappears an hour later is wrong the other
     way. Same respawn guard as the stall watchdog: if the kid meanwhile
-    resumed, stopped or switched output, this is a no-op."""
+    resumed, stopped or switched output, this is a no-op. Spotify was
+    PAUSED (not stopped) by the lost path — a plain resume continues."""
     with ORCH.lock:
-        if (ORCH.target and ORCH.source == "mpv"
+        source = ORCH.source
+        if (ORCH.target and source == "mpv"
                 and not ORCH._mpv_alive()):
             log("speaker back within the blip window — resuming")
             ORCH._spawn(ORCH.target, reverse=ORCH.reverse,
                         resume=ORCH.resume)
+            return
+    if source == "spotify":
+        try:
+            log("speaker back within the blip window — resuming spotify")
+            go("/player/resume")
+        except OSError:
+            pass  # the popup's press-A path remains the manual fallback
 
 
 def _bt_transport_lost():
@@ -1534,16 +1543,30 @@ def _bt_transport_lost():
     log 2026-07-17: ~15 episodes skipped in 3s — the stall watchdog
     can't see it, the position is moving). Stop the player — the 3s
     bookmark preserves the exact episode/position, the same trick the
-    stall watchdog uses — and arm the screen's choice popup. Guarded:
-    a drop for a speaker we're not playing into is a no-op, so a stale
-    or duplicate notification can never kill local playback."""
+    stall watchdog uses — and arm the screen's choice popup. Spotify
+    plays via go-librespot, not an mpv child: there its ALSA output just
+    died under it ('output device failed' in its log, the track burning
+    on silently) — pause it instead, same popup, and the spotify
+    bookmarker keeps the position. Guarded: a drop for a speaker we're
+    not playing into is a no-op, so a stale or duplicate notification
+    can never kill local playback."""
+    if current_output()["output"] != "bt":
+        return {"stopped": False}
     with ORCH.lock:
-        if current_output()["output"] != "bt" or not ORCH._mpv_alive():
-            return {"stopped": False}
-        log("bt transport lost mid-play — stopping (bookmark survives)")
-        ORCH._stop_child()
-    _BT_WAIT["lost"] = time.monotonic()
-    return {"stopped": True}
+        if ORCH._mpv_alive():
+            log("bt transport lost mid-play — stopping (bookmark survives)")
+            ORCH._stop_child()
+            _BT_WAIT["lost"] = time.monotonic()
+            return {"stopped": True}
+    try:
+        if spotify_playing():
+            log("bt transport lost mid-play — pausing spotify")
+            go("/player/pause")
+            _BT_WAIT["lost"] = time.monotonic()
+            return {"stopped": True}
+    except OSError:
+        pass  # go-librespot unreachable = nothing playing through it
+    return {"stopped": False}
 
 
 def _bt_wait_state(playing):
@@ -1616,11 +1639,13 @@ def _spotify_supervisor():
     connectivity returning. Manual restarts while offline (e.g. an
     output switch rewrote its config) get re-parked on the next tick."""
     parked = False
+    misses = 0
     while True:
         time.sleep(20)  # a cheap TCP probe; 60s made "no internet" and
         # the recovery lag a button-press generation behind reality
         try:
             if _internet_up():
+                misses = 0
                 _SPOT_OFFLINE[0] = False
                 if parked:
                     subprocess.run(["systemctl", "start", "go-librespot"],
@@ -1634,6 +1659,15 @@ def _spotify_supervisor():
                     log("spotify: locked to the logged-in account "
                         "(zeroconf closed — box can't be hijacked)")
             else:
+                misses += 1
+                if misses < 2:
+                    # ONE missed probe is not "offline": btwatchd paging
+                    # an absent speaker congests the shared 2.4GHz radio
+                    # enough to time out the 2s probe — field log
+                    # 2026-07-17 19:08: a false 'No internet' banner and
+                    # go-librespot park/start churn mid-Spotify, from
+                    # nothing but a switched-off headset
+                    continue
                 _SPOT_OFFLINE[0] = True
                 subprocess.run(["systemctl", "stop", "go-librespot"],
                                timeout=30)

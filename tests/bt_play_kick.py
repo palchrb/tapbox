@@ -225,6 +225,36 @@ w, r, l = daemon._bt_wait_state(playing=True)
 assert (w, r, l) == (False, False, False), (w, r, l)
 print("15. playing clears bt_lost OK")
 
+# 16. spotify plays via go-librespot (no mpv child): the lost hint
+# PAUSES it — its ALSA output just died under it — and arms the popup
+GO_CALLS = []
+daemon.go = lambda path, **kw: GO_CALLS.append(path)
+daemon.spotify_playing = lambda: True
+ALIVE[0] = False
+w, r, l = daemon._bt_wait_state(playing=False)  # drain scenario 15 state
+r16 = daemon._bt_transport_lost()
+assert r16 == {"stopped": True}, r16
+assert GO_CALLS == ["/player/pause"], GO_CALLS
+w, r, l = daemon._bt_wait_state(playing=False)
+assert l is True, (w, r, l)
+print("16. spotify over bt: lost hint pauses it + arms the popup OK")
+
+# 17. blip on spotify: the speaker returns -> plain resume, no mpv spawn
+GO_CALLS.clear()
+daemon.ORCH.source = "spotify"
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline and GO_CALLS != ["/player/resume"]:
+    time.sleep(0.02)
+assert GO_CALLS == ["/player/resume"], GO_CALLS
+assert len(SPAWNED) == 1, f"spotify blip must not spawn mpv: {SPAWNED}"
+daemon.ORCH.source = "mpv"
+TRANSPORT[0] = False
+daemon.spotify_playing = lambda: False
+print("17. blip on spotify -> resume via go-librespot OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
       "not after the backoff, heals a crashed controller, and the "
       "screen knows what to say meanwhile.")
