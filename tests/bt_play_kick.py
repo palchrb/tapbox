@@ -239,21 +239,48 @@ w, r, l = daemon._bt_wait_state(playing=False)
 assert l is True, (w, r, l)
 print("16. spotify over bt: lost hint pauses it + arms the popup OK")
 
-# 17. blip on spotify: the speaker returns -> plain resume, no mpv spawn
+# 17. blip on spotify: go-librespot's ALSA output died WITH the
+# transport — a plain /player/resume plays SILENTLY (field log 19:21).
+# The blip must REBUILD the output (restart) and replay via the spawn
+# path, never a bare resume.
 GO_CALLS.clear()
+REBUILT = []
+daemon._go_output_rebuild = lambda: REBUILT.append(1)
 daemon.ORCH.source = "spotify"
 TRANSPORT[0] = True
 w, r, l = daemon._bt_wait_state(playing=False)
 assert (w, r, l) == (False, False, False), (w, r, l)
 deadline = time.monotonic() + 5
-while time.monotonic() < deadline and GO_CALLS != ["/player/resume"]:
+while time.monotonic() < deadline and len(SPAWNED) < 2:
     time.sleep(0.02)
-assert GO_CALLS == ["/player/resume"], GO_CALLS
-assert len(SPAWNED) == 1, f"spotify blip must not spawn mpv: {SPAWNED}"
+assert REBUILT == [1], f"spotify blip must rebuild the output: {REBUILT}"
+assert len(SPAWNED) == 2, f"spotify blip must replay via spawn: {SPAWNED}"
+assert "/player/resume" not in GO_CALLS, \
+    f"bare resume plays silently into the dead handle: {GO_CALLS}"
+TRANSPORT[0] = False
+print("17. blip on spotify -> output rebuild + replay, no bare resume OK")
+
+# 17b. spotify + LATE return: rebuild fires so the kid's press-A lands
+# on a fresh output; ready flash shows; nothing auto-plays
+REBUILT.clear()
+GO_CALLS.clear()
+daemon._bt_transport_lost()  # spotify branch (spotify_playing True)
+assert GO_CALLS == ["/player/pause"], GO_CALLS
+daemon._BT_WAIT["lost"] = time.monotonic() - daemon.BT_RESUME_S - 1
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, True, False), (w, r, l)
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline and not REBUILT:
+    time.sleep(0.02)
+assert REBUILT == [1], "late spotify return must still rebuild the output"
+time.sleep(0.2)
+assert len(SPAWNED) == 2, f"late return must NOT auto-play: {SPAWNED}"
 daemon.ORCH.source = "mpv"
 TRANSPORT[0] = False
 daemon.spotify_playing = lambda: False
-print("17. blip on spotify -> resume via go-librespot OK")
+daemon._BT_WAIT["ready_until"] = 0.0
+print("17b. late spotify return -> rebuild for press-A, no surprise audio OK")
 
 # 18. the automatic fallback flipping output to local must NOT disarm
 # the popup/auto-resume (it did: ~23s after every drop on HAT boxes,
@@ -267,7 +294,7 @@ assert l is True, "fallback output flip disarmed the lost popup"
 TRANSPORT[0] = True  # speaker back — auto-resume must still be armed
 w, r, l = daemon._bt_wait_state(playing=False)
 assert (w, r, l) == (False, False, False), (w, r, l)
-wait_spawn(2)
+wait_spawn(3)
 print("18. output fallback keeps popup + auto-resume armed OK")
 
 print("BT PLAY KICK OK — pressing play connects the speaker now, "

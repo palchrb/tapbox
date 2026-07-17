@@ -1519,22 +1519,25 @@ def _bt_blip_resume():
     Outside the blip window the popup's 'press A' stays — blasting
     audio when a speaker reappears an hour later is wrong the other
     way. Same respawn guard as the stall watchdog: if the kid meanwhile
-    resumed, stopped or switched output, this is a no-op. Spotify was
-    PAUSED (not stopped) by the lost path — a plain resume continues."""
+    resumed, stopped or switched output, this is a no-op. Spotify needs
+    its output REBUILT first (see _go_output_rebuild) — a plain resume
+    plays silently into the dead ALSA handle — then the same spawn path
+    replays from the spotify bookmark."""
     with ORCH.lock:
-        source = ORCH.source
-        if (ORCH.target and source == "mpv"
+        source, target = ORCH.source, ORCH.target
+        if (target and source == "mpv"
                 and not ORCH._mpv_alive()):
             log("speaker back within the blip window — resuming")
-            ORCH._spawn(ORCH.target, reverse=ORCH.reverse,
+            ORCH._spawn(target, reverse=ORCH.reverse,
                         resume=ORCH.resume)
             return
-    if source == "spotify":
-        try:
-            log("speaker back within the blip window — resuming spotify")
-            go("/player/resume")
-        except OSError:
-            pass  # the popup's press-A path remains the manual fallback
+    if source == "spotify" and target:
+        _go_output_rebuild()
+        with ORCH.lock:
+            if ORCH.target == target and not ORCH._mpv_alive():
+                log("speaker back within the blip window — resuming spotify")
+                ORCH._spawn(target, reverse=ORCH.reverse,
+                            resume=ORCH.resume)
 
 
 def _bt_transport_lost():
@@ -1563,10 +1566,36 @@ def _bt_transport_lost():
             log("bt transport lost mid-play — pausing spotify")
             go("/player/pause")
             _BT_WAIT["lost"] = time.monotonic()
+            _BT_WAIT["lost_spotify"] = True
             return {"stopped": True}
     except OSError:
         pass  # go-librespot unreachable = nothing playing through it
     return {"stopped": False}
+
+
+def _go_output_rebuild():
+    """go-librespot's ALSA output dies WITH the bt transport
+    ('snd_pcm_recover: No such device') and STAYS dead: a later
+    /player/resume resumes the SESSION but never reopens the device —
+    'playing' with no sound (field log 2026-07-17 19:21; two output
+    toggles 'fixed' it only because the toggle restarts the service).
+    Restart rebuilds the output; the session comes back empty, which
+    routes any resume through the proven replay-last path. Wait for the
+    login so a replay right after doesn't race the API."""
+    log("rebuilding go-librespot's audio output (restart)")
+    try:
+        subprocess.run(["systemctl", "restart", "go-librespot"],
+                       timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"go-librespot output rebuild failed: {e!r}")
+        return
+    for _ in range(20):
+        try:
+            if go_status().get("username"):
+                break
+        except OSError:
+            pass
+        time.sleep(1)
 
 
 def _bt_wait_state(playing):
@@ -1585,11 +1614,17 @@ def _bt_wait_state(playing):
             _BT_WAIT["lost"] = 0.0
         elif _bt_transport_ready():
             blip = now - _BT_WAIT["lost"] <= BT_RESUME_S
+            spot = _BT_WAIT.pop("lost_spotify", False)
             _BT_WAIT["lost"] = 0.0
             if blip:  # short dropout: resume silently, no popup homework
                 threading.Thread(target=_bt_blip_resume,
                                  daemon=True).start()
             else:     # speaker back much later: "press A to play"
+                if spot:
+                    # rebuild NOW so the kid's press-A lands on a fresh
+                    # output (a resume into the dead handle is silent)
+                    threading.Thread(target=_go_output_rebuild,
+                                     daemon=True).start()
                 _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
     if _BT_WAIT["since"]:
         if now - _BT_WAIT["since"] > BT_WAIT_S:
