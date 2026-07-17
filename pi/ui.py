@@ -527,6 +527,7 @@ class App:
         self.volume_shown = None
         self.vol_mode_until = 0.0   # while set: B/Y adjust volume (X opened it)
         self.bt_connecting_until = 0.0  # popup X pressed: full connect running
+        self.wifi_connecting_until = 0.0  # X pressed: wifi reconnect running
         self.catch_up_until = 0.0   # repaint every tick until this time
         self.last_status = 0.0
         self.last_system = 0.0
@@ -794,6 +795,10 @@ class App:
         if ev == "a" and st.get("bt_lost") and st.get("bt_local_ok"):
             self._play_on_local()  # the popup's "play on box speaker"
             return
+        if ev == "x" and st.get("spotify_offline") \
+                and st.get("source") == "spotify":
+            self._wifi_reconnect()  # X = get the net back now
+            return
         in_vol = time.monotonic() < self.vol_mode_until
         try:
             if ev == "a":
@@ -925,16 +930,14 @@ class App:
             elif ev == "a":
                 e = ents[self.car_sel % len(ents)]
                 if "spotify" in e["target"] and self._no_internet():
-                    self.draw_message("No network —\ncan't play Spotify")
-                    time.sleep(1.2)
+                    self._reconnect_for_spotify()  # try to GET the net
                     return
                 r = api_post("/play", {"id": e["id"]},
                              timeout=CONTROL_TIMEOUT)
                 if r.get("error") == "no-internet":
                     # wifi is up but the WAN is down — the daemon's probe
                     # is the authority (the local check above can't tell)
-                    self.draw_message("No internet —\ncan't play Spotify")
-                    time.sleep(1.2)
+                    self._reconnect_for_spotify()
                     return
                 self._enter_now()
             elif ev == "x":
@@ -1038,14 +1041,12 @@ class App:
                 self.expanded = api_get(f"/expand?id={self.entry['id']}")
                 if self.expanded["kind"] == "spotify" or not self.expanded["episodes"]:
                     if self.expanded["kind"] == "spotify" and self._no_internet():
-                        self.draw_message("No network —\ncan't play Spotify")
-                        time.sleep(1.2)
+                        self._reconnect_for_spotify()  # get the net now
                         return
                     r = api_post("/play", {"id": self.entry["id"]})
                     if r.get("error") == "no-internet":
                         # wifi up, WAN down — the daemon's probe knows
-                        self.draw_message("No internet —\ncan't play Spotify")
-                        time.sleep(1.2)
+                        self._reconnect_for_spotify()
                         return
                     self._enter_now()
                 else:
@@ -1269,10 +1270,12 @@ class App:
         st = self.status or {}
         battery_corner(d, self.system)
         if st.get("spotify_offline") and st.get("source") == "spotify":
-            # spotify NEEDS the net: say so up front instead of a silent
-            # ghost card ("reconnecting" — the supervisor retries itself)
-            d.text((10, 4), "No internet - reconnecting", font=F_SMALL,
-                   fill=WARN)
+            # spotify NEEDS the net: say so, and offer an on-demand
+            # reconnect on X (far better than waiting out the prober)
+            msg = ("reconnecting Wi-Fi..."
+                   if time.monotonic() < self.wifi_connecting_until
+                   else "No internet - X: reconnect")
+            d.text((10, 4), msg, font=F_SMALL, fill=WARN)
         # THE episode's own image first when it's already on disk (the
         # sync caches per-episode art next to the audio); otherwise the
         # local show cover beats a remote episode URL — offline-proof,
@@ -1417,6 +1420,41 @@ class App:
             except OSError as e:
                 log(f"play-on-local failed: {e}")
             self.last_status = 0
+        threading.Thread(target=go, daemon=True).start()
+
+    def _reconnect_for_spotify(self):
+        """Pressing play on a Spotify tile with no net: don't dead-end
+        with 'can't play' — that IS an explicit 'get me the net'. Run the
+        reconnect (blocking, with a message, like the pair flow), then
+        play if it worked."""
+        self.draw_message("No internet —\nreconnecting Wi-Fi ...")
+        try:
+            r = api_post("/wifi/reconnect", {"secs": 30}, timeout=45)
+        except OSError:
+            r = {}
+        self.last_system = 0  # refresh wifi state
+        if not r.get("ok"):
+            self.draw_message("Still no internet —\ntry again later")
+            time.sleep(1.5)
+            self.dirty = True
+
+    def _wifi_reconnect(self):
+        """The offline-Spotify popup's X action: fire-and-forget on-demand
+        wifi reconnect (daemon quiesces A2DP, waits for a known network,
+        unparks go-librespot on success). Progress shows in the banner;
+        the daemon 409s overlaps, so mashing X is harmless."""
+        if time.monotonic() < self.wifi_connecting_until:
+            return
+        self.wifi_connecting_until = time.monotonic() + 35
+
+        def go():
+            try:
+                api_post("/wifi/reconnect", {"secs": 30}, timeout=45)
+            except (OSError, ValueError):
+                pass
+            self.wifi_connecting_until = 0.0
+            self.last_status = 0  # re-poll: banner clears when back online
+            self.last_system = 0
         threading.Thread(target=go, daemon=True).start()
 
     def _bt_connect_last(self):

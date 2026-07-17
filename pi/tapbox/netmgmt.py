@@ -75,6 +75,30 @@ def set_wifi(enabled):
     return {"enabled": en, "ssid": ssid, "ip": ip}
 
 
+def wifi_reconnect(window_s=30):
+    """On-demand reconnect: unblock the radio and actively wait up to
+    window_s for a known network to associate (NetworkManager auto-joins
+    once the radio is up). This is the 'get the net back NOW' button —
+    the offline-Spotify popup's X — a far better fit than waiting out the
+    auto-off prober's 10-minute timer when someone is standing there
+    wanting it. Returns {ok, ssid}; None while another wifi op runs.
+    The caller quiesces A2DP first: the scan shares the 2.4GHz radio."""
+    if not WIFI_LOCK.acquire(blocking=False):
+        return None
+    try:
+        _rfkill(True)
+        _auto.update(last_ok=time.monotonic(), blocked=False)
+        ssid = None
+        deadline = time.monotonic() + window_s
+        while time.monotonic() < deadline and not ssid:
+            time.sleep(3)
+            _en, ssid, _ip = wifi_state()
+        log(f"wifi reconnect: {'joined ' + ssid if ssid else 'nothing found'}")
+        return {"ok": bool(ssid), "ssid": ssid}
+    finally:
+        WIFI_LOCK.release()
+
+
 # --- wifi management (nmcli — RPi OS's NetworkManager) -----------------------------
 
 WIFI_LOCK = threading.Lock()  # one scan/connect at a time

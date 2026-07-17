@@ -30,6 +30,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   GET  /system     battery (PiSugar), disk/cache usage, wifi state, temps
   POST /system/wifi      {"enabled": bool} — rfkill wifi
   POST /system/shutdown  {"restart": bool} — graceful poweroff/reboot
+  POST /wifi/reconnect {"secs"?} — on-demand: unblock the radio and wait
+                      for a known network to join (offline-Spotify X); on
+                      success clears spotify_offline + unparks go-librespot
   POST /wifi/scan     list nearby networks (ssid/signal/secured/known)
   POST /wifi/connect  {"ssid", "password"?} — join a network (nmcli);
                       leaves the setup hotspot first, restores it on failure
@@ -192,8 +195,8 @@ from tapbox.library import (  # noqa: E402
     _natural_order, _sync_wake)
 from tapbox.netmgmt import (  # noqa: E402
     HOTSPOT_PSK, HOTSPOT_SSID, hotspot_active, set_wifi, start_hotspot,
-    stop_hotspot, wifi_add, wifi_connect, wifi_forget, wifi_scan,
-    wifi_state, _wifi_watchdog)
+    stop_hotspot, wifi_add, wifi_connect, wifi_forget, wifi_reconnect,
+    wifi_scan, wifi_state, _wifi_watchdog)
 from tapbox.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
     _retarget_go_librespot)
@@ -1292,6 +1295,29 @@ class Handler(BaseHTTPRequestHandler):
                 save_library(normalize_library(lib))
                 log(f"section logo {'set' if data else 'removed'}: {sid}")
                 self._send(200, lib)
+            elif self.path == "/wifi/reconnect":
+                # on-demand 'get the net back now' (offline-Spotify popup's
+                # X). Quiesce A2DP — the NM scan shares the 2.4GHz radio —
+                # then actively wait for a known network; on success clear
+                # the offline flag and unpark go-librespot so the next
+                # play works at once, without waiting on the supervisor.
+                try:
+                    secs = min(max(int(body.get("secs") or 30), 5), 60)
+                except (TypeError, ValueError):
+                    secs = 30
+                resume = _bt_quiesce()
+                r = wifi_reconnect(secs)
+                _bt_resume(resume)
+                if r and r.get("ok"):
+                    _SPOT_OFFLINE[0] = False
+                    threading.Thread(
+                        target=lambda: subprocess.run(
+                            ["systemctl", "start", "go-librespot"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=30),
+                        daemon=True).start()
+                self._send(409 if r is None else 200,
+                           r or {"error": "wifi operation already in progress"})
             elif self.path == "/wifi/hotspot":
                 if not isinstance(body.get("enabled"), bool):
                     self._send(400, {"error": "enabled (bool) required"})
