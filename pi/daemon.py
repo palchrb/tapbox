@@ -161,6 +161,13 @@ BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
 STALL_S = float(os.environ.get("TAPBOX_STALL_S", "30"))
 # how often the stall watchdog samples position + radio TX counters
 STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
+# resume-position display hold (see Orchestrator._settle_position): a
+# bookmark below RESUME_MIN_S is never resumed, so nothing to hold; the
+# hold releases once live is within TOL of the target, and never lasts
+# longer than MAX_S after spawn
+RESUME_MIN_S = float(os.environ.get("TAPBOX_RESUME_MIN", "20"))
+POSITION_SETTLE_MAX_S = float(os.environ.get("TAPBOX_SETTLE_MAX", "20"))
+POSITION_SETTLE_TOL_S = float(os.environ.get("TAPBOX_SETTLE_TOL", "3"))
 WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/tapbox/web")
@@ -756,6 +763,28 @@ class Orchestrator:
             log(f"{action}: nothing to control")
             return {"routed": None}
 
+    def _settle_position(self, live, now):
+        """Hold the reported position steady at the resume bookmark while
+        mpv is still seeking there. A freshly spawned mpv reports
+        playback-time as it loads (0, 1, 2 ...) and only THEN seeks to
+        the bookmark, so the raw value flaps 0:00 -> 0:53 on every start
+        and every reconnect respawn. player.py publishes resume_pos;
+        report it verbatim until the live position reaches it (the seek
+        landed), then track live — bounded to the first
+        POSITION_SETTLE_MAX_S after spawn so a target that can never be
+        reached can't freeze the bar forever."""
+        try:
+            rp = float(now.get("resume_pos")) if now else 0.0
+        except (TypeError, ValueError, AttributeError):
+            return live
+        if rp <= RESUME_MIN_S:
+            return live  # fresh start (ramps from 0 anyway) — nothing to hold
+        if time.monotonic() - self.child_started > POSITION_SETTLE_MAX_S:
+            return live
+        if live is None or live < rp - POSITION_SETTLE_TOL_S:
+            return rp  # the seek has not landed yet — hold at the bookmark
+        return live  # within tolerance: seek landed, track live from here
+
     def status(self):
         with self.lock:
             mpv_alive = self._mpv_alive()
@@ -771,6 +800,7 @@ class Orchestrator:
             out["title"] = mpv_get("media-title")
             out["position"] = mpv_get("playback-time")
             out["duration"] = mpv_get("duration")  # None = live stream
+            now = None
             try:  # which episode (player.py publishes it; match on path)
                 with open(NOW_FILE) as f:
                     now = json.load(f)
@@ -803,6 +833,7 @@ class Orchestrator:
                     out["artwork"] = now.get("image")
             except (OSError, ValueError):
                 pass
+            out["position"] = self._settle_position(out["position"], now)
         st = go_status()
         track = st.get("track") or {}
         sp_playing = spotify_playing(st)

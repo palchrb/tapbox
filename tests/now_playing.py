@@ -127,4 +127,55 @@ assert st["title"] == "Regnvaersanger (live)", st["title"]
 assert orch.spot_pending is None, "pending never cleared"
 print("7. live track replaces the pending identity on load OK")
 
-print("NOW PLAYING OK — no filename flashes, art bridges track changes.")
+
+# --- resume-position hold: the bar must stay on the bookmark while mpv
+# --- loads-then-seeks, not flap 0:00 -> bookmark on every start/respawn
+
+import time  # noqa: E402
+
+orch._mpv_alive = lambda: True  # scenario 6 flipped this to False
+orch.source = "mpv"
+orch.target = "https://radio.nrk.no/podkast/show"
+daemon.go_status = lambda: {}
+with open(daemon.NOW_FILE, "w") as f:
+    json.dump({"id": "e2", "url": E2, "title": "Fantorangen og natta",
+               "image": "/cache/show/e2f00baa.jpg", "paused": False,
+               "duration": None, "resume_pos": 90.0,
+               "target": orch.target}, f)
+mpv.update(path=E2, duration=600.0)
+orch.child_started = time.monotonic()  # just spawned
+
+# 8. mpv ramping from 0 while it loads -> hold at the bookmark, not 0/1/2
+for live in (0.0, 1.0, 42.0):
+    mpv["playback-time"] = live
+    assert orch.status()["position"] == 90.0, (live, "flapped")
+print("8. loading ramp holds at the resume bookmark OK")
+
+# 9. the seek lands (live reaches the target) -> track live smoothly
+mpv["playback-time"] = 90.0
+assert orch.status()["position"] == 90.0
+mpv["playback-time"] = 93.0
+assert orch.status()["position"] == 93.0, "did not release after the seek"
+print("9. releases to live once the seek lands OK")
+
+# 10. a fresh start (resume_pos below the threshold) never holds
+with open(daemon.NOW_FILE, "w") as f:
+    json.dump({"id": "e2", "url": E2, "title": "x", "image": None,
+               "paused": False, "duration": None, "resume_pos": 0.0,
+               "target": orch.target}, f)
+mpv["playback-time"] = 2.0
+assert orch.status()["position"] == 2.0
+print("10. fresh start (no bookmark) reports live from 0 OK")
+
+# 11. the hold can't freeze forever: past the settle window -> live
+with open(daemon.NOW_FILE, "w") as f:
+    json.dump({"id": "e2", "url": E2, "title": "x", "image": None,
+               "paused": False, "duration": None, "resume_pos": 90.0,
+               "target": orch.target}, f)
+orch.child_started = time.monotonic() - daemon.POSITION_SETTLE_MAX_S - 1
+mpv["playback-time"] = 3.0
+assert orch.status()["position"] == 3.0, "still frozen past the window"
+print("11. hold is bounded to the settle window OK")
+
+print("NOW PLAYING OK — no filename flashes, art bridges track changes, "
+      "position holds steady on the bookmark.")

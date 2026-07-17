@@ -439,6 +439,12 @@ def main():
                            "title": titles.get(urls[0]),
                            "image": images.get(urls[0]),
                            "paused": False, "duration": None,
+                           # where mpv is HEADED: it loads at 0 and only
+                           # then seeks here, so tapboxd holds the display
+                           # steady at the bookmark until the seek lands
+                           # instead of flashing 0:00 -> bookmark on every
+                           # start and every reconnect respawn
+                           "resume_pos": start_pos,
                            "target": target}, f)
             os.replace(now_file + ".tmp", now_file)
             qf = os.path.join(STATE_DIR, "now-queue.json")
