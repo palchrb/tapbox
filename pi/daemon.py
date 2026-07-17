@@ -962,11 +962,15 @@ class Orchestrator:
                 out["title"] = name
                 out["position"] = 0
                 out["playing"] = mpv_alive  # a spawn in flight IS starting
-        # Offline-proof cover for the screen: the episode artwork above is
-        # a gfx.nrk.no URL even when the episode itself plays from the
-        # local cache — synced shows have cover.jpg on disk, serve that
-        # alongside so the box needs no network to show SOMETHING.
-        if target and not is_spotify(target):
+        # Offline-proof cover for the screen: the live artwork above is a
+        # remote URL (gfx.nrk.no episode art, or a Spotify track's
+        # i.scdn.co album cover) that can't load with no net — after a
+        # reboot the box resumes before wifi is up, and the card stayed
+        # blank. The cached collection cover (synced shows' cover.jpg,
+        # a playlist's pre-built mosaic) is on disk for both kinds; serve
+        # it so the screen always shows SOMETHING and upgrades to the
+        # live cover once the network fetch lands.
+        if target:
             try:
                 out["artwork_local"] = content.collection_image(target)
             except Exception:

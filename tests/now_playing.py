@@ -127,6 +127,13 @@ assert st["title"] == "Regnvaersanger (live)", st["title"]
 assert orch.spot_pending is None, "pending never cleared"
 print("7. live track replaces the pending identity on load OK")
 
+# 7b. offline-proof cover: a Spotify target carries artwork_local (the
+# cached mosaic) alongside the remote album-art URL, so a reboot-resume
+# with no net yet still shows SOMETHING instead of a blank card
+assert st["artwork"] == "http://scdn/b3.jpg", st["artwork"]  # live remote
+assert st["artwork_local"] == mosaic, st.get("artwork_local")
+print("7b. spotify status carries the offline-proof cached mosaic OK")
+
 
 # --- resume-position hold: the bar must stay on the bookmark while mpv
 # --- loads-then-seeks, not flap 0:00 -> bookmark on every start/respawn

@@ -1276,17 +1276,22 @@ class App:
                    if time.monotonic() < self.wifi_connecting_until
                    else "No internet - X: reconnect")
             d.text((10, 4), msg, font=F_SMALL, fill=WARN)
-        # THE episode's own image first when it's already on disk (the
-        # sync caches per-episode art next to the audio); otherwise the
-        # local show cover beats a remote episode URL — offline-proof,
-        # never waits on gfx.nrk.no. Remote is the online-only fallback.
+        # Cover priority: a per-item image already on disk (podcast
+        # episode art) is instant; a remote cover (Spotify album art,
+        # gfx.nrk.no episode art) is fetched OFF the render thread so it
+        # never blocks or stalls the UI, and lands on a later repaint;
+        # meanwhile the cached collection cover (show cover / playlist
+        # mosaic) fills in immediately so the card is never blank —
+        # offline or while the remote loads.
         ep_art = st.get("artwork")
+        local = st.get("artwork_local")
         art = None
         if ep_art and not str(ep_art).startswith("http"):
             art = self.artwork(ep_art, 128)
-        if art is None:
-            art = (self.artwork(st.get("artwork_local"), 128)
-                   or self.artwork(ep_art, 128))
+        if art is None and ep_art and str(ep_art).startswith("http"):
+            art = self.artwork_async(ep_art, 128)  # non-blocking; may be None
+        if art is None and local:
+            art = self.artwork(local, 128)  # offline-proof fallback
         if art:
             img.paste(art, ((W - art.width) // 2, 24))
             ty = 156

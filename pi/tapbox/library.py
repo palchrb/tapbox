@@ -183,7 +183,12 @@ def sync_profile_sections():
 # sequentially at nice 19, and failures are just retried next sweep.
 
 SYNC_INTERVAL_S = int(os.environ.get("TAPBOX_SYNC_INTERVAL", 6 * 3600))
-SYNC_DELAY_S = int(os.environ.get("TAPBOX_SYNC_DELAY", 30))
+# 90s (not 30): the boot resume fires ~30s in, and the sweep's podcast
+# downloads saturate the Zero's single 2.4GHz link — a track skip right
+# after boot then waited on a starved go-librespot control call (field
+# log 2026-07-17: /next timed out ~20s after resume, mid-sweep). Push the
+# first sweep past the initial interaction window.
+SYNC_DELAY_S = int(os.environ.get("TAPBOX_SYNC_DELAY", 90))
 _sync_wake = threading.Event()
 
 
