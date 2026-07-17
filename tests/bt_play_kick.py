@@ -126,32 +126,75 @@ daemon._bt_transport_ready = lambda: TRANSPORT[0]
 # 8. play intent with the speaker away -> bt_waiting
 set_output("bt")
 daemon.ORCH.command("playpause")
-w, r = daemon._bt_wait_state(playing=False)
-assert (w, r) == (True, False), (w, r)
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (True, False, False), (w, r, l)
 print("8. play against a missing speaker -> bt_waiting OK")
 
 # 9. transport shows up -> flips to bt_ready ("press play"), not waiting
 TRANSPORT[0] = True
-w, r = daemon._bt_wait_state(playing=False)
-assert (w, r) == (False, True), (w, r)
-w, r = daemon._bt_wait_state(playing=False)
-assert (w, r) == (False, True), "ready must persist for its window"
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, True, False), (w, r, l)
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, True, False), "ready must persist its window"
 print("9. transport up -> bt_ready popup OK")
 
 # 10. they pressed play -> both popups gone
-w, r = daemon._bt_wait_state(playing=True)
-assert (w, r) == (False, False), (w, r)
-w, r = daemon._bt_wait_state(playing=False)
-assert (w, r) == (False, False), "ready must clear once play happened"
+w, r, l = daemon._bt_wait_state(playing=True)
+assert (w, r, l) == (False, False, False), (w, r, l)
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), "ready must clear after play"
 print("10. playing clears the popups OK")
 
 # 11. stale intent (kid walked away) expires without ever flipping ready
 TRANSPORT[0] = False
 daemon.ORCH.command("playpause")
 daemon._BT_WAIT["since"] = time.monotonic() - daemon.BT_WAIT_S - 1
-w, r = daemon._bt_wait_state(playing=False)
-assert (w, r) == (False, False), (w, r)
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
 print("11. stale wait expires quietly OK")
+
+
+# --- the speaker DIED mid-play (btwatchd's /bt/lost hint): stop the
+# --- player before mpv error-skips through the queue (field log
+# --- 2026-07-17: ~15 episodes in 3s), then offer the choice ---------------
+
+ALIVE = [False]
+daemon.Orchestrator._mpv_alive = lambda self: ALIVE[0]
+STOPPED = []
+daemon.Orchestrator._stop_child = (
+    lambda self: (STOPPED.append(1), ALIVE.__setitem__(0, False)))
+
+# 12. playing on bt + transport dies -> player stopped, bt_lost armed
+ALIVE[0] = True
+r12 = daemon._bt_transport_lost()
+assert r12 == {"stopped": True} and STOPPED, r12
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, True), (w, r, l)
+print("12. transport death mid-play stops the player + arms bt_lost OK")
+
+# 13. speaker comes back while lost -> "press A to play" flash
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, True, False), (w, r, l)
+print("13. speaker back -> bt_ready, lost cleared OK")
+
+# 14. guards: local output or no player -> a (stale) hint is a no-op
+TRANSPORT[0] = False
+STOPPED.clear()
+set_output("local")
+ALIVE[0] = True
+assert daemon._bt_transport_lost() == {"stopped": False} and not STOPPED
+set_output("bt")
+ALIVE[0] = False
+assert daemon._bt_transport_lost() == {"stopped": False} and not STOPPED
+print("14. lost hint never touches local playback or a dead player OK")
+
+# 15. resuming playback (any route) clears bt_lost
+ALIVE[0] = True
+daemon._bt_transport_lost()
+w, r, l = daemon._bt_wait_state(playing=True)
+assert (w, r, l) == (False, False, False), (w, r, l)
+print("15. playing clears bt_lost OK")
 
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
       "not after the backoff, heals a crashed controller, and the "

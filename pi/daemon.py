@@ -49,6 +49,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /bt/scan    scan ~20s, list nearby devices (pick one -> /bt/connect)
   POST /bt/pair    {"name"?} — one-button flow: auto-pair the single audio
                    device in pairing mode (play.sh's validated flow)
+  POST /bt/lost    internal (btwatchd): the speaker's transport died —
+                   stop mpv before it error-skips the queue, arm the
+                   screen's "disconnected" choice popup
   POST /bt/visible {"secs"?} — incoming pairing mode: the box becomes
                    discoverable for ~2 min and accepts a pairing started
                    FROM a car/head unit; the new bond shows up in GET /bt
@@ -934,7 +937,12 @@ class Orchestrator:
                 out["artwork_local"] = content.collection_image(target)
             except Exception:
                 out["artwork_local"] = None
-        out["bt_waiting"], out["bt_ready"] = _bt_wait_state(out["playing"])
+        out["bt_waiting"], out["bt_ready"], out["bt_lost"] = \
+            _bt_wait_state(out["playing"])
+        if out["bt_lost"]:
+            # the popup's A-option ("play on the box speaker") is only
+            # offered where a box speaker exists — BT-only boxes get X
+            out["bt_local_ok"] = _i2s_card_present()
         return out
 
 
@@ -1298,6 +1306,10 @@ class Handler(BaseHTTPRequestHandler):
                 _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
+            elif self.path == "/bt/lost":
+                # internal: btwatchd's transport-died hint (see
+                # _bt_transport_lost — guarded, safe on duplicates)
+                self._send(200, _bt_transport_lost())
             elif self.path == "/bt/visible":
                 try:
                     secs = min(max(int(body.get("secs") or 120), 10), 300)
@@ -1484,19 +1496,47 @@ def _heal_crashed_controller():
 # the box screen's speaker popups (field log 2026-07-17: the speaker came
 # up 25s before anyone pressed play again — nobody KNEW it was ready).
 # since>0 = a play attempt hit a disconnected speaker ("not connected,
-# waiting..." popup); when the transport then shows up, that flips to a
-# short "connected — press play" window. All consumed via /status.
-_BT_WAIT = {"since": 0.0, "ready_until": 0.0}
+# waiting..." popup); lost>0 = the speaker DIED mid-play and we stopped
+# the player ("disconnected — X: reconnect, A: play on the box speaker");
+# when the transport then shows up, either flips to a short "connected —
+# press play" window. All consumed via /status.
+_BT_WAIT = {"since": 0.0, "ready_until": 0.0, "lost": 0.0}
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
 
 
+def _bt_transport_lost():
+    """btwatchd's transport-died notification. If mpv is playing into
+    the dead speaker, every episode now ERRORS and auto-advances (field
+    log 2026-07-17: ~15 episodes skipped in 3s — the stall watchdog
+    can't see it, the position is moving). Stop the player — the 3s
+    bookmark preserves the exact episode/position, the same trick the
+    stall watchdog uses — and arm the screen's choice popup. Guarded:
+    a drop for a speaker we're not playing into is a no-op, so a stale
+    or duplicate notification can never kill local playback."""
+    with ORCH.lock:
+        if current_output()["output"] != "bt" or not ORCH._mpv_alive():
+            return {"stopped": False}
+        log("bt transport lost mid-play — stopping (bookmark survives)")
+        ORCH._stop_child()
+    _BT_WAIT["lost"] = time.monotonic()
+    return {"stopped": True}
+
+
 def _bt_wait_state(playing):
-    """(bt_waiting, bt_ready) for /status. The transport probe runs only
-    while a wait is pending — bounded to BT_WAIT_S after the last play
-    attempt — so the screen's 1/s status poll costs nothing extra in
-    steady state."""
+    """(bt_waiting, bt_ready, bt_lost) for /status. The transport probe
+    runs only while a wait/lost is pending — bounded to BT_WAIT_S — so
+    the screen's 1/s status poll costs nothing extra in steady state."""
     now = time.monotonic()
+    if _BT_WAIT["lost"]:
+        if (playing or now - _BT_WAIT["lost"] > BT_WAIT_S
+                or current_output()["output"] != "bt"):
+            # resumed, expired, or the output moved on (A-choice or the
+            # follow-the-speaker fallback flipped to the box speaker)
+            _BT_WAIT["lost"] = 0.0
+        elif _bt_transport_ready():
+            _BT_WAIT["lost"] = 0.0  # speaker is back: "press A to play"
+            _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
     if _BT_WAIT["since"]:
         if now - _BT_WAIT["since"] > BT_WAIT_S:
             _BT_WAIT["since"] = 0.0  # stale intent: kid walked away
@@ -1504,11 +1544,11 @@ def _bt_wait_state(playing):
             _BT_WAIT["since"] = 0.0
             _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
         else:
-            return True, False
+            return True, False, bool(_BT_WAIT["lost"])
     if playing:
         _BT_WAIT["ready_until"] = 0.0  # they pressed play — popup done
-        return False, False
-    return False, now < _BT_WAIT["ready_until"]
+        return False, False, False
+    return False, now < _BT_WAIT["ready_until"], bool(_BT_WAIT["lost"])
 
 
 def _kick_bt_connect():

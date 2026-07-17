@@ -786,9 +786,13 @@ class App:
         # A = play/pause: the same physical button that selects in the
         # menus — pick something / pause it feel like one action. B is
         # previous (hold = back to the menu, mirroring short-B in menus).
-        if ev == "x" and (self.status or {}).get("bt_waiting"):
+        st = self.status or {}
+        if ev == "x" and (st.get("bt_waiting") or st.get("bt_lost")):
             # the popup is modal for X: volume without sound is pointless
             self._bt_connect_last()
+            return
+        if ev == "a" and st.get("bt_lost") and st.get("bt_local_ok"):
+            self._play_on_local()  # the popup's "play on box speaker"
             return
         in_vol = time.monotonic() < self.vol_mode_until
         try:
@@ -898,9 +902,13 @@ class App:
         ents = self.flat_entries()
         if not ents:
             return
-        if ev == "x" and (self.status or {}).get("bt_waiting"):
+        st = self.status or {}
+        if ev == "x" and (st.get("bt_waiting") or st.get("bt_lost")):
             # the popup is modal for X: volume without sound is pointless
             self._bt_connect_last()
+            return
+        if ev == "a" and st.get("bt_lost") and st.get("bt_local_ok"):
+            self._play_on_local()  # the popup's "play on box speaker"
             return
         in_vol = time.monotonic() < self.vol_mode_until
         try:
@@ -1361,6 +1369,20 @@ class App:
         moment the transport is up: 'press A'. Painted LAST, over the
         volume card; self-clears because the daemon expires both states."""
         st = self.status or {}
+        if st.get("bt_lost"):
+            # the speaker DIED mid-play and the daemon stopped playback
+            # (mpv skips episodes wildly into a dead device otherwise)
+            d.rounded_rectangle([22, 70, W - 22, 156], radius=10,
+                                fill=(45, 30, 30))
+            d.text((W // 2, 80), "Speaker disconnected", font=F_MED,
+                   fill=WARN, anchor="ma")
+            hint = ("connecting..." if time.monotonic()
+                    < self.bt_connecting_until else "X: reconnect")
+            d.text((W // 2, 108), hint, font=F_SMALL, fill=FG, anchor="ma")
+            if st.get("bt_local_ok"):
+                d.text((W // 2, 130), "A: play on box speaker",
+                       font=F_SMALL, fill=DIM, anchor="ma")
+            return True
         if st.get("bt_waiting"):
             d.rounded_rectangle([22, 74, W - 22, 152], radius=10,
                                 fill=(45, 30, 30))
@@ -1382,6 +1404,20 @@ class App:
                    anchor="ma")
             return True
         return False
+
+    def _play_on_local(self):
+        """The lost-popup's A action: the kid chooses sound NOW over
+        waiting for the speaker — flip the output to the built-in one
+        and resume from the bookmark. Fire-and-forget; the popup clears
+        itself via /status (the output is no longer bt)."""
+        def go():
+            try:
+                api_post("/output", {"device": "local"}, timeout=30)
+                api_post("/playpause", timeout=CONTROL_TIMEOUT)
+            except OSError as e:
+                log(f"play-on-local failed: {e}")
+            self.last_status = 0
+        threading.Thread(target=go, daemon=True).start()
 
     def _bt_connect_last(self):
         """The popup's X action: fire-and-forget full connect of the

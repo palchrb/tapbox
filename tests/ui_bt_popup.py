@@ -122,4 +122,48 @@ time.sleep(0.2)
 assert not POSTS and len(VOLUME) == 2, (POSTS, VOLUME)
 print("5. no popup -> X is the volume card as before OK")
 
+
+# --- the lost popup (speaker died mid-play; daemon stopped the player) ------
+
+# 6. renders, with the A-option only where a box speaker exists
+img, d = blank_draw()
+app.status = {"bt_lost": True, "bt_local_ok": True}
+assert app._bt_overlay(d) is True
+img, d = blank_draw()
+app.status = {"bt_lost": True}  # BT-only box: X is the only offer
+assert app._bt_overlay(d) is True
+print("6. lost popup renders (with and without the A-option) OK")
+
+# 7. A on the lost popup flips output to the box speaker and resumes
+POSTS.clear()
+app.status = {"bt_lost": True, "bt_local_ok": True}
+app.handle_now("a")
+wait_for("play-on-local fired", lambda: len(POSTS) == 2)
+assert POSTS == [("/output", {"device": "local"}), ("/playpause", None)], \
+    POSTS
+print("7. A on the lost popup -> output local + resume OK")
+
+# 8. same from the kid-mode carousel
+POSTS.clear()
+app.handle_carousel("a")
+wait_for("carousel play-on-local fired", lambda: len(POSTS) == 2)
+assert POSTS[0] == ("/output", {"device": "local"}), POSTS
+print("8. carousel A on the lost popup -> output local + resume OK")
+
+# 9. no box speaker: A falls through to the normal play/pause
+POSTS.clear()
+app.status = {"bt_lost": True}
+app.handle_now("a")
+time.sleep(0.2)
+assert POSTS == [("/playpause", None)], POSTS
+print("9. BT-only box: A stays plain play/pause OK")
+
+# 10. X on the lost popup runs the reconnect, like the waiting popup
+POSTS.clear()
+app.bt_connecting_until = 0.0
+app.handle_now("x")
+wait_for("lost-popup X connects", lambda: POSTS)
+assert POSTS[0][0] == "/bt/connect", POSTS
+print("10. X on the lost popup reconnects the speaker OK")
+
 print("ui_bt_popup: all OK")

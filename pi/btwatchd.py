@@ -159,6 +159,7 @@ class Reconnector:
                     self.backoff = BACKOFF_MIN_S
                     if self.disconnected_since is None:
                         self.disconnected_since = time.monotonic()
+                    self._notify_lost()
                     self.schedule(DROP_RETRY_S, "target dropped")
             elif self.state == "WAITING":
                 # RSSI etc. — evidence the device is nearby right now
@@ -291,6 +292,21 @@ class Reconnector:
         if want and want != self.announced:
             self._output(want)
         return False
+
+    def _notify_lost(self):
+        """Tell tapboxd the transport just died. mpv reacts to a dead
+        ALSA device by ERRORING each episode and auto-advancing — field
+        log 2026-07-17: ~15 episodes skipped in 3s before the output
+        fallback caught up (the stall watchdog can't see it: the
+        position isn't frozen, it's flying). The daemon stops playback
+        (bookmark survives) and puts the choice on the screen. A hint,
+        not a command: fire-and-forget, no retry — the daemon re-checks
+        output + player state itself, and never on the radio path."""
+        try:
+            boxapi.post("/bt/lost", {}, timeout=3)
+        except Exception as e:
+            log(f"lost-notify failed ({e.__class__.__name__}) — "
+                "the output fallback remains the backstop")
 
     # --- the attempt ---------------------------------------------------------
 

@@ -88,7 +88,14 @@ def main():
     spec.loader.exec_module(bw)
 
     posts = []
-    bw.boxapi.post = lambda path, body, timeout=5: (posts.append(body), {})[1]
+    bw.boxapi.post = lambda path, body, timeout=5: (
+        posts.append((path, body)), {})[1]
+
+    def outputs():
+        return [b["device"] for p, b in posts if p == "/output"]
+
+    def losts():
+        return [p for p, _b in posts if p == "/bt/lost"]
     from tapbox import btbus
     pcm = {"v": False}
     btbus.a2dp_pcm_present = lambda mac: pcm["v"]
@@ -112,23 +119,27 @@ def main():
     assert posts == [], f"announced bt with no transport: {posts}"
     pcm["v"] = True
     fire()
-    assert [p["device"] for p in posts] == ["bt"], posts
+    assert outputs() == ["bt"], posts
     print("1. bt announce waits for the A2DP PCM OK")
 
-    # 2: drop -> within the window no local; sustained absence -> local
+    # 2: drop -> lost-notify fires ONCE (tapboxd stops the player before
+    # mpv error-skips the queue); within the window no local fallback,
+    # sustained absence -> local
     posts.clear()
     connected["v"] = False
     r._props_changed("org.bluez.Device1", {"Connected": False}, [],
                      path=bw.dev_path(r.target))
+    assert losts() == ["/bt/lost"], f"drop must notify tapboxd: {posts}"
     timers.clear()
     r.state = "WAITING"
     r._attempt_failed("page-timeout")          # inside FALLBACK window
-    assert posts == [], f"premature fallback to local: {posts}"
+    assert outputs() == [], f"premature fallback to local: {posts}"
     time.sleep(1.1)
     timers.clear()
     r._attempt_failed("page-timeout")          # past the window
-    assert [p["device"] for p in posts] == ["local"], posts
-    print("2. local fallback only after sustained absence OK")
+    assert outputs() == ["local"], posts
+    print("2. drop notifies tapboxd; local fallback only after "
+          "sustained absence OK")
 
     # 3: a failed attempt while already connected must not churn output
     posts.clear()
@@ -142,7 +153,9 @@ def main():
     assert posts == [] and timers == [], (posts, timers)
     print("3. stale failure while connected is a no-op OK")
 
-    # 4: quick drop->reconnect flap leaves the output alone
+    # 4: quick drop->reconnect flap leaves the output alone (the lost
+    # notify still fires — tapboxd's guard makes it a no-op when nothing
+    # was playing into the speaker)
     posts.clear()
     r.announced = "bt"
     connected["v"] = False
@@ -152,7 +165,7 @@ def main():
     pcm["v"] = True
     r.enter_steady("reconnected")              # back within the window
     fire()
-    assert posts == [], f"flap churned the output: {posts}"
+    assert outputs() == [], f"flap churned the output: {posts}"
     assert r.disconnected_since is None
     print("4. quick flap leaves output alone OK")
 
