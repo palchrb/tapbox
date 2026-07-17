@@ -1698,12 +1698,31 @@ def _portal_server():
     srv.serve_forever()
 
 
+def _prewarm_mpv():
+    """The first mpv launch of a boot cold-loads mpv + the ffmpeg stack
+    (tens of MB) from the SD card at the powersave clock — field log
+    2026-07-17: 11s of silence between the player's 'resuming ...' and
+    the first audio, with an impatient second press pausing it right as
+    it started. Page the libraries in once while the box is idle; later
+    launches hit the page cache (~2-3s). The delay keeps it out of the
+    boot rush (boot resume, service starts) — the point is warming the
+    cache BEFORE the first human play, not during boot I/O."""
+    time.sleep(15)
+    try:
+        subprocess.run(["mpv", "--version"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=120)
+        log("mpv prewarmed (libraries paged in)")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"mpv prewarm failed: {e!r}")
+
+
 def main():
     try:
         signal.signal(signal.SIGTERM, _on_term)
     except ValueError:
         pass  # not the main thread (tests run main() in a thread)
     threading.Thread(target=_boot_resume, daemon=True).start()
+    threading.Thread(target=_prewarm_mpv, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
     _wifi_boot_reenable()
