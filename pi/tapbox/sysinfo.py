@@ -165,11 +165,18 @@ def _smoothed_pct(pct, plugged):
 BATT_RUNTIME_FILE = os.path.join(STATE_DIR, "on-battery-runtime.json")
 
 
-CHARGE_RESET_PCT = 10  # a battery level that ROSE this much ACROSS AN OFF
-                       # PERIOD means it was charged while powered off. Only
-                       # trusted on the first tick after boot — the
-                       # voltage-modelled percent swings several points with
-                       # load minute-to-minute, which must not reset the timer.
+CHARGE_RESET_PCT = int(os.environ.get("TAPBOX_CHARGE_RESET_PCT", "25"))
+# a battery level that ROSE this much ACROSS AN OFF PERIOD means it was
+# charged while powered off. Only trusted on the first tick after boot.
+# 25 (not 10): a Li-Ion pack's voltage RELAXES upward when the load drops
+# (heavy use at shutdown -> resting at boot), and the voltage-modelled
+# percent can climb 10-15% with no charge at all — the field-reported
+# "runtime resets for no reason" was this relaxation crossing a low
+# threshold. A real off-charge is a much bigger jump.
+CHARGE_CONFIRM_TICKS = int(os.environ.get("TAPBOX_CHARGE_CONFIRM", "2"))
+# plugged/charging must read true this many ticks in a row before we
+# reset: PiSugar occasionally reports a single spurious 'plugged', and
+# one bad read used to wipe the whole counter mid-session.
 
 
 def _load_runtime():
@@ -190,19 +197,23 @@ def _battery_runtime():
     return _load_runtime()[0]
 
 
-def _runtime_step(delta, plugged, charging, pct, prev_accum, prev_pct,
-                  first_tick):
-    """One tick's decision (pure). Returns None to reset the counter, else
-    (accum_seconds, last_pct) to persist. Charging resets: plugged in, or
-    actively charging (catches a flaky 'plugged'). A risen battery level
-    also resets — but ONLY on the first tick after boot, comparing across
-    the off period to catch a charge that happened while powered off.
-    Mid-session that signal is ignored: the voltage-modelled percent
-    bounces several points with load and would falsely reset the timer."""
-    rose = (first_tick and pct is not None and prev_pct is not None
-            and pct > prev_pct + CHARGE_RESET_PCT)
-    if plugged == "true" or charging == "true" or rose:
+HOLD = "hold"  # unconfirmed charge: neither reset nor accumulate this tick
+
+
+def _runtime_step(delta, charging_now, confirmed, rose, prev_accum, pct):
+    """One tick's decision (pure). Returns:
+      None            reset the counter (confirmed charge, or a charge
+                      across the off period seen on the first boot tick)
+      HOLD            a charging read that is NOT yet confirmed over
+                      CHARGE_CONFIRM_TICKS — hold the counter still so one
+                      spurious 'plugged' can't wipe it
+      (accum, pct)    on battery: accumulate the elapsed time
+    The debounce (charging_now/confirmed) and the off-period rise (rose)
+    are computed by the caller from the raw PiSugar reads."""
+    if rose:
         return None
+    if charging_now:
+        return None if confirmed else HOLD
     return int((prev_accum or 0) + delta), pct
 
 
@@ -218,6 +229,7 @@ def _battery_runtime_tracker():
     session onto session into implausible totals."""
     last = time.monotonic()
     first_tick = True  # the boot-vs-last-session comparison happens once
+    charge_ticks = 0   # consecutive ticks reading plugged/charging
     while True:
         time.sleep(60)
         try:
@@ -229,9 +241,16 @@ def _battery_runtime_tracker():
             charging = pisugar_get("battery_charging")
             pct = _safe_pct(pisugar_get("battery"))
             prev_accum, prev_pct = _load_runtime()
-            step = _runtime_step(delta, plugged, charging, pct,
-                                 prev_accum, prev_pct, first_tick)
+            charging_now = plugged == "true" or charging == "true"
+            charge_ticks = charge_ticks + 1 if charging_now else 0
+            confirmed = charge_ticks >= CHARGE_CONFIRM_TICKS
+            rose = (first_tick and pct is not None and prev_pct is not None
+                    and pct > prev_pct + CHARGE_RESET_PCT)
+            step = _runtime_step(delta, charging_now, confirmed, rose,
+                                 prev_accum, pct)
             first_tick = False
+            if step is HOLD:
+                continue  # unconfirmed charge — leave the counter untouched
             if step is None:
                 try:
                     os.remove(BATT_RUNTIME_FILE)
