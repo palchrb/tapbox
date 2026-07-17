@@ -1677,12 +1677,25 @@ def _go_output_rebuild():
     seconds — the output retarget on the same reconnect, or a racing
     rebuild — its ALSA handle is already fresh, so we skip the restart
     and only wait for the API. Restarting again just re-bursts the
-    shared radio and re-flaps the speaker (field storm 2026-07-17)."""
+    shared radio and re-flaps the speaker (field storm 2026-07-17).
+
+    Comes back on the CURRENT output device. Switching the output to bt
+    while audio played on the built-in speaker leaves go-librespot's
+    config on tapbox_local (the switch is deferred until the transport
+    exists) — a plain restart would resume on the built-in one, so the
+    kid pressed reconnect and it kept playing there, needing a manual
+    bt/local toggle to move to the headset (field 2026-07-17). Retarget
+    rewrites the config to the current output AND restarts, which is
+    exactly what that toggle did."""
     with _GO_REBUILD_LOCK:
         now = time.monotonic()
         fresh = now - _GO_REBUILD["at"] < GO_REBUILD_COOLDOWN_S
         _GO_REBUILD["at"] = now
-    if fresh:
+    pcm = current_output().get("pcm")
+    if pcm and _retarget_go_librespot(pcm):
+        # config pointed at the wrong device — moved it + restarted
+        log("go-librespot retargeted to the current output (restart)")
+    elif fresh:
         log("go-librespot already rebuilt this reconnect — waiting for "
             "login, not restarting again")
     else:

@@ -410,6 +410,22 @@ assert len(REST) == 1 and "restart" in REST[0], \
     f"a rebuild past the cooldown must restart: {REST}"
 print("22. go-librespot restarts collapse to one per reconnect OK")
 
+# 23. resume after an output-switch-to-bt must land on the HEADSET, not
+# the built-in speaker. The deferred switch left go-librespot's config on
+# tapbox_local (it was playing there); the rebuild must RETARGET to the
+# current output's pcm, or it resumes on the built-in one and needs a
+# manual bt/local toggle to move (field 2026-07-17).
+with open(daemon.OUT_FILE, "w") as f:
+    json.dump({"output": "bt", "pcm": "tapbox_bt"}, f)
+RETARGET = []
+daemon._retarget_go_librespot = lambda pcm: (RETARGET.append(pcm) is None
+                                             and True)
+daemon._GO_REBUILD["at"] = time.monotonic()   # even 'fresh', retarget wins
+daemon._go_output_rebuild()
+assert RETARGET == ["tapbox_bt"], \
+    f"rebuild must retarget to the current output: {RETARGET}"
+print("23. rebuild retargets go-librespot to the current output device OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
       "not after the backoff, heals a crashed controller, the screen "
       "knows what to say, resumes even while asleep, and no longer "
