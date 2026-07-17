@@ -27,6 +27,8 @@ CLI (used by play.sh and tapboxd's /bt endpoints):
   bt.py connect [name]  auto-pair: the single audio device in pairing mode
   bt.py use <MAC>       connect a device (pairs first when unknown)
   bt.py forget <MAC>    drop the bond (clears config if it was active)
+  bt.py rename <MAC> [NAME]  set a custom display name (blank = reset);
+                        dbus backend only — writes BlueZ Device1.Alias
   bt.py ensure          connect the remembered device, else auto-pair
   bt.py reconnect       tear down + rebuild the configured device's link
   bt.py visible [secs] [adopt]  incoming pairing mode: the box becomes
@@ -593,6 +595,15 @@ def main():
             return 0 if ok else 1
         fn = connect if cmd == "use" else forget
         return 0 if fn(args[1]) else 1
+    if cmd == "rename":
+        # not a radio op (a plain property write) — no lock, safe during
+        # playback, so it's absent from _RADIO_CMDS above
+        if len(args) < 2 or not MAC_RE.match(args[1]):
+            print("usage: bt.py rename <MAC> [NAME]", file=sys.stderr)
+            return 1
+        ok, out = btbus.set_alias(args[1], args[2] if len(args) > 2 else "")
+        log(out.strip() if out else "")
+        return 0 if ok else 1
     if cmd == "ensure":
         return 0 if ensure() else 1
     if cmd == "reconnect":

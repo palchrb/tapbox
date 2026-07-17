@@ -289,6 +289,36 @@ def remove_device(mac):
     return REMOVE_ERROR, out
 
 
+def set_alias(mac, name):
+    """Give a bonded device a custom display name via BlueZ
+    Device1.Alias. Every listing already reads Alias, so the name flows
+    to the PWA and the device screen with no display changes. An empty
+    name CLEARS the alias — BlueZ then falls back to the device's real
+    Name. dbus-native: bluetoothctl has no reliable one-shot per-device
+    alias set, so the cli backend reports that instead of guessing.
+    Returns (ok, effective_name_or_message)."""
+    if backend() == "dbus":
+        try:
+            return _dbus_set_alias(mac, name)
+        except Exception as e:
+            name = getattr(e, "get_dbus_name", lambda: "")() or ""
+            if "UnknownObject" in name or "DoesNotExist" in name:
+                return False, "no such device"
+            log(f"bt dbus set-alias failed ({e.__class__.__name__})")
+            return False, f"rename failed: {e.__class__.__name__}"
+    return False, "renaming a speaker needs the dbus backend"
+
+
+def _dbus_set_alias(mac, name):
+    import dbus
+    props = dbus.Interface(_bus().get_object(_BLUEZ, _dev_path(mac)),
+                           "org.freedesktop.DBus.Properties")
+    props.Set("org.bluez.Device1", "Alias", dbus.String(name), timeout=10)
+    # read back: an empty set makes BlueZ restore the remote Name, so the
+    # caller (and the log) reports the name that actually took effect
+    return True, str(props.Get("org.bluez.Device1", "Alias", timeout=10))
+
+
 # error-name mapping: pure functions, unit-testable without a bus --------
 
 def _map_connect_error(name, msg):

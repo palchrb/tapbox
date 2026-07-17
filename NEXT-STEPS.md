@@ -6,7 +6,14 @@ kostnad/risiko, anbefaling.
 
 ---
 
-## Rename BT-enheter fra PWA-en (egendefinert navn) — *lett*
+## ✅ Rename BT-enheter fra PWA-en — LEVERT (bygget via Alias, som foreslått)
+
+Bygget: `POST /bt/rename {mac, name}` → `bt.py rename` → `btbus.set_alias`
+(BlueZ `Device1.Alias`); «Rename»-knapp per enhet i PWA-en; navnet vises i
+PWA-lista og på device-skjermen uten visningsendringer; tomt navn
+tilbakestiller til fabrikknavnet; navnet saniteres (printbart, én linje,
+maks 64). Gated av `tests/bt_rename.py`. Detaljene under står igjen som
+referanse for hvordan/hvorfor.
 
 **Hva:** La brukeren gi en BT-høyttaler/headset et eget navn (f.eks. «Bilen»,
 «Barnerommet») i PWA-en. Navnet skal vises både i PWA-lista og på

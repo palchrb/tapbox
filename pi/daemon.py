@@ -63,6 +63,8 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
                    is new (picked from a scan), routes audio to it
   POST /bt/forget  {"mac"}  — drop the bond (permanent)
   POST /bt/disconnect {"mac"} — hang up without forgetting
+  POST /bt/rename  {"mac", "name"} — custom display name (blank resets);
+                   shows in the PWA + on the screen (BlueZ Device1.Alias)
 
 The library lives in /etc/tapbox/library.json ON THE BOX — menus must
 render (and cached content must play) with no internet at all. A future
@@ -1405,6 +1407,18 @@ class Handler(BaseHTTPRequestHandler):
                     _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
+            elif self.path == "/bt/rename":
+                mac = str(body.get("mac") or "")
+                if not MAC_RE.match(mac):
+                    self._send(400, {"error": "valid mac required"})
+                    return
+                # a custom name for the speaker (blank clears it), sanitized
+                # before it reaches BlueZ / the screen; a plain property
+                # write, no radio quiesce.
+                name = _clean_bt_name(body.get("name"))
+                r = bt_action(["rename", mac, name], timeout=20)
+                self._send(409 if r is None else 200,
+                           r or {"error": "bt operation already in progress"})
             elif self.path == "/stop":
                 self._send(200, ORCH.stop())
             else:
@@ -1412,6 +1426,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # never let one request kill the daemon
             log(f"error on {self.path}: {e!r}")
             self._send(500, {"error": str(e)})
+
+
+def _clean_bt_name(raw):
+    """Sanitize a user-supplied speaker name before it reaches BlueZ and
+    the screen: drop control/non-printable chars, collapse to a single
+    line, cap the length. Blank (after cleaning) clears the alias."""
+    return "".join(c for c in str(raw or "") if c.isprintable())[:64].strip()
 
 
 def _bt_quiesce():

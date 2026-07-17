@@ -799,6 +799,18 @@ async function loadBt() {
         btAction("/bt/disconnect", { mac: d.mac }, "Disconnecting …"));
       row.append(disc);
     }
+    const rename = document.createElement("button");
+    rename.textContent = "Rename";
+    rename.addEventListener("click", () => {
+      const next = prompt(
+        `Name for this speaker (blank resets to the factory name):`,
+        d.name);
+      if (next === null) return;             // cancelled
+      btAction("/bt/rename", { mac: d.mac, name: next.trim() },
+        "Renaming …");
+    });
+    row.append(rename);
+
     const forget = document.createElement("button");
     forget.textContent = "Forget";
     forget.className = "danger";
