@@ -526,6 +526,7 @@ class App:
         self.volume_flash = 0.0     # show volume overlay until this time
         self.volume_shown = None
         self.vol_mode_until = 0.0   # while set: B/Y adjust volume (X opened it)
+        self.bt_connecting_until = 0.0  # popup X pressed: full connect running
         self.catch_up_until = 0.0   # repaint every tick until this time
         self.last_status = 0.0
         self.last_system = 0.0
@@ -785,6 +786,10 @@ class App:
         # A = play/pause: the same physical button that selects in the
         # menus — pick something / pause it feel like one action. B is
         # previous (hold = back to the menu, mirroring short-B in menus).
+        if ev == "x" and (self.status or {}).get("bt_waiting"):
+            # the popup is modal for X: volume without sound is pointless
+            self._bt_connect_last()
+            return
         in_vol = time.monotonic() < self.vol_mode_until
         try:
             if ev == "a":
@@ -892,6 +897,10 @@ class App:
         A+B hold."""
         ents = self.flat_entries()
         if not ents:
+            return
+        if ev == "x" and (self.status or {}).get("bt_waiting"):
+            # the popup is modal for X: volume without sound is pointless
+            self._bt_connect_last()
             return
         in_vol = time.monotonic() < self.vol_mode_until
         try:
@@ -1303,6 +1312,7 @@ class App:
         d.polygon([(W - 19, 178), (W - 19, 192), (W - 9, 185)], fill=DIM)
         d.rectangle([W - 7, 178, W - 5, 192], fill=DIM)
         self._volume_overlay(d)
+        self._bt_overlay(d)
         return rolls
 
     def _volume_overlay(self, d):
@@ -1314,6 +1324,57 @@ class App:
                    fill=HILITE, anchor="ma")
             d.text((60, 116), "B  -", font=F_SMALL, fill=DIM)
             d.text((W - 60, 116), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
+
+    def _bt_overlay(self, d):
+        """Speaker-state popup, driven entirely by /status (field log
+        2026-07-17: the speaker came up 25s before anyone pressed play —
+        nobody KNEW it was ready). bt_waiting = a play attempt hit a
+        disconnected speaker: tell them, and offer X = a full connect of
+        the configured device (incl. crash recovery — stronger than the
+        kick that already happened). The daemon flips it to bt_ready the
+        moment the transport is up: 'press A'. Painted LAST, over the
+        volume card; self-clears because the daemon expires both states."""
+        st = self.status or {}
+        if st.get("bt_waiting"):
+            d.rounded_rectangle([22, 74, W - 22, 152], radius=10,
+                                fill=(45, 30, 30))
+            d.text((W // 2, 84), "Speaker not connected", font=F_MED,
+                   fill=WARN, anchor="ma")
+            hint = ("connecting..." if time.monotonic()
+                    < self.bt_connecting_until
+                    else "turn the speaker on — waiting")
+            d.text((W // 2, 110), hint, font=F_SMALL, fill=FG, anchor="ma")
+            d.text((W // 2, 130), "X: connect now", font=F_SMALL, fill=DIM,
+                   anchor="ma")
+            return True
+        if st.get("bt_ready"):
+            d.rounded_rectangle([22, 82, W - 22, 144], radius=10,
+                                fill=(28, 45, 30))
+            d.text((W // 2, 92), "Speaker connected!", font=F_MED,
+                   fill=HILITE, anchor="ma")
+            d.text((W // 2, 118), "Press A to play", font=F_SMALL, fill=FG,
+                   anchor="ma")
+            return True
+        return False
+
+    def _bt_connect_last(self):
+        """The popup's X action: fire-and-forget full connect of the
+        configured speaker (bt.py use — includes firmware-crash
+        recovery). Progress comes back via /status; the daemon 409s
+        overlapping attempts, so mashing X is harmless."""
+        if time.monotonic() < self.bt_connecting_until:
+            return
+        self.bt_connecting_until = time.monotonic() + 60
+
+        def go():
+            try:
+                mac = (api_get("/bt", timeout=10) or {}).get("configured")
+                if mac:
+                    api_post("/bt/connect", {"mac": mac}, timeout=120)
+            except (OSError, ValueError):
+                pass
+            self.bt_connecting_until = 0.0
+        threading.Thread(target=go, daemon=True).start()
 
     def render_carousel(self, d, img):
         """Kid mode: ONE big cover per entry — flip with B/Y, play with A.
@@ -1375,6 +1436,7 @@ class App:
                 d.rectangle([ax, ay + 172, ax + frac * 176, ay + 176],
                             fill=HILITE)
         self._volume_overlay(d)
+        self._bt_overlay(d)
         return rolls
 
     # -- main loop -------------------------------------------------------------------

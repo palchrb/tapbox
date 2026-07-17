@@ -934,6 +934,7 @@ class Orchestrator:
                 out["artwork_local"] = content.collection_image(target)
             except Exception:
                 out["artwork_local"] = None
+        out["bt_waiting"], out["bt_ready"] = _bt_wait_state(out["playing"])
         return out
 
 
@@ -1462,6 +1463,36 @@ def _heal_crashed_controller():
         _BT_HEAL["lock"].release()
 
 
+# the box screen's speaker popups (field log 2026-07-17: the speaker came
+# up 25s before anyone pressed play again — nobody KNEW it was ready).
+# since>0 = a play attempt hit a disconnected speaker ("not connected,
+# waiting..." popup); when the transport then shows up, that flips to a
+# short "connected — press play" window. All consumed via /status.
+_BT_WAIT = {"since": 0.0, "ready_until": 0.0}
+BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
+BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
+
+
+def _bt_wait_state(playing):
+    """(bt_waiting, bt_ready) for /status. The transport probe runs only
+    while a wait is pending — bounded to BT_WAIT_S after the last play
+    attempt — so the screen's 1/s status poll costs nothing extra in
+    steady state."""
+    now = time.monotonic()
+    if _BT_WAIT["since"]:
+        if now - _BT_WAIT["since"] > BT_WAIT_S:
+            _BT_WAIT["since"] = 0.0  # stale intent: kid walked away
+        elif _bt_transport_ready():
+            _BT_WAIT["since"] = 0.0
+            _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
+        else:
+            return True, False
+    if playing:
+        _BT_WAIT["ready_until"] = 0.0  # they pressed play — popup done
+        return False, False
+    return False, now < _BT_WAIT["ready_until"]
+
+
 def _kick_bt_connect():
     """Play intent while the BT speaker has no transport: poke btwatchd
     to attempt a connect right away instead of waiting out its blind-retry
@@ -1469,6 +1500,7 @@ def _kick_bt_connect():
     on late. No-op on the built-in output or with the speaker connected."""
     if current_output()["output"] != "bt" or _bt_transport_ready():
         return
+    _BT_WAIT["since"] = time.monotonic()  # the screen shows "waiting..."
     try:
         with open(_bt.KICK_FILE + ".tmp", "w") as f:
             f.write(str(time.time()))

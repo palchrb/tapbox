@@ -115,5 +115,44 @@ daemon.ORCH.command("playpause")
 wait_for("second recovery after cooldown", lambda: len(RECOVERED) == 2)
 print("7. cooldown gates retries; a later crash heals again OK")
 
+# --- the screen popups' state machine (/status bt_waiting/bt_ready):
+# --- a play attempt against a missing speaker must SAY so, and say
+# --- "press play" the moment the transport shows up ------------------------
+
+CRASHED[0] = False
+TRANSPORT = [False]
+daemon._bt_transport_ready = lambda: TRANSPORT[0]
+
+# 8. play intent with the speaker away -> bt_waiting
+set_output("bt")
+daemon.ORCH.command("playpause")
+w, r = daemon._bt_wait_state(playing=False)
+assert (w, r) == (True, False), (w, r)
+print("8. play against a missing speaker -> bt_waiting OK")
+
+# 9. transport shows up -> flips to bt_ready ("press play"), not waiting
+TRANSPORT[0] = True
+w, r = daemon._bt_wait_state(playing=False)
+assert (w, r) == (False, True), (w, r)
+w, r = daemon._bt_wait_state(playing=False)
+assert (w, r) == (False, True), "ready must persist for its window"
+print("9. transport up -> bt_ready popup OK")
+
+# 10. they pressed play -> both popups gone
+w, r = daemon._bt_wait_state(playing=True)
+assert (w, r) == (False, False), (w, r)
+w, r = daemon._bt_wait_state(playing=False)
+assert (w, r) == (False, False), "ready must clear once play happened"
+print("10. playing clears the popups OK")
+
+# 11. stale intent (kid walked away) expires without ever flipping ready
+TRANSPORT[0] = False
+daemon.ORCH.command("playpause")
+daemon._BT_WAIT["since"] = time.monotonic() - daemon.BT_WAIT_S - 1
+w, r = daemon._bt_wait_state(playing=False)
+assert (w, r) == (False, False), (w, r)
+print("11. stale wait expires quietly OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
-      "not after the backoff, and heals a crashed controller.")
+      "not after the backoff, heals a crashed controller, and the "
+      "screen knows what to say meanwhile.")
