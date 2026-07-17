@@ -286,6 +286,7 @@ print("16. spotify over bt: lost hint pauses it + arms the popup OK")
 # path, never a bare resume.
 GO_CALLS.clear()
 REBUILT = []
+_REAL_REBUILD = daemon._go_output_rebuild
 daemon._go_output_rebuild = lambda: REBUILT.append(1)
 daemon.ORCH.source = "spotify"
 TRANSPORT[0] = True
@@ -372,6 +373,44 @@ TRANSPORT[0] = True
 wait_spawn(1)  # the thread's tick fires the resume on its own
 print("20. the watcher thread fires the resume on its own OK")
 
+# 21. ONE reconnect = ONE resume. Switching output to bt arms 'since';
+# the link then blips mid-setup and arms 'lost'. Both pending, the
+# speaker returns -> _speaker_back must fire ONCE, not once per intent
+# (twice = two go-librespot restarts racing, the field storm 23:07).
+_real_speaker_back = daemon._speaker_back
+SB_CALLS = []
+daemon._speaker_back = lambda now, elapsed, spot: (SB_CALLS.append(spot)
+                                                   or 0.0)
+daemon._BT_WAIT.update(lost=0.0, since=0.0, ready_until=0.0)
+daemon._BT_WAIT["since"] = time.monotonic()          # output switched to bt
+daemon._BT_WAIT["lost"] = time.monotonic()           # then a mid-setup blip
+daemon._BT_WAIT["lost_spotify"] = True
+TRANSPORT[0] = True
+daemon._bt_wait_advance()
+assert SB_CALLS == [True], f"one reconnect must resume once: {SB_CALLS}"
+assert not daemon._BT_WAIT["lost"] and not daemon._BT_WAIT["since"], \
+    "both intents must clear on the single resume"
+daemon._speaker_back = _real_speaker_back
+TRANSPORT[0] = False
+print("21. lost+since pending: the reconnect resumes exactly once OK")
+
+# 22. the go-librespot rebuild cooldown: a retarget restart followed by a
+# blip rebuild on the SAME reconnect must restart the service only once
+REST = []
+daemon._go_output_rebuild = _REAL_REBUILD          # undo scenario 17's stub
+daemon.subprocess.run = lambda *a, **k: REST.append(a[0])
+daemon.go_status = lambda **k: {"username": "pa"}
+daemon._GO_REBUILD["at"] = 0.0
+daemon._note_go_restart()          # the output retarget just restarted it
+daemon._go_output_rebuild()        # blip rebuild moments later -> skip
+assert REST == [], f"rebuild within cooldown must NOT restart again: {REST}"
+daemon._GO_REBUILD["at"] = time.monotonic() - daemon.GO_REBUILD_COOLDOWN_S - 1
+daemon._go_output_rebuild()        # cooldown elapsed -> a real restart
+assert len(REST) == 1 and "restart" in REST[0], \
+    f"a rebuild past the cooldown must restart: {REST}"
+print("22. go-librespot restarts collapse to one per reconnect OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
       "not after the backoff, heals a crashed controller, the screen "
-      "knows what to say, and it resumes even while asleep.")
+      "knows what to say, resumes even while asleep, and no longer "
+      "restart-storms go-librespot on a flapping speaker.")

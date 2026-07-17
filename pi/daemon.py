@@ -574,6 +574,7 @@ class Orchestrator:
                     # idempotent: rewrites + restarts only when the config
                     # still points elsewhere (a deferred switch)
                     if _retarget_go_librespot(pcm):
+                        _note_go_restart()
                         log("output bt: deferred go-librespot retarget "
                             "applied")
             return {"unchanged": True, "output": device}
@@ -618,6 +619,8 @@ class Orchestrator:
                                     and st.get("play_origin")
                                     in ("go-librespot", "", None))
                 restarted = _retarget_go_librespot(pcm)
+                if restarted:
+                    _note_go_restart()
                 if restarted and spot_was_playing and self.target \
                         and is_spotify(self.target):
                     # unlike mpv (live IPC retarget), the restart killed
@@ -1568,6 +1571,14 @@ def _heal_crashed_controller():
 # press play" window. All consumed via /status.
 _BT_WAIT = {"since": 0.0, "ready_until": 0.0, "lost": 0.0}
 _BT_WAIT_LOCK = threading.Lock()  # status threads + the watcher tick
+# A speaker reconnect can trigger several go-librespot restarts at once
+# (btwatchd's output retarget + the blip-resume's output rebuild). Each
+# restart bursts the shared radio mid-A2DP-setup, which makes the NEXT
+# reconnect flap — a self-feeding storm (field log 2026-07-17 23:07). One
+# restart per reconnect is enough: the rest just wait for the API.
+_GO_REBUILD = {"at": 0.0}
+_GO_REBUILD_LOCK = threading.Lock()
+GO_REBUILD_COOLDOWN_S = float(os.environ.get("TAPBOX_GO_REBUILD_COOLDOWN", "8"))
 BT_WAIT_TICK_S = float(os.environ.get("TAPBOX_BT_WAIT_TICK", "3"))
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 # /status must stay snappy for the 1/s screen poll; go-librespot can hang
@@ -1644,6 +1655,14 @@ def _bt_transport_lost():
     return {"stopped": False}
 
 
+def _note_go_restart():
+    """Record that go-librespot was just (re)started elsewhere (an output
+    retarget), so a blip-resume rebuild on the same reconnect skips its
+    own redundant restart."""
+    with _GO_REBUILD_LOCK:
+        _GO_REBUILD["at"] = time.monotonic()
+
+
 def _go_output_rebuild():
     """go-librespot's ALSA output dies WITH the bt transport
     ('snd_pcm_recover: No such device') and STAYS dead: a later
@@ -1652,17 +1671,31 @@ def _go_output_rebuild():
     toggles 'fixed' it only because the toggle restarts the service).
     Restart rebuilds the output; the session comes back empty, which
     routes any resume through the proven replay-last path. Wait for the
-    login so a replay right after doesn't race the API."""
-    log("rebuilding go-librespot's audio output (restart)")
-    try:
-        subprocess.run(["systemctl", "restart", "go-librespot"],
-                       timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log(f"go-librespot output rebuild failed: {e!r}")
-        return
+    login so a replay right after doesn't race the API.
+
+    Deduped: if go-librespot was already (re)started in the last few
+    seconds — the output retarget on the same reconnect, or a racing
+    rebuild — its ALSA handle is already fresh, so we skip the restart
+    and only wait for the API. Restarting again just re-bursts the
+    shared radio and re-flaps the speaker (field storm 2026-07-17)."""
+    with _GO_REBUILD_LOCK:
+        now = time.monotonic()
+        fresh = now - _GO_REBUILD["at"] < GO_REBUILD_COOLDOWN_S
+        _GO_REBUILD["at"] = now
+    if fresh:
+        log("go-librespot already rebuilt this reconnect — waiting for "
+            "login, not restarting again")
+    else:
+        log("rebuilding go-librespot's audio output (restart)")
+        try:
+            subprocess.run(["systemctl", "restart", "go-librespot"],
+                           timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(f"go-librespot output rebuild failed: {e!r}")
+            return
     for _ in range(20):
         try:
-            if go_status().get("username"):
+            if go_status(timeout=2).get("username"):
                 break
         except OSError:
             pass
@@ -1695,24 +1728,28 @@ def _bt_wait_advance():
     wait is pending, so it's cheap on the timer."""
     with _BT_WAIT_LOCK:
         now = time.monotonic()
-        if _BT_WAIT["lost"]:
-            if now - _BT_WAIT["lost"] > BT_WAIT_S:
-                _BT_WAIT["lost"] = 0.0
-            elif _bt_transport_ready():
-                spot = _BT_WAIT.pop("lost_spotify", False)
-                elapsed = now - _BT_WAIT["lost"]
-                _BT_WAIT["lost"] = 0.0
-                _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
-        if _BT_WAIT["since"]:
-            if now - _BT_WAIT["since"] > BT_WAIT_S:
-                _BT_WAIT["since"] = 0.0  # stale intent: kid walked away
-            elif _bt_transport_ready():
-                # you pressed play, the speaker was off; now it's ready —
-                # resume within the window, like a mid-play blip
-                elapsed = now - _BT_WAIT["since"]
-                _BT_WAIT["since"] = 0.0
-                _BT_WAIT["ready_until"] = _speaker_back(
-                    now, elapsed, source_is_spotify())
+        # expire stale intents first (the kid walked away with the speaker
+        # still off): each has its own clock, so age them independently
+        if _BT_WAIT["lost"] and now - _BT_WAIT["lost"] > BT_WAIT_S:
+            _BT_WAIT["lost"] = 0.0
+            _BT_WAIT.pop("lost_spotify", None)
+        if _BT_WAIT["since"] and now - _BT_WAIT["since"] > BT_WAIT_S:
+            _BT_WAIT["since"] = 0.0  # stale intent
+        # The speaker coming back is ONE physical event. Both a mid-play
+        # drop (lost) and a play-intent (since) can be pending together —
+        # you switch the output to bt, then the link blips before A2DP
+        # settles. Resuming for each separately calls _speaker_back TWICE
+        # = two go-librespot restarts + two respawns racing (field storm
+        # 2026-07-17 23:07, 'rebuilding output' logged twice a second
+        # apart). Coalesce: resume ONCE, clearing both intents.
+        if (_BT_WAIT["lost"] or _BT_WAIT["since"]) and _bt_transport_ready():
+            spot = _BT_WAIT.pop("lost_spotify", False) or source_is_spotify()
+            # the most RECENT intent decides the blip window (be lenient:
+            # a fresh play-intent right before the drop is still a blip)
+            elapsed = now - max(_BT_WAIT["lost"], _BT_WAIT["since"])
+            _BT_WAIT["lost"] = 0.0
+            _BT_WAIT["since"] = 0.0
+            _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
 
 
 def _bt_wait_watcher():
