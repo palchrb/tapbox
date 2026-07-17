@@ -1503,6 +1503,23 @@ def _heal_crashed_controller():
 _BT_WAIT = {"since": 0.0, "ready_until": 0.0, "lost": 0.0}
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
+BT_RESUME_S = float(os.environ.get("TAPBOX_BT_RESUME_S", "30"))
+
+
+def _bt_blip_resume():
+    """The speaker came back within seconds of dying mid-play — resume
+    by itself, like headphones against a phone: a blip is the CODE's
+    problem, not the kid's (no 'press A' homework for a 5s dropout).
+    Outside the blip window the popup's 'press A' stays — blasting
+    audio when a speaker reappears an hour later is wrong the other
+    way. Same respawn guard as the stall watchdog: if the kid meanwhile
+    resumed, stopped or switched output, this is a no-op."""
+    with ORCH.lock:
+        if (ORCH.target and ORCH.source == "mpv"
+                and not ORCH._mpv_alive()):
+            log("speaker back within the blip window — resuming")
+            ORCH._spawn(ORCH.target, reverse=ORCH.reverse,
+                        resume=ORCH.resume)
 
 
 def _bt_transport_lost():
@@ -1535,8 +1552,13 @@ def _bt_wait_state(playing):
             # follow-the-speaker fallback flipped to the box speaker)
             _BT_WAIT["lost"] = 0.0
         elif _bt_transport_ready():
-            _BT_WAIT["lost"] = 0.0  # speaker is back: "press A to play"
-            _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
+            blip = now - _BT_WAIT["lost"] <= BT_RESUME_S
+            _BT_WAIT["lost"] = 0.0
+            if blip:  # short dropout: resume silently, no popup homework
+                threading.Thread(target=_bt_blip_resume,
+                                 daemon=True).start()
+            else:     # speaker back much later: "press A to play"
+                _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
     if _BT_WAIT["since"]:
         if now - _BT_WAIT["since"] > BT_WAIT_S:
             _BT_WAIT["since"] = 0.0  # stale intent: kid walked away

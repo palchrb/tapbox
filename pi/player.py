@@ -602,8 +602,11 @@ def main():
                 prev_path, track_started = path, now_m
                 # dead output = mpv chews through the queue erroring
                 # track after track; with the audio path gone there is
-                # no reason to wait for skip #3 — pause on the FIRST one
-                if fast_skips >= 3 or (fast_skips >= 1
+                # no reason to wait for skip #3. ANY track change without
+                # a usable audio path is proof enough — the 3s poll can
+                # see a 15-episode storm as ONE change, so the fast-skip
+                # pattern alone missed it (field log 2026-07-17)
+                if fast_skips >= 3 or (not was_first
                                        and not audio_ready()):
                     survive_dead_audio(stable)
                     fast_skips, prev_path = 0, None

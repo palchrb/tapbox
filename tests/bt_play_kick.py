@@ -160,9 +160,11 @@ print("11. stale wait expires quietly OK")
 
 ALIVE = [False]
 daemon.Orchestrator._mpv_alive = lambda self: ALIVE[0]
-STOPPED = []
+STOPPED, SPAWNED = [], []
 daemon.Orchestrator._stop_child = (
     lambda self: (STOPPED.append(1), ALIVE.__setitem__(0, False)))
+daemon.Orchestrator._spawn = (
+    lambda self, target, **kw: SPAWNED.append(target))
 
 # 12. playing on bt + transport dies -> player stopped, bt_lost armed
 ALIVE[0] = True
@@ -172,11 +174,38 @@ w, r, l = daemon._bt_wait_state(playing=False)
 assert (w, r, l) == (False, False, True), (w, r, l)
 print("12. transport death mid-play stops the player + arms bt_lost OK")
 
-# 13. speaker comes back while lost -> "press A to play" flash
+# 13. speaker back within the blip window -> resumes BY ITSELF, no
+# popup homework (a short dropout is the code's problem, not the kid's)
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
+
+
+def wait_spawn(n):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if len(SPAWNED) >= n:
+            return
+        time.sleep(0.02)
+    raise SystemExit(f"TIMEOUT waiting for auto-resume ({SPAWNED})")
+
+
+wait_spawn(1)
+print("13. blip: speaker back quickly -> auto-resume, no popup OK")
+
+# 13b. speaker back LATE -> "press A to play" flash, no auto-resume
+TRANSPORT[0] = False
+ALIVE[0] = True
+daemon._bt_transport_lost()
+daemon._BT_WAIT["lost"] = time.monotonic() - daemon.BT_RESUME_S - 1
 TRANSPORT[0] = True
 w, r, l = daemon._bt_wait_state(playing=False)
 assert (w, r, l) == (False, True, False), (w, r, l)
-print("13. speaker back -> bt_ready, lost cleared OK")
+time.sleep(0.3)
+assert len(SPAWNED) == 1, f"late return must NOT auto-resume: {SPAWNED}"
+print("13b. late return -> press-A flash, no surprise audio OK")
+TRANSPORT[0] = False
+daemon._BT_WAIT["ready_until"] = 0.0
 
 # 14. guards: local output or no player -> a (stale) hint is a no-op
 TRANSPORT[0] = False
