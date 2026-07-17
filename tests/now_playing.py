@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
 
-daemon.go_status = lambda: {}
+daemon.go_status = lambda **_k: {}
 orch = daemon.ORCH
 orch._mpv_alive = lambda: True
 orch.target, orch.source = "https://radio.nrk.no/podkast/show", "mpv"
@@ -100,7 +100,7 @@ sp.save_bookmark({"context_uri": NEW_URI, "uri": "spotify:track:b3",
 mosaic = content.spotify_art_path(NEW)
 os.makedirs(os.path.dirname(mosaic), exist_ok=True)
 open(mosaic, "wb").write(b"jpg")
-daemon.go_status = lambda: {"track": {"uri": "spotify:track:OLD",
+daemon.go_status = lambda **_k: {"track": {"uri": "spotify:track:OLD",
                                       "name": "Gammel sang",
                                       "position": 5000, "duration": 100000,
                                       "album_cover_url": "http://scdn/old.jpg"},
@@ -116,7 +116,7 @@ assert st["position"] == 120.0 and st["playing"] is True
 print("6. new spotify tap shows ITS identity, not the old context OK")
 
 # 7. ...and the moment the loaded track changes, live status takes over
-daemon.go_status = lambda: {"track": {"uri": "spotify:track:b3",
+daemon.go_status = lambda **_k: {"track": {"uri": "spotify:track:b3",
                                       "name": "Regnvaersanger (live)",
                                       "position": 1000, "duration": 200000,
                                       "album_cover_url": "http://scdn/b3.jpg"},
@@ -143,7 +143,7 @@ import time  # noqa: E402
 orch._mpv_alive = lambda: True  # scenario 6 flipped this to False
 orch.source = "mpv"
 orch.target = "https://radio.nrk.no/podkast/show"
-daemon.go_status = lambda: {}
+daemon.go_status = lambda **_k: {}
 with open(daemon.NOW_FILE, "w") as f:
     json.dump({"id": "e2", "url": E2, "title": "Fantorangen og natta",
                "image": "/cache/show/e2f00baa.jpg", "paused": False,

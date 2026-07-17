@@ -175,14 +175,30 @@ assert not SPAWNED, f"late connect must NOT auto-resume: {SPAWNED}"
 print("9b. waiting popup: late connect -> press-A, no surprise audio OK")
 daemon._BT_WAIT["ready_until"] = 0.0
 
-# 9c. the popup's 'A: play on box speaker' ends in playing on the local
-# output while the BT transport never came up — the waiting popup must
-# still clear (it used to stick because 'since' ignored playing)
+# 9c. you switched the output to the BT speaker but it's not connected,
+# so audio keeps coming from the built-in one (playing=True). The
+# 'not connected' popup must STAY (X connects, A drops back to local) —
+# it only clears once the output is local or the transport is up.
 arm_waiting()
+set_output("bt")
 TRANSPORT[0] = False
 w, r, l = daemon._bt_wait_state(playing=True)
+assert (w, r, l) == (True, False, False), \
+    "output-switch-to-bt popup must persist while playing on built-in"
+# ...dropping the output back to local clears it
+set_output("local")
+w, r, l = daemon._bt_wait_state(playing=True)
 assert (w, r, l) == (False, False, False), (w, r, l)
-print("9c. playing on any output clears the waiting popup OK")
+# ...and so does the transport coming up (audio moves to bt)
+arm_waiting()
+set_output("bt")
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=True)
+assert (w, r, l) == (False, False, False), (w, r, l)
+TRANSPORT[0] = False
+set_output("bt")
+print("9c. output-switch-to-bt popup persists on built-in, clears on "
+      "local/connect OK")
 
 # 10. playback is on -> popups gone
 w, r, l = daemon._bt_wait_state(playing=True)

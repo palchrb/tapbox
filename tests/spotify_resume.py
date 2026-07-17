@@ -103,7 +103,7 @@ os.environ.setdefault("TAPBOX_CACHE", os.environ["TAPBOX_STATE"])
 import daemon  # noqa: E402
 
 calls = []
-daemon.go_status = lambda: {"track": {"uri": "t"}, "paused": True,
+daemon.go_status = lambda **_k: {"track": {"uri": "t"}, "paused": True,
                             "stopped": False}
 daemon.go = lambda path, **k: calls.append(path)
 orch = daemon.ORCH
@@ -113,7 +113,7 @@ orch._spawn = lambda *a, **k: (_ for _ in ()).throw(
 r = orch.play("https://open.spotify.com/playlist/xyz")
 assert r.get("resumed") and calls == ["/player/resume"], (r, calls)
 calls.clear()
-daemon.go_status = lambda: {"track": {"uri": "t"}, "paused": False,
+daemon.go_status = lambda **_k: {"track": {"uri": "t"}, "paused": False,
                             "stopped": False}
 r = orch.play("https://open.spotify.com/playlist/xyz")
 assert r.get("resumed") and calls == [], (r, calls)
@@ -166,7 +166,7 @@ daemon.subprocess.run = lambda cmd, **k: (
     started.append(cmd),
     type("R", (), {"returncode": 3 if "is-active" in cmd else 0})())[1]
 daemon._internet_up = lambda: True
-daemon.go_status = lambda: {}
+daemon.go_status = lambda **_k: {}
 r = orch2.play("https://open.spotify.com/playlist/online1")
 assert r.get("error") is None and len(spawns) == 1, (r, spawns)
 assert any("start" in c for c in started), "parked unit never started"

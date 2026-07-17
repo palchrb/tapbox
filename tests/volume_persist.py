@@ -50,7 +50,7 @@ print("2. volume set on mpv persists to volume.json OK")
 orch._mpv_alive = lambda: False
 orch.source = "spotify"
 GO = {"volume": round(40 * 65535 / 100), "volume_steps": 65535}
-daemon.go_status = lambda: GO
+daemon.go_status = lambda **_k: GO
 daemon.go = lambda path, body=None: GO.__setitem__("volume", body["volume"])
 r = orch.volume(delta=+5)  # nudge up from the shared 40 -> 45
 assert r["routed"] == "spotify" and r["volume"] == 45, r

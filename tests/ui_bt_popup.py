@@ -158,17 +158,31 @@ app.status = {"bt_lost": True}  # BT-only box: X is the only offer
 assert app._bt_overlay(d) is True
 print("6. lost popup renders (with and without the A-option) OK")
 
-# 7. A on the lost popup flips output to the box speaker and resumes
+# 7. A on the lost popup (nothing sounding) flips output to the box
+# speaker AND resumes from the bookmark
 POSTS.clear()
-app.status = {"bt_lost": True, "bt_local_ok": True}
+app.status = {"bt_lost": True, "bt_local_ok": True, "playing": False}
 app.handle_now("a")
 wait_for("play-on-local fired", lambda: len(POSTS) == 2)
 assert POSTS == [("/output", {"device": "local"}), ("/playpause", None)], \
     POSTS
-print("7. A on the lost popup -> output local + resume OK")
+print("7. A on the lost popup (stopped) -> output local + resume OK")
 
-# 8. same from the kid-mode carousel
+# 7b. A while ALREADY playing on the built-in speaker (you switched the
+# output to a disconnected BT speaker) must ONLY drop back to local —
+# never toggle playpause and pause the audio
 POSTS.clear()
+app.status = {"bt_waiting": True, "bt_local_ok": True, "playing": True}
+app.handle_now("a")
+wait_for("output flip fired", lambda: POSTS)
+time.sleep(0.2)
+assert POSTS == [("/output", {"device": "local"})], \
+    f"must not pause audio that's already playing: {POSTS}"
+print("7b. A while playing on built-in -> output local only, no pause OK")
+
+# 8. same from the kid-mode carousel (stopped -> output local + resume)
+POSTS.clear()
+app.status = {"bt_lost": True, "bt_local_ok": True, "playing": False}
 app.handle_carousel("a")
 wait_for("carousel play-on-local fired", lambda: len(POSTS) == 2)
 assert POSTS[0] == ("/output", {"device": "local"}), POSTS

@@ -837,7 +837,11 @@ class Orchestrator:
             except (OSError, ValueError):
                 pass
             out["position"] = self._settle_position(out["position"], now)
-        st = go_status()
+        # short timeout: /status is polled ~1/s by the single-threaded
+        # screen, and go-librespot is briefly unresponsive while it
+        # restarts (output switch / transport rebuild) — the default 5s
+        # here froze the whole UI for ~5s on a BT drop (field 2026-07-17)
+        st = go_status(timeout=GO_STATUS_TIMEOUT)
         track = st.get("track") or {}
         sp_playing = spotify_playing(st)
         out["spotify"] = {"playing": sp_playing,
@@ -1566,6 +1570,9 @@ _BT_WAIT = {"since": 0.0, "ready_until": 0.0, "lost": 0.0}
 _BT_WAIT_LOCK = threading.Lock()  # status threads + the watcher tick
 BT_WAIT_TICK_S = float(os.environ.get("TAPBOX_BT_WAIT_TICK", "3"))
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
+# /status must stay snappy for the 1/s screen poll; go-librespot can hang
+# a few seconds mid-restart, so cap how long its status query may block
+GO_STATUS_TIMEOUT = float(os.environ.get("TAPBOX_GO_STATUS_TIMEOUT", "1.5"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
 # auto-resume window after an auto-stop. 150s (not 30): a speaker OFF/ON
 # cycle takes 20-60s to re-establish A2DP (own reconnect flaps during its
@@ -1724,8 +1731,14 @@ def _bt_wait_watcher():
 def _bt_wait_state(playing):
     """(bt_waiting, bt_ready, bt_lost) for /status."""
     if playing:
-        # playback is on (incl. the popup's 'play on the box speaker'
-        # choice, on any output) — every speaker popup is done
+        # Playback is on — normally every popup is done. Exception: the
+        # user switched the output to the BT speaker but it isn't
+        # connected, so audio is still coming from the built-in speaker.
+        # Keep the 'not connected' popup up (X connects it, A drops back
+        # to the built-in) until it connects or the output goes local.
+        if (_BT_WAIT["since"] and current_output()["output"] == "bt"
+                and not _bt_transport_ready()):
+            return True, False, False
         with _BT_WAIT_LOCK:
             _BT_WAIT.update(lost=0.0, since=0.0, ready_until=0.0)
             _BT_WAIT.pop("lost_spotify", None)

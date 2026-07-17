@@ -1418,14 +1418,20 @@ class App:
         return False
 
     def _play_on_local(self):
-        """The lost-popup's A action: the kid chooses sound NOW over
-        waiting for the speaker — flip the output to the built-in one
-        and resume from the bookmark. Fire-and-forget; the popup clears
-        itself via /status (the output is no longer bt)."""
+        """The speaker popup's A action: drop back to the built-in
+        speaker. If nothing's sounding (bt_lost stopped it, or a fresh
+        play attempt), resume from the bookmark; if audio is ALREADY
+        playing on the built-in one (you switched the output to a
+        disconnected BT speaker), just make the output local — don't
+        toggle playpause and pause it. Fire-and-forget; the popup clears
+        via /status once the output is no longer bt."""
+        was_playing = bool((self.status or {}).get("playing"))
+
         def go():
             try:
                 api_post("/output", {"device": "local"}, timeout=30)
-                api_post("/playpause", timeout=CONTROL_TIMEOUT)
+                if not was_playing:
+                    api_post("/playpause", timeout=CONTROL_TIMEOUT)
             except OSError as e:
                 log(f"play-on-local failed: {e}")
             self.last_status = 0
