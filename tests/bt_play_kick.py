@@ -322,6 +322,40 @@ assert (w, r, l) == (False, False, False), (w, r, l)
 wait_spawn(3)
 print("18. output fallback keeps popup + auto-resume armed OK")
 
+# 19. the auto-resume must fire WITHOUT any /status poll — the screen
+# sleeps and stops polling, so the daemon's background watcher tick has
+# to drive it (field: playback didn't start until a button woke the
+# screen). Drive it via _bt_wait_advance alone (what the watcher calls),
+# never touching _bt_wait_state/status.
+daemon.ORCH.source = "mpv"
+daemon.spotify_playing = lambda: False
+set_output("bt")
+SPAWNED.clear()
+TRANSPORT[0] = False
+ALIVE[0] = True
+daemon._bt_transport_lost()   # arm lost (mpv playing over bt)
+ALIVE[0] = False              # daemon stopped the child
+TRANSPORT[0] = True           # speaker comes back while the screen is dark
+daemon._bt_wait_advance()     # ONLY the watcher's tick — no status() call
+wait_spawn(1)
+assert not daemon._BT_WAIT["lost"], "watcher tick did not clear the lost state"
+print("19. background watcher auto-resumes with the screen asleep "
+      "(no /status poll) OK")
+
+# 20. the watcher THREAD itself: arm a wait, let a real tick fire it
+daemon.BT_WAIT_TICK_S = 0.05
+import threading as _t  # noqa: E402
+_t.Thread(target=daemon._bt_wait_watcher, daemon=True).start()
+set_output("bt")
+SPAWNED.clear()
+TRANSPORT[0] = False
+ALIVE[0] = True
+daemon._bt_transport_lost()
+ALIVE[0] = False
+TRANSPORT[0] = True
+wait_spawn(1)  # the thread's tick fires the resume on its own
+print("20. the watcher thread fires the resume on its own OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
-      "not after the backoff, heals a crashed controller, and the "
-      "screen knows what to say meanwhile.")
+      "not after the backoff, heals a crashed controller, the screen "
+      "knows what to say, and it resumes even while asleep.")

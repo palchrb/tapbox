@@ -1563,6 +1563,8 @@ def _heal_crashed_controller():
 # when the transport then shows up, either flips to a short "connected —
 # press play" window. All consumed via /status.
 _BT_WAIT = {"since": 0.0, "ready_until": 0.0, "lost": 0.0}
+_BT_WAIT_LOCK = threading.Lock()  # status threads + the watcher tick
+BT_WAIT_TICK_S = float(os.environ.get("TAPBOX_BT_WAIT_TICK", "3"))
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
 # auto-resume window after an auto-stop. 150s (not 30): a speaker OFF/ON
@@ -1676,43 +1678,63 @@ def _speaker_back(now, elapsed, spot):
     return now + BT_READY_FLASH_S
 
 
+def _bt_wait_advance():
+    """The transport-ready-driven transitions (auto-resume / press-A
+    flash) and expiry. Runs from /status AND, crucially, from a
+    background tick (_bt_wait_watcher): the screen sleeps and STOPS
+    polling /status to save battery, so if this only ran on a poll the
+    blip auto-resume never fired until a button woke the screen (field
+    2026-07-17: 'have to press once for it to start'). No-op unless a
+    wait is pending, so it's cheap on the timer."""
+    with _BT_WAIT_LOCK:
+        now = time.monotonic()
+        if _BT_WAIT["lost"]:
+            if now - _BT_WAIT["lost"] > BT_WAIT_S:
+                _BT_WAIT["lost"] = 0.0
+            elif _bt_transport_ready():
+                spot = _BT_WAIT.pop("lost_spotify", False)
+                elapsed = now - _BT_WAIT["lost"]
+                _BT_WAIT["lost"] = 0.0
+                _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
+        if _BT_WAIT["since"]:
+            if now - _BT_WAIT["since"] > BT_WAIT_S:
+                _BT_WAIT["since"] = 0.0  # stale intent: kid walked away
+            elif _bt_transport_ready():
+                # you pressed play, the speaker was off; now it's ready —
+                # resume within the window, like a mid-play blip
+                elapsed = now - _BT_WAIT["since"]
+                _BT_WAIT["since"] = 0.0
+                _BT_WAIT["ready_until"] = _speaker_back(
+                    now, elapsed, source_is_spotify())
+
+
+def _bt_wait_watcher():
+    """Drive the speaker-popup state off a timer, not just off /status —
+    so a sleeping screen still gets the auto-resume the moment the
+    speaker comes back."""
+    while True:
+        time.sleep(BT_WAIT_TICK_S)
+        try:
+            if _BT_WAIT["lost"] or _BT_WAIT["since"]:
+                _bt_wait_advance()
+        except Exception as e:
+            log(f"bt wait watcher error: {e!r}")
+
+
 def _bt_wait_state(playing):
-    """(bt_waiting, bt_ready, bt_lost) for /status. The transport probe
-    runs only while a wait/lost is pending — bounded to BT_WAIT_S — so
-    the screen's 1/s status poll costs nothing extra in steady state."""
-    now = time.monotonic()
-    if _BT_WAIT["lost"]:
-        if playing or now - _BT_WAIT["lost"] > BT_WAIT_S:
-            # resumed (any output — the popup's play-on-box-speaker
-            # choice ends in playing) or expired. Deliberately NOT
-            # cleared on an output change: the follow-the-speaker
-            # fallback flips to local ~23s after every drop on boxes
-            # with a built-in speaker, and clearing here silently
-            # disarmed the popup and the auto-resume promise.
-            _BT_WAIT["lost"] = 0.0
-        elif _bt_transport_ready():
-            spot = _BT_WAIT.pop("lost_spotify", False)
-            elapsed = now - _BT_WAIT["lost"]
-            _BT_WAIT["lost"] = 0.0
-            _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
-    if _BT_WAIT["since"]:
-        if playing or now - _BT_WAIT["since"] > BT_WAIT_S:
-            # playing (the popup's 'play on the box speaker' choice ends
-            # here) or stale intent: the wait is over
-            _BT_WAIT["since"] = 0.0
-        elif _bt_transport_ready():
-            # you pressed play, the speaker was off; now it's ready —
-            # same 'just resume within the window' flow as a mid-play blip
-            elapsed = now - _BT_WAIT["since"]
-            _BT_WAIT["since"] = 0.0
-            _BT_WAIT["ready_until"] = _speaker_back(
-                now, elapsed, source_is_spotify())
-        else:
-            return True, False, bool(_BT_WAIT["lost"])
+    """(bt_waiting, bt_ready, bt_lost) for /status."""
     if playing:
-        _BT_WAIT["ready_until"] = 0.0  # playback is on — popup done
+        # playback is on (incl. the popup's 'play on the box speaker'
+        # choice, on any output) — every speaker popup is done
+        with _BT_WAIT_LOCK:
+            _BT_WAIT.update(lost=0.0, since=0.0, ready_until=0.0)
+            _BT_WAIT.pop("lost_spotify", None)
         return False, False, False
-    return False, now < _BT_WAIT["ready_until"], bool(_BT_WAIT["lost"])
+    _bt_wait_advance()
+    now = time.monotonic()
+    return (bool(_BT_WAIT["since"]),  # still pending, transport not ready
+            now < _BT_WAIT["ready_until"],
+            bool(_BT_WAIT["lost"]))
 
 
 def source_is_spotify():
@@ -1943,6 +1965,7 @@ def main():
         pass  # not the main thread (tests run main() in a thread)
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_prewarm_mpv, daemon=True).start()
+    threading.Thread(target=_bt_wait_watcher, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
     _wifi_boot_reenable()
