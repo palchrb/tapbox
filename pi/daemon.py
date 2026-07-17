@@ -977,9 +977,10 @@ class Orchestrator:
                 out["artwork_local"] = None
         out["bt_waiting"], out["bt_ready"], out["bt_lost"] = \
             _bt_wait_state(out["playing"])
-        if out["bt_lost"]:
-            # the popup's A-option ("play on the box speaker") is only
-            # offered where a box speaker exists — BT-only boxes get X
+        if out["bt_lost"] or out["bt_waiting"]:
+            # both speaker popups offer the same escape — A plays on the
+            # built-in speaker instead — but only where one exists
+            # (BT-only boxes get X to connect and nothing else)
             out["bt_local_ok"] = _i2s_card_present()
         return out
 
@@ -1695,8 +1696,10 @@ def _bt_wait_state(playing):
             _BT_WAIT["lost"] = 0.0
             _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
     if _BT_WAIT["since"]:
-        if now - _BT_WAIT["since"] > BT_WAIT_S:
-            _BT_WAIT["since"] = 0.0  # stale intent: kid walked away
+        if playing or now - _BT_WAIT["since"] > BT_WAIT_S:
+            # playing (the popup's 'play on the box speaker' choice ends
+            # here) or stale intent: the wait is over
+            _BT_WAIT["since"] = 0.0
         elif _bt_transport_ready():
             # you pressed play, the speaker was off; now it's ready —
             # same 'just resume within the window' flow as a mid-play blip

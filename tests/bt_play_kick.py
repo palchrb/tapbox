@@ -175,6 +175,15 @@ assert not SPAWNED, f"late connect must NOT auto-resume: {SPAWNED}"
 print("9b. waiting popup: late connect -> press-A, no surprise audio OK")
 daemon._BT_WAIT["ready_until"] = 0.0
 
+# 9c. the popup's 'A: play on box speaker' ends in playing on the local
+# output while the BT transport never came up — the waiting popup must
+# still clear (it used to stick because 'since' ignored playing)
+arm_waiting()
+TRANSPORT[0] = False
+w, r, l = daemon._bt_wait_state(playing=True)
+assert (w, r, l) == (False, False, False), (w, r, l)
+print("9c. playing on any output clears the waiting popup OK")
+
 # 10. playback is on -> popups gone
 w, r, l = daemon._bt_wait_state(playing=True)
 assert (w, r, l) == (False, False, False), (w, r, l)

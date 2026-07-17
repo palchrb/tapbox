@@ -792,7 +792,8 @@ class App:
             # the popup is modal for X: volume without sound is pointless
             self._bt_connect_last()
             return
-        if ev == "a" and st.get("bt_lost") and st.get("bt_local_ok"):
+        if ev == "a" and (st.get("bt_lost") or st.get("bt_waiting")) \
+                and st.get("bt_local_ok"):
             self._play_on_local()  # the popup's "play on box speaker"
             return
         if ev == "x" and st.get("spotify_offline") \
@@ -912,7 +913,8 @@ class App:
             # the popup is modal for X: volume without sound is pointless
             self._bt_connect_last()
             return
-        if ev == "a" and st.get("bt_lost") and st.get("bt_local_ok"):
+        if ev == "a" and (st.get("bt_lost") or st.get("bt_waiting")) \
+                and st.get("bt_local_ok"):
             self._play_on_local()  # the popup's "play on box speaker"
             return
         in_vol = time.monotonic() < self.vol_mode_until
@@ -1392,16 +1394,18 @@ class App:
                        font=F_SMALL, fill=DIM, anchor="ma")
             return True
         if st.get("bt_waiting"):
-            d.rounded_rectangle([22, 74, W - 22, 152], radius=10,
+            # identical shape to the bt_lost popup: X connects the
+            # speaker, A plays on the built-in one instead (where present)
+            d.rounded_rectangle([22, 70, W - 22, 156], radius=10,
                                 fill=(45, 30, 30))
-            d.text((W // 2, 84), "Speaker not connected", font=F_MED,
+            d.text((W // 2, 80), "Speaker not connected", font=F_MED,
                    fill=WARN, anchor="ma")
             hint = ("connecting..." if time.monotonic()
-                    < self.bt_connecting_until
-                    else "turn the speaker on — waiting")
-            d.text((W // 2, 110), hint, font=F_SMALL, fill=FG, anchor="ma")
-            d.text((W // 2, 130), "X: connect now", font=F_SMALL, fill=DIM,
-                   anchor="ma")
+                    < self.bt_connecting_until else "X: connect now")
+            d.text((W // 2, 108), hint, font=F_SMALL, fill=FG, anchor="ma")
+            if st.get("bt_local_ok"):
+                d.text((W // 2, 130), "A: play on box speaker",
+                       font=F_SMALL, fill=DIM, anchor="ma")
             return True
         if st.get("bt_ready"):
             d.rounded_rectangle([22, 82, W - 22, 144], radius=10,

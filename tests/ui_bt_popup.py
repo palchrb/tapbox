@@ -122,6 +122,30 @@ time.sleep(0.2)
 assert not POSTS and len(VOLUME) == 2, (POSTS, VOLUME)
 print("5. no popup -> X is the volume card as before OK")
 
+# 5b. the waiting popup offers the SAME A escape as the lost popup:
+# 'play on box speaker' where a built-in speaker exists. Identical shape.
+app.bt_connecting_until = 0.0
+POSTS.clear()
+app.status = {"bt_waiting": True, "bt_local_ok": True}
+app.handle_now("a")
+wait_for("waiting-popup A plays local", lambda: POSTS)
+assert POSTS == [("/output", {"device": "local"}), ("/playpause", None)], \
+    POSTS
+POSTS.clear()
+app.handle_carousel("a")  # same in the carousel
+wait_for("carousel waiting-popup A", lambda: POSTS)
+assert POSTS[0] == ("/output", {"device": "local"}), POSTS
+print("5b. A on the waiting popup plays on the box speaker OK")
+
+# 5c. BT-only box (no bt_local_ok): the waiting popup has no A escape,
+# so A stays plain play/pause
+POSTS.clear()
+app.status = {"bt_waiting": True}
+app.handle_now("a")
+time.sleep(0.2)
+assert POSTS == [("/playpause", None)], POSTS
+print("5c. BT-only box: waiting popup A is plain play/pause OK")
+
 
 # --- the lost popup (speaker died mid-play; daemon stopped the player) ------
 
