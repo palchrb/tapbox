@@ -1659,6 +1659,22 @@ def _go_output_rebuild():
         time.sleep(1)
 
 
+def _speaker_back(now, elapsed, spot):
+    """The speaker's transport just came up while a play intent (waiting)
+    or a mid-play drop (lost) was pending. Within the blip window: just
+    resume — no 'press A' homework, the kid already expressed the intent
+    (field preference 2026-07-17). Beyond it: fall back to the press-A
+    flash so a speaker that reappears much later can't blast audio by
+    surprise (rebuilding go-librespot first for a spotify session, so
+    that A lands on a live output instead of a dead handle)."""
+    if elapsed <= BT_RESUME_S:
+        threading.Thread(target=_bt_blip_resume, daemon=True).start()
+        return 0.0  # no flash — playback comes back on its own
+    if spot:
+        threading.Thread(target=_go_output_rebuild, daemon=True).start()
+    return now + BT_READY_FLASH_S
+
+
 def _bt_wait_state(playing):
     """(bt_waiting, bt_ready, bt_lost) for /status. The transport probe
     runs only while a wait/lost is pending — bounded to BT_WAIT_S — so
@@ -1674,31 +1690,31 @@ def _bt_wait_state(playing):
             # disarmed the popup and the auto-resume promise.
             _BT_WAIT["lost"] = 0.0
         elif _bt_transport_ready():
-            blip = now - _BT_WAIT["lost"] <= BT_RESUME_S
             spot = _BT_WAIT.pop("lost_spotify", False)
+            elapsed = now - _BT_WAIT["lost"]
             _BT_WAIT["lost"] = 0.0
-            if blip:  # short dropout: resume silently, no popup homework
-                threading.Thread(target=_bt_blip_resume,
-                                 daemon=True).start()
-            else:     # speaker back much later: "press A to play"
-                if spot:
-                    # rebuild NOW so the kid's press-A lands on a fresh
-                    # output (a resume into the dead handle is silent)
-                    threading.Thread(target=_go_output_rebuild,
-                                     daemon=True).start()
-                _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
+            _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
     if _BT_WAIT["since"]:
         if now - _BT_WAIT["since"] > BT_WAIT_S:
             _BT_WAIT["since"] = 0.0  # stale intent: kid walked away
         elif _bt_transport_ready():
+            # you pressed play, the speaker was off; now it's ready —
+            # same 'just resume within the window' flow as a mid-play blip
+            elapsed = now - _BT_WAIT["since"]
             _BT_WAIT["since"] = 0.0
-            _BT_WAIT["ready_until"] = now + BT_READY_FLASH_S
+            _BT_WAIT["ready_until"] = _speaker_back(
+                now, elapsed, source_is_spotify())
         else:
             return True, False, bool(_BT_WAIT["lost"])
     if playing:
-        _BT_WAIT["ready_until"] = 0.0  # they pressed play — popup done
+        _BT_WAIT["ready_until"] = 0.0  # playback is on — popup done
         return False, False, False
     return False, now < _BT_WAIT["ready_until"], bool(_BT_WAIT["lost"])
+
+
+def source_is_spotify():
+    with ORCH.lock:
+        return ORCH.source == "spotify"
 
 
 def _kick_bt_connect():

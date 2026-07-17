@@ -116,48 +116,12 @@ wait_for("second recovery after cooldown", lambda: len(RECOVERED) == 2)
 print("7. cooldown gates retries; a later crash heals again OK")
 
 # --- the screen popups' state machine (/status bt_waiting/bt_ready):
-# --- a play attempt against a missing speaker must SAY so, and say
-# --- "press play" the moment the transport shows up ------------------------
+# --- a play attempt against a missing speaker must SAY so, then just
+# --- RESUME when the transport shows up within the blip window --------------
 
 CRASHED[0] = False
 TRANSPORT = [False]
 daemon._bt_transport_ready = lambda: TRANSPORT[0]
-
-# 8. play intent with the speaker away -> bt_waiting
-set_output("bt")
-daemon.ORCH.command("playpause")
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (True, False, False), (w, r, l)
-print("8. play against a missing speaker -> bt_waiting OK")
-
-# 9. transport shows up -> flips to bt_ready ("press play"), not waiting
-TRANSPORT[0] = True
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (False, True, False), (w, r, l)
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (False, True, False), "ready must persist its window"
-print("9. transport up -> bt_ready popup OK")
-
-# 10. they pressed play -> both popups gone
-w, r, l = daemon._bt_wait_state(playing=True)
-assert (w, r, l) == (False, False, False), (w, r, l)
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (False, False, False), "ready must clear after play"
-print("10. playing clears the popups OK")
-
-# 11. stale intent (kid walked away) expires without ever flipping ready
-TRANSPORT[0] = False
-daemon.ORCH.command("playpause")
-daemon._BT_WAIT["since"] = time.monotonic() - daemon.BT_WAIT_S - 1
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (False, False, False), (w, r, l)
-print("11. stale wait expires quietly OK")
-
-
-# --- the speaker DIED mid-play (btwatchd's /bt/lost hint): stop the
-# --- player before mpv error-skips through the queue (field log
-# --- 2026-07-17: ~15 episodes in 3s), then offer the choice ---------------
-
 ALIVE = [False]
 daemon.Orchestrator._mpv_alive = lambda self: ALIVE[0]
 STOPPED, SPAWNED = [], []
@@ -165,20 +129,8 @@ daemon.Orchestrator._stop_child = (
     lambda self: (STOPPED.append(1), ALIVE.__setitem__(0, False)))
 daemon.Orchestrator._spawn = (
     lambda self, target, **kw: SPAWNED.append(target))
-
-# 12. playing on bt + transport dies -> player stopped, bt_lost armed
-ALIVE[0] = True
-r12 = daemon._bt_transport_lost()
-assert r12 == {"stopped": True} and STOPPED, r12
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (False, False, True), (w, r, l)
-print("12. transport death mid-play stops the player + arms bt_lost OK")
-
-# 13. speaker back within the blip window -> resumes BY ITSELF, no
-# popup homework (a short dropout is the code's problem, not the kid's)
-TRANSPORT[0] = True
-w, r, l = daemon._bt_wait_state(playing=False)
-assert (w, r, l) == (False, False, False), (w, r, l)
+daemon.ORCH.target = "https://feeds.example.com/show"
+daemon.ORCH.source = "mpv"
 
 
 def wait_spawn(n):
@@ -190,6 +142,70 @@ def wait_spawn(n):
     raise SystemExit(f"TIMEOUT waiting for auto-resume ({SPAWNED})")
 
 
+def arm_waiting(age=0.0):
+    daemon._BT_WAIT.update(since=time.monotonic() - age, lost=0.0,
+                           ready_until=0.0)
+
+
+# 8. play intent with the speaker away -> bt_waiting popup
+set_output("bt")
+TRANSPORT[0] = False
+arm_waiting()
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (True, False, False), (w, r, l)
+print("8. play against a missing speaker -> bt_waiting OK")
+
+# 9. speaker connects WITHIN the window -> auto-resume, no 'press A'
+SPAWNED.clear()
+ALIVE[0] = False
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
+wait_spawn(1)
+print("9. waiting popup: speaker back in window -> auto-play, no A OK")
+
+# 9b. speaker connects LATE -> press-A flash, no surprise auto-resume
+SPAWNED.clear()
+arm_waiting(age=daemon.BT_RESUME_S + 1)
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, True, False), (w, r, l)
+time.sleep(0.2)
+assert not SPAWNED, f"late connect must NOT auto-resume: {SPAWNED}"
+print("9b. waiting popup: late connect -> press-A, no surprise audio OK")
+daemon._BT_WAIT["ready_until"] = 0.0
+
+# 10. playback is on -> popups gone
+w, r, l = daemon._bt_wait_state(playing=True)
+assert (w, r, l) == (False, False, False), (w, r, l)
+print("10. playing clears the popups OK")
+
+# 11. stale intent (kid walked away) expires without ever flipping ready
+TRANSPORT[0] = False
+arm_waiting(age=daemon.BT_WAIT_S + 1)
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
+print("11. stale wait expires quietly OK")
+
+
+# --- the speaker DIED mid-play (btwatchd's /bt/lost hint): stop the
+# --- player before mpv error-skips through the queue (field log
+# --- 2026-07-17: ~15 episodes in 3s), then resume/offer the choice ---------
+
+# 12. playing on bt + transport dies -> player stopped, bt_lost armed
+ALIVE[0] = True
+r12 = daemon._bt_transport_lost()
+assert r12 == {"stopped": True} and STOPPED, r12
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, True), (w, r, l)
+print("12. transport death mid-play stops the player + arms bt_lost OK")
+
+# 13. speaker back within the blip window -> resumes BY ITSELF, no
+# popup homework (a short dropout is the code's problem, not the kid's)
+SPAWNED.clear()
+TRANSPORT[0] = True
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
 wait_spawn(1)
 print("13. blip: speaker back quickly -> auto-resume, no popup OK")
 
