@@ -6,13 +6,14 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 
 from tapbox import content, spotify_web
-from tapbox.paths import ART_DIR, CACHE_DIR
+from tapbox.paths import ART_DIR, CACHE_DIR, STATE_DIR
 from tapbox.spotify import is_spotify
 
 LIB_FILE = os.environ.get("TAPBOX_LIBRARY", "/etc/tapbox/library.json")
@@ -204,11 +205,57 @@ def _sync_args_for(target, n):
     return None  # spotify (global cache) / local folders (already offline)
 
 
+SWEEP_STAMP = os.path.join(STATE_DIR, "last-sweep.json")
+SYNC_STAGGER_S = int(os.environ.get("TAPBOX_SYNC_STAGGER", 4))
+
+
+def _last_sweep():
+    """Wall-clock time of the last completed sweep, or 0. Wall-clock (not
+    monotonic) so it survives reboots — the whole point is to NOT sweep
+    again on every restart when the last one was within the interval."""
+    try:
+        with open(SWEEP_STAMP) as f:
+            return float(json.load(f)["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0
+
+
+def _stamp_sweep():
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(SWEEP_STAMP + ".tmp", "w") as f:
+            json.dump({"at": time.time()}, f)
+        os.replace(SWEEP_STAMP + ".tmp", SWEEP_STAMP)
+    except OSError:
+        pass
+
+
+def _sync_one(args):
+    """Run one content.py sync, kept off the audio's back: nice-19, and
+    pinned to a single core (taskset) so the ffmpeg transcode can't take
+    both cores from playback. Downloads are sequential (one at a time)."""
+    cmd = [sys.executable, content.__file__, *args]
+    if _TASKSET:
+        cmd = [_TASKSET, "-c", "1"] + cmd
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=3600, preexec_fn=lambda: os.nice(19))
+
+
+_TASKSET = shutil.which("taskset")
+
+
 def _cache_sweeper():
     # Sweeps run on battery too: a box that mostly lives off the charger
     # otherwise never syncs at all — no fresh episodes, no covers. The
-    # downloads run nice-19 so playback always wins the CPU.
-    time.sleep(SYNC_DELAY_S)  # let wifi come up after boot
+    # downloads run nice-19 + one-core so playback always wins.
+    # TTL across reboots: if the last sweep was within SYNC_INTERVAL_S,
+    # wait out the remainder instead of re-sweeping seconds after every
+    # boot (redundant network+CPU that stole a track skip — field log
+    # 2026-07-17). Fresh boxes / long-off boxes still sweep at SYNC_DELAY.
+    due_in = max(SYNC_DELAY_S,
+                 _last_sweep() + SYNC_INTERVAL_S - time.time())
+    _sync_wake.wait(due_in)
+    _sync_wake.clear()
     while True:
         try:
             # First, so new playlists get covers in this very sweep.
@@ -236,13 +283,12 @@ def _cache_sweeper():
                     continue
                 log(f"cache sweep: {e['name']} ({' '.join(args)})")
                 try:
-                    subprocess.run(
-                        [sys.executable, content.__file__, *args],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        timeout=3600,
-                        preexec_fn=lambda: os.nice(19))
+                    _sync_one(args)
                 except (OSError, subprocess.TimeoutExpired) as exc:
                     log(f"cache sweep failed for {e['name']}: {exc!r}")
+                _sync_wake.wait(SYNC_STAGGER_S)  # breathe between entries
+                _sync_wake.clear()
+        _stamp_sweep()
         _sync_wake.wait(SYNC_INTERVAL_S)  # a library save wakes us early
         _sync_wake.clear()
 
