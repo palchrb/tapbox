@@ -79,6 +79,14 @@ BOOT_WINDOW_S = float(os.environ.get("TAPBOX_RECON_BOOT_WINDOW", "120"))
 BACKOFF_MIN_S = float(os.environ.get("TAPBOX_RECON_BACKOFF_MIN", "20"))
 BACKOFF_MAX_S = float(os.environ.get("TAPBOX_RECON_BACKOFF_MAX", "300"))
 DROP_RETRY_S = float(os.environ.get("TAPBOX_RECON_DROP_RETRY", "3"))
+# a FRESH drop means someone is probably standing right there
+# power-cycling the speaker — and a powered-on classic-BT speaker that
+# doesn't page US is invisible to events, so our own pages are the only
+# discovery. Keep them coming every ~15s through the blip window
+# (matches tapboxd's auto-resume), then decay as before. Nothing is
+# playing then (the lost path stopped it), so the radio is free.
+RECENT_DROP_S = float(os.environ.get("TAPBOX_RECON_RECENT", "150"))
+RECENT_RETRY_S = float(os.environ.get("TAPBOX_RECON_RECENT_RETRY", "15"))
 DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_DEBOUNCE", "5"))
 LOCK_RETRY_S = float(os.environ.get("TAPBOX_RECON_LOCK_RETRY", "10"))
 FALLBACK_S = float(os.environ.get("TAPBOX_RECON_FALLBACK", "20"))
@@ -447,7 +455,11 @@ class Reconnector:
             # for many seconds, and each premature local/bt swing restarts
             # go-librespot and yanks mpv's audio device (episode skips)
             self._output("local")
-        self.schedule(self.backoff, None)
+        fresh = (self.disconnected_since is not None
+                 and time.monotonic() - self.disconnected_since
+                 < RECENT_DROP_S)
+        self.schedule(min(self.backoff, RECENT_RETRY_S) if fresh
+                      else self.backoff, None)
         self.backoff = min(self.backoff * 2, BACKOFF_MAX_S)
 
     def _finish_attempt(self):

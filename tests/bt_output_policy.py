@@ -60,15 +60,17 @@ def _install_stubs():
                         "dbus.mainloop.glib": dbus.mainloop.glib})
 
     timers = []
+    delays = []
     glib = types.ModuleType("GLib")
-    glib.timeout_add = lambda ms, cb: (timers.append(cb), len(timers))[1]
+    glib.timeout_add = lambda ms, cb: (timers.append(cb),
+                                       delays.append(ms), len(timers))[2]
     glib.source_remove = lambda i: None
     gio = types.ModuleType("Gio")
     gi = types.ModuleType("gi")
     gi.repository = types.ModuleType("gi.repository")
     gi.repository.GLib, gi.repository.Gio = glib, gio
     sys.modules.update({"gi": gi, "gi.repository": gi.repository})
-    return connected, timers
+    return connected, timers, delays
 
 
 def main():
@@ -79,7 +81,7 @@ def main():
         TAPBOX_RECON_FALLBACK="1", TAPBOX_RECON_DROP_RETRY="1")
     open(os.environ["TAPBOX_BT_FILE"], "w").write("AA:BB:CC:DD:EE:FF\n")
 
-    connected, timers = _install_stubs()
+    connected, timers, delays = _install_stubs()
     sys.path.insert(0, os.path.join(REPO, "pi"))
     import importlib.util
     spec = importlib.util.spec_from_file_location(
@@ -242,6 +244,26 @@ def main():
         [b["device"] for p, b in posts if p == "/output"] == ["bt"], \
         (connects, posts)
     print("7. nudge brings the transport up -> clean bt announce OK")
+
+    # 8: a FRESH drop keeps the page cadence tight (a powered-on speaker
+    # that doesn't page us is invisible to events — our pages are the
+    # only discovery during the blip window); an old drop decays on the
+    # normal ladder
+    delays.clear()
+    connected["v"] = False
+    r.state = "WAITING"
+    r.connecting = r.target
+    r.backoff = 40.0                                   # ladder has grown
+    r.disconnected_since = time.monotonic() - 5        # fresh drop
+    r._attempt_failed("page-timeout")
+    assert delays[-1] == int(bw.RECENT_RETRY_S * 1000), delays
+    r.state = "WAITING"
+    r.connecting = r.target
+    r.backoff = 40.0
+    r.disconnected_since = time.monotonic() - bw.RECENT_DROP_S - 1
+    r._attempt_failed("page-timeout")
+    assert delays[-1] == 40000, delays
+    print("8. fresh drop pages every ~15s; old drop decays as before OK")
 
     print("BT OUTPUT POLICY OK — flap-loop protections intact.")
     return 0

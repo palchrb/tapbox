@@ -1575,10 +1575,13 @@ def _bt_wait_state(playing):
     the screen's 1/s status poll costs nothing extra in steady state."""
     now = time.monotonic()
     if _BT_WAIT["lost"]:
-        if (playing or now - _BT_WAIT["lost"] > BT_WAIT_S
-                or current_output()["output"] != "bt"):
-            # resumed, expired, or the output moved on (A-choice or the
-            # follow-the-speaker fallback flipped to the box speaker)
+        if playing or now - _BT_WAIT["lost"] > BT_WAIT_S:
+            # resumed (any output — the popup's play-on-box-speaker
+            # choice ends in playing) or expired. Deliberately NOT
+            # cleared on an output change: the follow-the-speaker
+            # fallback flips to local ~23s after every drop on boxes
+            # with a built-in speaker, and clearing here silently
+            # disarmed the popup and the auto-resume promise.
             _BT_WAIT["lost"] = 0.0
         elif _bt_transport_ready():
             blip = now - _BT_WAIT["lost"] <= BT_RESUME_S

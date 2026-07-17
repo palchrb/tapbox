@@ -255,6 +255,21 @@ TRANSPORT[0] = False
 daemon.spotify_playing = lambda: False
 print("17. blip on spotify -> resume via go-librespot OK")
 
+# 18. the automatic fallback flipping output to local must NOT disarm
+# the popup/auto-resume (it did: ~23s after every drop on HAT boxes,
+# which silently killed the auto-resume promise)
+ALIVE[0] = True
+set_output("bt")
+daemon._bt_transport_lost()
+set_output("local")  # follow-the-speaker fallback flips the output
+w, r, l = daemon._bt_wait_state(playing=False)
+assert l is True, "fallback output flip disarmed the lost popup"
+TRANSPORT[0] = True  # speaker back — auto-resume must still be armed
+w, r, l = daemon._bt_wait_state(playing=False)
+assert (w, r, l) == (False, False, False), (w, r, l)
+wait_spawn(2)
+print("18. output fallback keeps popup + auto-resume armed OK")
+
 print("BT PLAY KICK OK — pressing play connects the speaker now, "
       "not after the backoff, heals a crashed controller, and the "
       "screen knows what to say meanwhile.")
