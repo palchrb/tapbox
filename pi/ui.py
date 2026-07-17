@@ -978,13 +978,15 @@ class App:
             return ["▶ Play all"] + rows
         if self.view == "settings":
             s = self.settings
-            wifi = "on" if (self.system.get("wifi") or {}).get("enabled") else "off"
+            w = self.system.get("wifi") or {}
+            wifi = "on" if w.get("enabled") else "off"
             return [("Screen off after", self.fmt_timeout(s["screen_timeout_s"])),
                     ("Brightness", f"{s.get('screen_brightness', 100)}%"),
                     ("Volume cap", f"{s['volume_cap']}%"),
                     ("Auto-off (idle)", self.fmt_idle(s["idle_shutdown_min"])),
                     ("Kid mode", "on" if s.get("simple_nav") else "off"),
                     ("Wi-Fi", wifi),
+                    ("Setup hotspot", "on" if w.get("hotspot") else ""),
                     ("Bluetooth", ""),
                     ("Storage", ""),
                     ("Shut down", ""),
@@ -1081,19 +1083,43 @@ class App:
             r = api_post("/system/wifi", {"enabled": not enabled})
             self.system.setdefault("wifi", {}).update(r)
         elif i == 6:
+            # Setup hotspot from the BOX: the only way in at a new place
+            # when saved networks aren't around — the PWA needs a shared
+            # network, which is exactly what's missing (chicken-and-egg).
+            # Joining the AP pops the phone's captive portal into the PWA.
+            hs = bool((self.system.get("wifi") or {}).get("hotspot"))
+            if hs:
+                self.draw_message("Stopping hotspot ...")
+                api_post("/wifi/hotspot", {"enabled": False}, timeout=45)
+                time.sleep(1.2)
+            else:
+                # start_hotspot scans FIRST (the radio can't scan in AP
+                # mode) — that is most of the wait
+                self.draw_message("Starting hotspot ...\n(scanning, ~30 s)")
+                r = api_post("/wifi/hotspot", {"enabled": True}, timeout=90)
+                if r.get("ok"):
+                    self.draw_message(f"On your phone, join\n"
+                                      f"“{r.get('ssid')}”\n"
+                                      f"password: {r.get('password')}")
+                    time.sleep(8)  # long enough to actually read it
+                else:
+                    self.draw_message("Hotspot failed — try again")
+                    time.sleep(1.5)
+            self.last_system = 0.0  # refresh the hotspot state row now
+        elif i == 7:
             self.draw_message("Loading speakers ...")
             self.bt = api_get("/bt")
             self.push("bt")
-        elif i == 7:
+        elif i == 8:
             self.push("storage")
-        elif i in (8, 9):
-            # row 8 = Shut down, row 9 = Restart (an inverted flag here
+        elif i in (9, 10):
+            # row 9 = Shut down, row 10 = Restart (an inverted flag here
             # made Restart power the box off — field-reported)
-            action = "Restarting" if i == 9 else "Shutting down"
+            action = "Restarting" if i == 10 else "Shutting down"
             self.draw_message(f"{action} ... (A confirms, B cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
-                api_post("/system/shutdown", {"restart": i == 9})
+                api_post("/system/shutdown", {"restart": i == 10})
 
     def select_bt(self):
         if self.sel == 0:  # Pair nearest (the one-button flow)
