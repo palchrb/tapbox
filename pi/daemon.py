@@ -1503,7 +1503,13 @@ def _heal_crashed_controller():
 _BT_WAIT = {"since": 0.0, "ready_until": 0.0, "lost": 0.0}
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
-BT_RESUME_S = float(os.environ.get("TAPBOX_BT_RESUME_S", "30"))
+# auto-resume window after an auto-stop. 150s (not 30): a speaker OFF/ON
+# cycle takes 20-60s to re-establish A2DP (own reconnect flaps during its
+# boot, btwatchd's ladder runs 20-40s) — field log 2026-07-17 19:02 landed
+# at 51s and got the press-A popup instead of just continuing. Within the
+# popup's own lifetime the loss is recent and someone is present; beyond
+# BT_WAIT_S the lost state has expired and NOTHING resumes by itself.
+BT_RESUME_S = float(os.environ.get("TAPBOX_BT_RESUME_S", "150"))
 
 
 def _bt_blip_resume():

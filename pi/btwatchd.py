@@ -116,6 +116,7 @@ class Reconnector:
         self.announced = None        # last output we told tapboxd about
         self.disconnected_since = None  # when the target went away
         self._pcm_waiting = False    # a bt announcement awaits the PCM
+        self._nudged = False         # one A2DP nudge per steady period
 
     # --- bus plumbing ------------------------------------------------------
 
@@ -157,6 +158,7 @@ class Reconnector:
                     # one page and starts the backoff ladder
                     self.state = "WAITING"
                     self.backoff = BACKOFF_MIN_S
+                    self._nudged = False  # fresh nudge for the next link
                     if self.disconnected_since is None:
                         self.disconnected_since = time.monotonic()
                     self._notify_lost()
@@ -250,9 +252,26 @@ class Reconnector:
             ready = btbus.a2dp_pcm_present(self.target)
         except Exception:
             ready = True  # can't tell — announce rather than stall
-        if ready or self._pcm_tries <= 0:
+        if ready:
             self._pcm_waiting = False
+            self._nudged = False
             self._output("bt")
+            return
+        if self._pcm_tries <= 0:
+            self._pcm_waiting = False
+            if not self._nudged:
+                # Connected but no audio transport: some speakers' own
+                # reconnect brings only the control link (AVRCP) and the
+                # A2DP profile never comes up — the box then sits
+                # 'connected but silent' until someone presses connect
+                # (field log 2026-07-17 19:02). Device1.Connect on an
+                # already-connected device connects the MISSING profiles.
+                # Exactly one nudge per steady period, then fall back to
+                # today's announce-anyway.
+                self._nudged = True
+                self._nudge_a2dp()
+            else:
+                self._output("bt")  # last resort: pre-nudge behavior
             return
         self._pcm_tries -= 1
         GLib.timeout_add(1000, self._await_pcm_tick)
@@ -260,6 +279,48 @@ class Reconnector:
     def _await_pcm_tick(self):
         self._await_pcm()
         return False
+
+    def _nudge_a2dp(self):
+        """Force the missing A2DP profile up on an already-connected
+        device. Same guards as any attempt: never while another connect
+        is in flight, never without the cross-process flock (bt.py may
+        own the radio). Success re-enters steady, which re-arms the PCM
+        wait; failure announces anyway (the pre-nudge behavior)."""
+        if self.state != "STEADY" or self.connecting:
+            self._output("bt")
+            return
+        lock = acquire_process_lock(blocking=False)
+        if lock is None:
+            self._output("bt")  # bt.py owns the radio — let it finish
+            return
+        self.connecting = self.target
+        self.lock = lock
+        log(f"connected but no A2DP transport — nudging profiles "
+            f"({self.target})")
+        try:
+            dev = dbus.Interface(
+                self.bus.get_object(BLUEZ, dev_path(self.target),
+                                    introspect=False),
+                "org.bluez.Device1")
+            dev.Connect(reply_handler=self._nudge_ok,
+                        error_handler=self._nudge_err,
+                        timeout=CONNECT_TIMEOUT_S)
+        except Exception:
+            self._finish_attempt()
+            self._output("bt")
+
+    def _nudge_ok(self):
+        self._finish_attempt()
+        self.enter_steady("a2dp nudged")  # re-arms the PCM wait
+
+    def _nudge_err(self, err):
+        self._finish_attempt()
+        try:
+            nm = err.get_dbus_name()
+        except Exception:
+            nm = err.__class__.__name__
+        log(f"a2dp nudge failed ({nm}) — announcing anyway")
+        self._output("bt")
 
     def _output(self, device):
         """Follow-the-speaker output policy: connected -> bt, confirmed

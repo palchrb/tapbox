@@ -188,6 +188,61 @@ def main():
     assert r.state == "STEADY" and r.connecting is None
     print("5. output-to-bt kick connects immediately, no-op when connected OK")
 
+    # 6: connected but the A2DP transport never appears (speaker's own
+    # reconnect brought only AVRCP): exactly ONE profile nudge, a fresh
+    # PCM wait after it, then the announce as last resort — never a
+    # nudge loop
+    posts.clear()
+    timers.clear()
+    connects = []
+
+    class NudgeIface:
+        def __init__(self, *a):
+            pass
+
+        def Get(self, i, p, timeout=None):
+            return connected["v"]
+
+        def Connect(self, reply_handler=None, error_handler=None,
+                    timeout=None):
+            connects.append(1)
+            reply_handler()  # the nudge succeeds (profiles connect)
+
+    bw.dbus.Interface = lambda o, i: NudgeIface()
+    connected["v"] = True
+    pcm["v"] = False
+    r.state = "WAITING"
+    r.announced = None
+    r.connecting = None
+    r.enter_steady("nudge test")
+    fire()  # burns PCM waits -> nudge -> fresh waits -> announce fallback
+    assert len(connects) == 1, f"nudge must fire exactly ONCE: {connects}"
+    assert [b["device"] for p, b in posts if p == "/output"] == ["bt"], posts
+    print("6. missing A2DP gets one profile nudge, no loop OK")
+
+    # ...and when the PCM shows up thanks to the nudge, no fallback spam
+    posts.clear()
+    timers.clear()
+    connects.clear()
+    r._nudged = False
+    r.state = "WAITING"
+    r.announced = None
+
+    class NudgePcmIface(NudgeIface):
+        def Connect(self, reply_handler=None, error_handler=None,
+                    timeout=None):
+            connects.append(1)
+            pcm["v"] = True  # the nudge brings the transport up
+            reply_handler()
+
+    bw.dbus.Interface = lambda o, i: NudgePcmIface()
+    r.enter_steady("nudge test 2")
+    fire()
+    assert len(connects) == 1 and \
+        [b["device"] for p, b in posts if p == "/output"] == ["bt"], \
+        (connects, posts)
+    print("7. nudge brings the transport up -> clean bt announce OK")
+
     print("BT OUTPUT POLICY OK — flap-loop protections intact.")
     return 0
 
