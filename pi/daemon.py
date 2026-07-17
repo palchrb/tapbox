@@ -963,6 +963,24 @@ def _bt_playback_active():
 _netmgmt.probe_hold[0] = _bt_playback_active
 
 
+def _net_changed():
+    """A wifi SWITCH while online strands go-librespot's long-lived TCP
+    connections (AP/dealer/spclient) — they die silently and it spends
+    minutes in 30-60s timeout storms that wedge its local API, which
+    /status and /playpause block on: the field-reported frozen UI
+    (2026-07-17). Restarting is ~5s and deterministic. try-restart:
+    a parked unit stays parked — the supervisor owns starting it."""
+    log("network changed — restarting go-librespot (stale connections)")
+    try:
+        subprocess.run(["systemctl", "try-restart", "go-librespot"],
+                       timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"go-librespot restart after net change failed: {e!r}")
+
+
+_netmgmt.net_changed[0] = _net_changed
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep the journal clean
         pass

@@ -139,4 +139,29 @@ wait_for("probe resumes after re-enable",
 assert RF[seen] is True, f"probe did not unblock the radio: {RF}"
 print("6. wifi_probe=1 resumes probing live OK")
 
+
+# --- the net-changed hook: a wifi SWITCH while online must restart
+# --- go-librespot (stale AP/dealer connections wedged its API and froze
+# --- the UI — field log 2026-07-17) ----------------------------------------
+
+assert netmgmt.net_changed[0] is daemon._net_changed, \
+    "daemon must install the net-changed hook"
+CHANGED = []
+netmgmt.net_changed[0] = lambda: CHANGED.append(1)
+netmgmt.hotspot_active = lambda: False
+netmgmt._known_wifi_names = lambda: {"TP-LINK_4390"}
+
+# 7. successful join fires the hook exactly once
+netmgmt._nmcli = lambda *a, timeout=60: (0, "Connection activated")
+r = netmgmt.wifi_connect("TP-LINK_4390")
+assert r["ok"] and CHANGED == [1], (r, CHANGED)
+print("7. wifi switch success fires the go-librespot restart hook OK")
+
+# 8. a failed join must NOT restart anything
+CHANGED.clear()
+netmgmt._nmcli = lambda *a, timeout=60: (4, "Secrets were required")
+r = netmgmt.wifi_connect("TP-LINK_4390")
+assert not r["ok"] and CHANGED == [], (r, CHANGED)
+print("8. failed join leaves go-librespot alone OK")
+
 print("wifi_probe_hold: all OK")

@@ -97,6 +97,15 @@ _auto = {"last_ok": 0.0, "blocked": False, "next_probe": 0.0,
 # documented firmware-crash trigger (bt.py recover()). The probe is
 # DEFERRED, not skipped: it fires on the first pass after playback stops.
 probe_hold = [lambda: False]
+# tapboxd installs a callback here too: a code-driven SWITCH between
+# networks (PWA "join this wifi" while already online) strands long-lived
+# TCP connections — go-librespot's AP/dealer/spclient die silently and it
+# spends minutes in 30-60s timeout storms that wedge its local API, which
+# /status and /playpause then block on (field log 2026-07-17: frozen UI).
+# The daemon's callback restarts it — ~5s and deterministic. Not needed on
+# the wifi-was-off paths: no internet means the supervisor already parked
+# go-librespot, and it starts fresh when connectivity returns.
+net_changed = [lambda: None]
 _last_scan = {"networks": [], "at": 0.0}  # wlan0 can't scan while in AP mode
 
 
@@ -311,6 +320,11 @@ def wifi_connect(ssid, password=None):
                 if _hotspot_profile_exists() else start_hotspot()
             tail += "\nsetup hotspot restored — reconnect and retry"
         enabled, cur, ip = wifi_state()
+        if code == 0:
+            try:
+                net_changed[0]()  # see the hook comment above
+            except Exception as e:
+                log(f"net-changed hook failed: {e!r}")
         return {"ok": code == 0, "output": tail, "ssid": cur, "ip": ip}
     finally:
         WIFI_LOCK.release()
