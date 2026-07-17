@@ -80,7 +80,18 @@ Bluetooth speaker**:
 From now on, turning the speaker on is enough; the box reconnects by
 itself within seconds (btwatchd listens for BlueZ D-Bus events; set
 `TAPBOX_BT_BACKEND=cli` on the tapbox-bt-reconnect service to fall
-back to the old 60s poll loop).
+back to the old 60s poll loop). Pairing itself still runs through
+bluetoothctl by default; set `TAPBOX_BT_PAIR=dbus` on the
+tapbox-daemon service to use the new Agent1 path (kept opt-in until
+the rig matrix in PLAN-bt-b2-pairing.md passes).
+
+**Pairing from a car / head unit:** cars drive the pairing themselves
+and expect the *device* to be visible. PWA → Bluetooth → **Pair from
+car**: the box becomes discoverable for ~2 minutes — start the pairing
+from the car's Bluetooth menu, then pick the car as speaker when it
+appears in the device list. The box only accepts pairings during that
+window (never silently), and pairing alone never moves the audio — the
+new device is just listed, one tap away from becoming the output.
 
 ### 4. Build the library
 

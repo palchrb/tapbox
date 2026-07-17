@@ -224,6 +224,22 @@ fi
 mkdir -p /var/lib/tapbox/spotify-cache
 chown "$RUN_USER:" /var/lib/tapbox/spotify-cache
 
+# Persistent journal, capped at 200M: a wedged box always gets a power
+# cycle, and the default volatile journal loses exactly the evidence we
+# need afterwards (BT firmware crashes, watchdog decisions). bt.py's
+# crash detection reads the kernel journal too. The cap protects the SD
+# card; journald prunes oldest-first long before it matters.
+if write_if_changed /etc/systemd/journald.conf.d/tapbox.conf <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+EOF
+then
+  systemctl restart systemd-journald 2>/dev/null || true
+  journalctl --flush 2>/dev/null || true  # move the boot's volatile logs to disk
+  echo "    journald: persistent storage, capped at 200M"
+fi
+
 # --- 4. bluetooth + go-librespot services ------------------------------------
 
 echo "==> [4/8] Services (bluetooth, bluealsa, go-librespot, bt-reconnect)..."
@@ -542,6 +558,9 @@ EOF2
 
 DAEMON_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
+# Pairing over D-Bus (B2, PLAN-bt-b2-pairing.md): opt in per box until the
+# rig matrix passes —  systemctl edit tapbox-daemon  ->
+#   [Service] Environment=TAPBOX_BT_PAIR=dbus
 write_if_changed /etc/systemd/system/tapbox-daemon.service <<EOF && DAEMON_CHANGED=1
 [Unit]
 Description=TapBox orchestration daemon (playback state + API)

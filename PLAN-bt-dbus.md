@@ -1,6 +1,6 @@
 # Plan: bt.py step 2 — BlueZ D-Bus port
 
-Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py, field-verified (speaker switching over dbus). C implemented + rig-gated (tests/bt_reconnect.py PASSED 5/5 on the rig 2026-07-08). btwatchd is the live unit; bash kept as tapbox-bt-reconnect-poll fallback. Follow-the-speaker output policy added with anti-flap protections (PCM-gated bt announce, sustained-absence local fallback, stale-failure no-op, deferred mpv/go-librespot switch) — regression-gated by tests/bt_output_policy.py. Pairing stays cli until B2. Remaining: confirm <5s power-on reconnect once the firmware-crash issue is settled (HAT antenna), then B2 (Agent1), then D (cleanup). Drafted 2026-07-07 and refined by three
+Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py, field-verified (speaker switching over dbus). C implemented + rig-gated (tests/bt_reconnect.py PASSED 5/5 on the rig 2026-07-08). btwatchd is the live unit; bash kept as tapbox-bt-reconnect-poll fallback. Follow-the-speaker output policy added with anti-flap protections (PCM-gated bt announce, sustained-absence local fallback, stale-failure no-op, deferred mpv/go-librespot switch) — regression-gated by tests/bt_output_policy.py. Pairing stays cli until B2. Remaining: confirm <5s power-on reconnect once the firmware-crash issue is settled (HAT antenna), then B2 (Agent1), then D (cleanup). **B2 is now implemented — together with the new incoming pairing mode ("pair from car") — per [PLAN-bt-b2-pairing.md](./PLAN-bt-b2-pairing.md) (built 2026-07-17, `TAPBOX_BT_PAIR=dbus` opt-in until its §6 rig matrix passes), which also amends §5 below (btwatchd never hosts an agent).** Drafted 2026-07-07 and refined by three
 review passes (architecture, implementation, test) against the codebase
 as of commit `c379b01`. This document is the implementation bible; the
 reviews' full findings are folded in below.
@@ -158,8 +158,12 @@ connection closes (a crashing CLI can't leak a scan).
   re-register: unregister-then-register or ignore.
 - Outgoing `Pair()` uses the agent registered by the SAME bus
   connection; `RequestDefaultAgent` is only needed for incoming
-  (speaker-initiated) authorization — CLI skips it, reconnect daemon
-  (C) calls it.
+  (speaker-initiated) authorization — CLI skips it, ~~reconnect daemon
+  (C) calls it~~ **amended 2026-07-16 (PLAN-bt-b2-pairing.md §9):
+  btwatchd never hosts an agent — a permanent default agent is a
+  permanently-open pairing door, and bonded devices reconnect via
+  Trusted=true without one. RequestDefaultAgent lives only in the
+  `visible` pairing-window process.**
 - Callbacks: `Release`/`Cancel` no-ops; `AuthorizeService` -> allow;
   `RequestConfirmation` -> allow; `RequestPinCode` -> "0000",
   `RequestPasskey` -> 0 (legacy speakers). JBL GO/JR310BT negotiate

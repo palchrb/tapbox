@@ -148,6 +148,12 @@
         <option value="0">never</option>
       </select>
     </label>
+    <label>Look for known Wi-Fi while off
+      <select id="set-wifiprobe">
+        <option value="1">every 10 min</option>
+        <option value="0">only when I reconnect</option>
+      </select>
+    </label>
     <label>Spotify cache size
       <select id="set-spotcache">
         <option value="5">5 GB</option><option value="10">10 GB</option>
@@ -174,11 +180,14 @@
     <div class="controls">
       <button id="btn-scan">Scan for new</button>
       <button id="btn-pair">Pair nearest</button>
+      <button id="btn-visible">Pair from car</button>
     </div>
     <div id="bt-found"></div>
     <p class="dim small">Put the speaker in pairing mode first. “Scan” lists
     nearby devices so you can pick one; “Pair nearest” automatically connects
-    to the single audio device in pairing mode (~30–60 s).</p>
+    to the single audio device in pairing mode (~30–60 s). “Pair from car”
+    makes the box visible for ~2 minutes — start the pairing from the car’s
+    Bluetooth menu, then pick the car as speaker when it appears above.</p>
   </div>
   <div class="card">
     <h2>Wi-Fi</h2>

@@ -28,6 +28,10 @@ CLI (used by play.sh and tapboxd's /bt endpoints):
   bt.py use <MAC>       connect a device (pairs first when unknown)
   bt.py forget <MAC>    drop the bond (clears config if it was active)
   bt.py ensure          connect the remembered device, else auto-pair
+  bt.py reconnect       tear down + rebuild the configured device's link
+  bt.py visible [secs] [adopt]  incoming pairing mode: the box becomes
+                        discoverable and accepts a pairing started FROM
+                        a car/head unit (default 120s window)
 """
 
 import fcntl
@@ -107,6 +111,17 @@ def _hci_up():
         _HCICONFIG_WARNED[0] = True
         log("hciconfig missing — crash detection uses the kernel log only")
     return "UP RUNNING" in out
+
+
+def hci_tx_bytes():
+    """The controller's TX byte counter — ground truth for 'does anything
+    actually leave the radio'. A2DP playback moves ~35kB/s, so a flat
+    counter while the player claims to play means the transport is a
+    zombie (bluez still says connected, writes go nowhere). None when
+    unavailable (hciconfig dropped, no adapter)."""
+    code, out = _run(["hciconfig", "hci0"], timeout=10)
+    m = re.search(r"TX bytes:(\d+)", out) if code == 0 else None
+    return int(m.group(1)) if m else None
 
 
 def _hci_crashed():
@@ -220,6 +235,12 @@ def _print_devices(devices):
         log(f"  {d['mac']}  {d['name']}" + ("   [audio]" if d["audio"] else ""))
 
 
+def _cache_secs(default):
+    """Discovery-before-pair budget. Env-tunable (TAPBOX_BT_CACHE_SECS)
+    so the test harness's fake bluez doesn't cost real wall-clock."""
+    return int(os.environ.get("TAPBOX_BT_CACHE_SECS") or default)
+
+
 def _paired_after_retry(mac):
     """Device info can intermittently come back empty (D-Bus hiccup) —
     retry before concluding the device is unpaired."""
@@ -243,7 +264,7 @@ def connect(mac):
     if not _paired_after_retry(mac):
         # Unknown/unpaired device: BlueZ must discover it before pairing works
         log(f"==> {mac} is not paired — scanning for it (pairing mode helps)...")
-        btbus.populate_cache(12)
+        btbus.populate_cache(_cache_secs(12))
         verdict, pair_out = btbus.pair(mac)
         log(pair_out.strip())
         if verdict == btbus.PAIR_ALREADY:
@@ -255,7 +276,7 @@ def connect(mac):
             log("==> Stale key on the device — clearing bond and retrying once...")
             btbus.remove_device(mac)
             time.sleep(2)
-            btbus.populate_cache(10)
+            btbus.populate_cache(_cache_secs(10))
             verdict2, out2 = btbus.pair(mac)
             log(out2.strip())
             if verdict2 not in (btbus.PAIR_OK, btbus.PAIR_ALREADY):
@@ -415,6 +436,50 @@ def ensure():
     return connect(mac) if mac else pair_auto()
 
 
+def visible(secs=120, adopt=False):
+    """Incoming pairing mode for cars/head units: the box becomes
+    discoverable and auto-accepts the pairing THEY initiate (speakers
+    pair the other way round — see connect()). New bonds come back
+    trusted (transport detail: an untrusted device's A2DP authorization
+    would arrive after our agent is gone). Policy: report-only — the
+    parent taps 'Use as speaker' in the PWA, which runs the full
+    battle-tested connect() adopt path; auto-adopt stays available as
+    the explicit `adopt` arg (PLAN-bt-b2-pairing.md D6: whatever paired
+    during the window must not silently seize the kid's audio)."""
+    bt_up()
+    log(f"==> Box is visible for {secs}s — start the pairing from the "
+        f"car's Bluetooth menu now...")
+    new = btbus.pairing_window(secs)
+    for d in new:
+        log(f"==> Paired: {d['name']} ({d['mac']})")
+    if not new:
+        log("No device paired during the window. Start the pairing from "
+            "the car while the box is visible, then try again.")
+        return False
+    if adopt and len(new) == 1:
+        return connect(new[0]["mac"])
+    log("==> Pick it as the speaker in the app to route audio there.")
+    return True
+
+
+def reconnect():
+    """Tear the configured device's link down, then rebuild it. This is
+    the zombie-transport cure (tapboxd's stall watchdog: position moves,
+    radio TX flat): bluez still claims connected there, so ensure()'s
+    plain connect would no-op against the lying state — only an explicit
+    disconnect actually kills the dead transport."""
+    try:
+        mac = open(MAC_FILE).read().strip()
+    except OSError:
+        mac = ""
+    if not mac:
+        return ensure()
+    log(f"==> Rebuilding the link to {mac} (disconnect + connect)...")
+    btbus.disconnect_device(mac)
+    time.sleep(2)  # let bluez finish the teardown before paging again
+    return connect(mac)
+
+
 # --- daemon-facing API (tapboxd's /bt endpoints call these) ----------------------
 
 BT_LOCK = threading.Lock()  # one pairing/connect operation at a time
@@ -491,13 +556,22 @@ def bt_scan():
 
 # commands that touch the radio hold the cross-process lock
 _RADIO_CMDS = {"connect", "use", "forget", "disconnect", "ensure",
-               "recover", "scan", "scan-raw"}
+               "reconnect", "recover", "scan", "scan-raw", "visible"}
 
 
 def main():
     args = sys.argv[1:]
     cmd = args[0] if args else ""
-    lock = acquire_process_lock() if cmd in _RADIO_CMDS else None  # noqa: F841
+    # visible must not QUEUE behind another radio op (a silently delayed
+    # 2-minute window is worse than "try again"); everything else waits
+    if cmd == "visible":
+        lock = acquire_process_lock(blocking=False)  # noqa: F841
+        if lock is None:
+            log("another bluetooth operation is running — try again "
+                "in a moment")
+            return 1
+    else:
+        lock = acquire_process_lock() if cmd in _RADIO_CMDS else None  # noqa: F841
     if cmd == "scan":
         devices = discover()
         log("Devices seen during scan:")
@@ -521,6 +595,16 @@ def main():
         return 0 if fn(args[1]) else 1
     if cmd == "ensure":
         return 0 if ensure() else 1
+    if cmd == "reconnect":
+        return 0 if reconnect() else 1
+    if cmd == "visible":
+        secs = int(args[1]) if len(args) > 1 and args[1].isdigit() else 120
+        secs = min(max(secs, 10), 300)
+        try:
+            return 0 if visible(secs, adopt="adopt" in args[2:]) else 1
+        except RuntimeError as e:  # dbus/gi unavailable — additive feature,
+            log(str(e))            # the box just behaves as before
+            return 2
     if cmd == "recover":
         return 0 if recover() else 1
     print(__doc__.split("CLI", 1)[1], file=sys.stderr)

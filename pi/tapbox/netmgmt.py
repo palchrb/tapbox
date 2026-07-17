@@ -89,7 +89,14 @@ WATCHDOG_DELAY_S = int(os.environ.get("TAPBOX_WIFI_WATCHDOG_DELAY", "45"))
 # so a parent's hotspot at the cabin is still found within ~10 minutes.
 PROBE_INTERVAL_S = int(os.environ.get("TAPBOX_WIFI_PROBE_INTERVAL", "600"))
 PROBE_WINDOW_S = int(os.environ.get("TAPBOX_WIFI_PROBE_WINDOW", "30"))
-_auto = {"last_ok": 0.0, "blocked": False, "next_probe": 0.0}
+_auto = {"last_ok": 0.0, "blocked": False, "next_probe": 0.0,
+         "probe_held": False}
+# tapboxd installs the real check at startup: hold the periodic probe
+# while music streams over bluetooth. NM's scan shares the Zero 2 W's
+# 2.4GHz radio with A2DP — mid-playback it stutters the audio and is the
+# documented firmware-crash trigger (bt.py recover()). The probe is
+# DEFERRED, not skipped: it fires on the first pass after playback stops.
+probe_hold = [lambda: False]
 _last_scan = {"networks": [], "at": 0.0}  # wlan0 can't scan while in AP mode
 
 
@@ -167,7 +174,9 @@ def _wifi_watchdog():
     stay on only when a known network actually takes us in. Turning wifi
     on via PWA/screen (set_wifi) always grants a fresh grace window; a
     manual 'wifi off' is never probed back on. Never triggers during
-    playback of streams by construction — streaming means the link is up."""
+    playback of streams by construction — streaming means the link is up.
+    Offline playback (cached content over bluetooth) is protected too:
+    probe_hold defers the probe until the music stops."""
     from tapbox.sysinfo import load_settings
     time.sleep(WATCHDOG_DELAY_S)
     _auto["last_ok"] = time.monotonic()
@@ -190,15 +199,33 @@ def _wifi_watchdog():
                         "hotspot")
                     start_hotspot()
                 else:
-                    auto_min = load_settings().get("wifi_auto_off_min", 0)
+                    s = load_settings()
+                    auto_min = s.get("wifi_auto_off_min", 0)
                     if auto_min and now - _auto["last_ok"] > auto_min * 60:
-                        log(f"no known network for {auto_min} min — "
-                            f"wifi off (probing every "
-                            f"{PROBE_INTERVAL_S // 60} min)")
+                        log(f"no known network for {auto_min} min — wifi off "
+                            + (f"(probing every {PROBE_INTERVAL_S // 60} min)"
+                               if s.get("wifi_probe", 1) else
+                               "(probing disabled — reconnect manually)"))
                         _rfkill(False)
-                        _auto.update(blocked=True,
+                        _auto.update(blocked=True, probe_held=False,
                                      next_probe=now + PROBE_INTERVAL_S)
             elif _auto["blocked"] and now >= _auto["next_probe"]:
+                if not load_settings().get("wifi_probe", 1):
+                    # the parent turned probing off (PWA setting): the
+                    # radio stays down until an explicit reconnect
+                    # (set_wifi) — no scans at all, so bt playback can
+                    # never be disturbed, and zero standby battery spend
+                    time.sleep(30)
+                    continue
+                if probe_hold[0]():
+                    # see probe_hold above: no 2.4GHz scan mid-A2DP
+                    if not _auto["probe_held"]:
+                        _auto["probe_held"] = True
+                        log("wifi probe: held — music playing over "
+                            "bluetooth (probing when it stops)")
+                    time.sleep(30)
+                    continue
+                _auto["probe_held"] = False
                 log("wifi probe: looking for known networks")
                 _rfkill(True)  # NetworkManager scans + auto-joins known nets
                 found = None

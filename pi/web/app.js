@@ -602,6 +602,7 @@ async function loadSettings() {
   $("#set-resume").value = String(s.resume_on_boot);
   $("#set-kidnav").value = String(s.simple_nav || 0);
   $("#set-wifioff").value = String(s.wifi_auto_off_min);
+  $("#set-wifiprobe").value = String(s.wifi_probe);
 }
 
 for (const [id, key] of [["#set-screen", "screen_timeout_s"],
@@ -611,7 +612,8 @@ for (const [id, key] of [["#set-screen", "screen_timeout_s"],
                          ["#set-spotcache", "spotify_cache_gb"],
                          ["#set-resume", "resume_on_boot"],
                          ["#set-kidnav", "simple_nav"],
-                         ["#set-wifioff", "wifi_auto_off_min"]]) {
+                         ["#set-wifioff", "wifi_auto_off_min"],
+                         ["#set-wifiprobe", "wifi_probe"]]) {
   $(id).addEventListener("change", async () => {
     try {
       await api("/settings", { method: "PUT",
@@ -809,10 +811,11 @@ async function loadBt() {
     wrap.appendChild(row);
   }
   $("#btn-pair").disabled = bt.pairing;
+  $("#btn-visible").disabled = bt.pairing;
 }
 
-async function btAction(path, body, busyMsg) {
-  toast(busyMsg, 60000);
+async function btAction(path, body, busyMsg, busyMs = 60000) {
+  toast(busyMsg, busyMs);
   try {
     const r = await api(path, { method: "POST", body });
     toast(r.ok ? "OK" : (r.output || "Failed").split("\n").pop(), r.ok ? 2500 : 8000);
@@ -829,6 +832,19 @@ $("#btn-pair").addEventListener("click", async () => {
   await btAction("/bt/pair", {}, "Scanning and pairing the nearest speaker …");
   btn.disabled = false;
   btn.textContent = "Pair nearest";
+});
+
+$("#btn-visible").addEventListener("click", async () => {
+  const btn = $("#btn-visible");
+  btn.disabled = true;
+  btn.textContent = "Visible … (~2 min)";
+  const tick = setInterval(loadBt, 5000); // a new bond shows up live
+  await btAction("/bt/visible", { secs: 120 },
+    "Box is visible — start the pairing from the car’s Bluetooth menu …",
+    150000);
+  clearInterval(tick);
+  btn.disabled = false;
+  btn.textContent = "Pair from car";
 });
 
 $("#btn-scan").addEventListener("click", async () => {

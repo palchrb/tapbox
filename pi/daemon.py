@@ -49,6 +49,10 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /bt/scan    scan ~20s, list nearby devices (pick one -> /bt/connect)
   POST /bt/pair    {"name"?} — one-button flow: auto-pair the single audio
                    device in pairing mode (play.sh's validated flow)
+  POST /bt/visible {"secs"?} — incoming pairing mode: the box becomes
+                   discoverable for ~2 min and accepts a pairing started
+                   FROM a car/head unit; the new bond shows up in GET /bt
+                   for the parent to pick as speaker (never auto-adopted)
   POST /bt/connect {"mac"}  — connect a speaker; pairs first when the mac
                    is new (picked from a scan), routes audio to it
   POST /bt/forget  {"mac"}  — drop the bond (permanent)
@@ -151,7 +155,9 @@ PORTAL_PORT = int(os.environ.get("TAPBOX_PORTAL_PORT", "80"))
 # the home network (a PIN gate is a product-phase addition).
 BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
 # restart playback when it claims to play but makes no progress this long
-STALL_S = int(os.environ.get("TAPBOX_STALL_S", "30"))
+STALL_S = float(os.environ.get("TAPBOX_STALL_S", "30"))
+# how often the stall watchdog samples position + radio TX counters
+STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
 WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/tapbox/web")
@@ -169,7 +175,7 @@ def player_path():
 # --- moved to the tapbox package; aliases keep internal call sites and the
 # --- tests' daemon.<name> monkeypatching working unchanged ----------------------
 
-from tapbox import bt as _bt, btbus  # noqa: E402
+from tapbox import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
 from tapbox.library import (  # noqa: E402
     ORDERS, artwork_allowed, expand_target, find_entry, library_with_covers,
     load_library, normalize_library, save_library, state_key, _cache_sweeper,
@@ -250,33 +256,74 @@ class Orchestrator:
         routes into a wall — the box looks hung until someone reboots it.
         Watch for 'claims to be playing but no progress for STALL_S', then
         restart playback (the 3s bookmark resumes it in place) once the
-        output is able to make sound again."""
+        output is able to make sound again.
+
+        A second failure mode leaves the position TICKING: bluez still
+        says connected, bluealsa still lists the PCM, mpv keeps decoding —
+        but nothing leaves the radio (a zombie transport). The controller's
+        TX byte counter is ground truth there: A2DP moves ~35kB/s, so a
+        counter that stays flat across STALL_S of claimed playback means
+        the link is dead and must be torn down and rebuilt — waiting on
+        _audio_ready() would never fire, since bluez keeps lying."""
         last_pos, last_change = None, time.monotonic()
+        last_tx, last_tx_change = None, time.monotonic()
         while True:
-            time.sleep(5)
+            time.sleep(STALL_POLL_S)
             try:
                 with self.lock:
                     alive = self._mpv_alive()
                     age = time.monotonic() - self.child_started
                 if not alive or age < 30:  # startup grace: file/stream open
                     last_pos, last_change = None, time.monotonic()
+                    last_tx, last_tx_change = None, time.monotonic()
                     continue
                 paused = mpv_get("pause")
                 pos = mpv_get("playback-time")
-                # deliberate pause is not a stall; an unresponsive IPC
-                # (both None) is treated the same as a frozen position
-                if paused is True or (pos is not None and pos != last_pos):
-                    last_pos, last_change = pos, time.monotonic()
+                now = time.monotonic()
+                # deliberate pause is not a stall, and sends no audio —
+                # the TX clock must not run while paused; an unresponsive
+                # IPC (both None) is treated the same as a frozen position
+                if paused is True:
+                    last_pos, last_change = pos, now
+                    last_tx, last_tx_change = None, now
                     continue
-                stalled = time.monotonic() - last_change
-                if stalled < STALL_S:
-                    continue
-                log(f"playback stalled {int(stalled)}s (position frozen) "
-                    f"— restarting player")
+                zombie = False
+                if pos is not None and pos != last_pos:
+                    last_pos, last_change = pos, now
+                    # the clock moves — but does anything leave the radio?
+                    # (only the bt output routes through the controller)
+                    if current_output()["output"] != "bt":
+                        last_tx, last_tx_change = None, now
+                        continue
+                    tx = _bt.hci_tx_bytes()
+                    # None = can't judge (no adapter/hciconfig); a lower
+                    # value = counter reset or wrap — both restart the clock
+                    if tx is None or last_tx is None or tx != last_tx:
+                        last_tx, last_tx_change = tx, now
+                        continue
+                    if now - last_tx_change < STALL_S:
+                        continue
+                    zombie = True
+                    log(f"playback stalled {int(now - last_tx_change)}s "
+                        f"(position moves, radio TX flat) — rebuilding the "
+                        f"bluetooth link and restarting player")
+                else:
+                    stalled = now - last_change
+                    if stalled < STALL_S:
+                        continue
+                    log(f"playback stalled {int(stalled)}s (position "
+                        f"frozen) — restarting player")
                 with self.lock:
                     self._stop_child()  # bookmark survives (terminated flag)
                 ready = False
                 healed = False
+                if zombie:
+                    # bluez is lying (the PCM is still listed), so
+                    # _audio_ready() would answer yes against a dead link
+                    # and we'd respawn straight back into the zombie.
+                    # Tear down + reconnect first, THEN trust the probe.
+                    healed = True
+                    _bt_recover("reconnect")
                 for i in range(12):  # give a rebooting speaker ≤60s
                     ready = _audio_ready()
                     if ready:
@@ -287,19 +334,14 @@ class Orchestrator:
                     if not healed and (i >= 4 or _bt._hci_crashed()):
                         healed = True
                         log("audio missing — running bluetooth recovery")
-                        try:
-                            subprocess.run(
-                                [sys.executable, _bt.__file__, "ensure"],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=240)
-                        except (OSError, subprocess.TimeoutExpired) as e:
-                            log(f"bluetooth recovery failed: {e!r}")
+                        _bt_recover("ensure")
                     time.sleep(5)
                 if not ready:
                     # speaker still gone: don't restart into a void — the
                     # bookmark is saved, any button press resumes later
                     log("output still not ready — leaving playback stopped")
                     last_pos, last_change = None, time.monotonic()
+                    last_tx, last_tx_change = None, time.monotonic()
                     continue
                 with self.lock:
                     if (self.target and self.source == "mpv"
@@ -307,6 +349,7 @@ class Orchestrator:
                         self._spawn(self.target, reverse=self.reverse,
                                     resume=self.resume)
                 last_pos, last_change = None, time.monotonic()
+                last_tx, last_tx_change = None, time.monotonic()
             except Exception as e:
                 log(f"stall watchdog error: {e!r}")
 
@@ -897,6 +940,28 @@ class Orchestrator:
 ORCH = Orchestrator()
 
 
+def _bt_playback_active():
+    """Is there an mpv session on the bluetooth output right now?
+    netmgmt's wifi probe holds while this is true — an NM scan on the
+    shared 2.4GHz radio mid-A2DP stutters the audio and is the documented
+    firmware crasher (bt.py recover()). Paused counts too: a kid
+    mid-listen resumes any second, and resuming into a live ~30s probe
+    window is the same collision — the hold only ends when the session
+    is gone (stop, end of queue, idle teardown). Spotify is deliberately
+    not checked: the probe only runs with wifi down, where it can't
+    stream."""
+    try:
+        if current_output()["output"] != "bt":
+            return False
+        with ORCH.lock:
+            return ORCH._mpv_alive()
+    except Exception:
+        return False
+
+
+_netmgmt.probe_hold[0] = _bt_playback_active
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep the journal clean
         pass
@@ -1214,6 +1279,18 @@ class Handler(BaseHTTPRequestHandler):
                 _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
+            elif self.path == "/bt/visible":
+                try:
+                    secs = min(max(int(body.get("secs") or 120), 10), 300)
+                except (TypeError, ValueError):
+                    secs = 120
+                # an incoming SSP dance during A2DP streaming is the same
+                # firmware crasher as an outgoing pair — quiesce around it
+                resume = _bt_quiesce()
+                r = bt_action(["visible", str(secs)], timeout=secs + 150)
+                _bt_resume(resume)
+                self._send(409 if r is None else 200,
+                           r or {"error": "bt operation already in progress"})
             elif self.path in ("/bt/connect", "/bt/forget",
                                "/bt/disconnect"):
                 mac = str(body.get("mac") or "")
@@ -1322,6 +1399,18 @@ def _spotify_bookmarker():
 
 def _audio_ready():
     return audio_ready()  # shared logic lives in tapbox.output
+
+
+def _bt_recover(verb):
+    """Run a bt.py recovery verb ('ensure' or 'reconnect') as a
+    subprocess — it takes the cross-process radio lock there, so a
+    btwatchd retry can't race the recovery mid-flight."""
+    try:
+        subprocess.run([sys.executable, _bt.__file__, verb],
+                       stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=240)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"bluetooth recovery ({verb}) failed: {e!r}")
 
 
 def _bt_transport_ready():

@@ -211,13 +211,26 @@ def _cli_discover(secs):
 
 # --- primitives: actions ----------------------------------------------------------
 # Phase B1: connect/disconnect/trust/remove run over D-Bus (typed
-# org.bluez.Error.* names replace the regexes). Pairing stays on the cli
-# backend until phase B2 (Agent1) — bluetoothctl's built-in agent handles
-# the SSP dance for us there.
+# org.bluez.Error.* names replace the regexes). Phase B2
+# (PLAN-bt-b2-pairing.md): pairing over D-Bus with our own Agent1 exists
+# behind TAPBOX_BT_PAIR=dbus — bluetoothctl stays the default until the
+# rig matrix passes, and the permanent fallback after.
 
 def pair(mac):
-    """(classification, raw_output_for_log). CLI in every backend until
-    phase B2 registers our own NoInputNoOutput agent."""
+    """(classification, raw_output_for_log). Kill switch: the dbus/Agent1
+    path runs only with TAPBOX_BT_PAIR=dbus until the B2 rig matrix
+    passes (PLAN-bt-b2-pairing.md §6); bluetoothctl's built-in agent is
+    the proven default and the permanent in-call fallback. Read per call
+    so a `systemctl edit` needs only a service restart."""
+    if backend() == "dbus" and os.environ.get("TAPBOX_BT_PAIR") == "dbus":
+        try:
+            return _dbus_pair(mac)
+        except Exception as e:  # infra only; classified errors are the API
+            log(f"bt dbus pair failed ({e.__class__.__name__}) — cli fallback")
+    return _cli_pair(mac)
+
+
+def _cli_pair(mac):
     code, out = _ctl("pair", mac, timeout=45)
     if code == 0:
         return PAIR_OK, out
@@ -297,6 +310,26 @@ def _map_remove_error(name, msg):
     if name.endswith(".DoesNotExist") or "UnknownObject" in name:
         return REMOVE_NOT_FOUND, f"{name}: {msg}"
     return REMOVE_ERROR, f"{name}: {msg}"
+
+
+def _map_pair_error(name, msg):
+    """Typed org.bluez.Error.* -> the PAIR_* contract. All four
+    Authentication* variants mean 'stale key on one side' and route to
+    bt.py's clear-and-retry-once branch (the cli regex already matched
+    all four). ConnectionAttemptFailed (page timeout) and a missing
+    device object both mean 'not seen' — the flow's scan-again message.
+    NoReply is our own 60s budget expiring."""
+    if name.endswith(".AlreadyExists"):
+        return PAIR_ALREADY, f"{name}: {msg}"
+    if (name.endswith(".AuthenticationFailed")
+            or name.endswith(".AuthenticationCanceled")
+            or name.endswith(".AuthenticationRejected")
+            or name.endswith(".AuthenticationTimeout")):
+        return PAIR_AUTH_FAILED, f"{name}: {msg}"
+    if (name.endswith(".ConnectionAttemptFailed")
+            or "UnknownObject" in name or "UnknownMethod" in name):
+        return PAIR_NOT_AVAILABLE, f"{name}: {msg}"
+    return PAIR_ERROR, f"{name}: {msg}"
 
 
 # --- primitives: bluealsa --------------------------------------------------------
@@ -528,3 +561,273 @@ def _dbus_a2dp_pcm_present(mac):
         if str(pcm.get("Mode", "sink")) == "sink":
             return True
     return False
+
+
+# --- dbus backend: pairing agent (B2 + incoming pairing mode) ---------------------
+# PLAN-bt-b2-pairing.md. Everything here runs on a DEDICATED private bus
+# connection with its own GLib mainloop, created per call and closed in
+# finally: (1) the process's shared SystemBus() singleton was created
+# loop-less and dbus-python cannot attach a loop afterwards, so it can
+# never export the agent object; (2) bluez auto-unregisters agents whose
+# connection dies — closing the connection IS the cleanup, even after a
+# crash. Never cache this connection: retry paths (stale-key re-pair)
+# must build a fresh one so a wedged agent can't survive.
+
+_AGENT_PATH = "/org/tapbox/agent"
+_AGENT_CAPABILITY = "NoInputNoOutput"
+
+
+def _mac_from_path(path):
+    return str(path).rsplit("dev_", 1)[-1].replace("_", ":")
+
+
+def _agent_bus():
+    import dbus
+    import dbus.bus
+    from dbus.mainloop.glib import DBusGMainLoop
+    ml = DBusGMainLoop()  # per-connection; never the process default loop
+    addr = (os.environ.get("TAPBOX_DBUS_ADDRESS")
+            or os.environ.get("DBUS_SYSTEM_BUS_ADDRESS"))
+    if addr:
+        return dbus.bus.BusConnection(addr, mainloop=ml)
+    return dbus.SystemBus(private=True, mainloop=ml)
+
+
+def _make_agent(bus, on_event=None):
+    """org.bluez.Agent1 that auto-accepts (NoInputNoOutput): JBL-class
+    speakers negotiate Just-Works (no callback fires at all), legacy
+    devices get PIN 0000 / passkey 0, cars hit RequestConfirmation and
+    AuthorizeService. The dbus signatures must be EXACT — a mismatch
+    presents as bluez failing the pairing as if no agent were registered,
+    which misdiagnoses as an SSP problem. Rejecting would be raising
+    org.bluez.Error.Rejected; never used — this agent only exists while a
+    pairing was explicitly requested (a pair call or a visible window)."""
+    import dbus
+    import dbus.service
+
+    def note(kind):
+        log(f"bt agent: {kind}")
+        if on_event:
+            on_event(kind)
+
+    class _Agent(dbus.service.Object):
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="", out_signature="")
+        def Release(self):
+            note("Release")
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="o", out_signature="s")
+        def RequestPinCode(self, device):
+            note("RequestPinCode")
+            return "0000"
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="o", out_signature="u")
+        def RequestPasskey(self, device):
+            note("RequestPasskey")
+            return dbus.UInt32(0)
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="ouq", out_signature="")
+        def DisplayPasskey(self, device, passkey, entered):
+            note("DisplayPasskey")
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="os", out_signature="")
+        def DisplayPinCode(self, device, pincode):
+            note("DisplayPinCode")
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="ou", out_signature="")
+        def RequestConfirmation(self, device, passkey):
+            note("RequestConfirmation")  # returning = accept
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="o", out_signature="")
+        def RequestAuthorization(self, device):
+            note("RequestAuthorization")
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="os", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            note("AuthorizeService")
+
+        @dbus.service.method("org.bluez.Agent1",
+                             in_signature="", out_signature="")
+        def Cancel(self):
+            note("Cancel")
+
+    return _Agent(bus, _AGENT_PATH)
+
+
+def _agent_manager(bus):
+    import dbus
+    return dbus.Interface(bus.get_object(_BLUEZ, "/org/bluez"),
+                          "org.bluez.AgentManager1")
+
+
+def _register_agent(bus, default=False):
+    """RequestDefaultAgent only for the incoming window: outgoing Pair()
+    automatically uses the agent registered by the same connection, and a
+    PERMANENT default agent would be a permanently-open pairing door
+    (PLAN-bt-b2-pairing.md D8)."""
+    mgr = _agent_manager(bus)
+    try:
+        mgr.RegisterAgent(_AGENT_PATH, _AGENT_CAPABILITY, timeout=10)
+    except Exception as e:
+        # near-impossible on a fresh private connection; tolerate the
+        # known-benign case, fail loudly on anything else
+        if "AlreadyExists" not in str(
+                getattr(e, "get_dbus_name", lambda: "")()):
+            raise
+    if default:
+        mgr.RequestDefaultAgent(_AGENT_PATH, timeout=10)
+
+
+def _unregister_agent(bus):
+    try:
+        _agent_manager(bus).UnregisterAgent(_AGENT_PATH, timeout=5)
+    except Exception:
+        pass  # best-effort; closing the connection is the real cleanup
+
+
+def _dbus_pair(mac):
+    """One outgoing Pair() with our own agent. Async + mainloop is NOT
+    optional: agent callbacks are incoming calls on this connection, and
+    only a running loop dispatches them — a blocking Pair() deadlocks on
+    every legacy-PIN device (PLAN-bt-dbus.md §9.1). Explicit timeout=60:
+    dbus-python's 25s default silently undercuts real SSP handshakes."""
+    import dbus
+    from gi.repository import GLib
+    bus = _agent_bus()
+    agent = _make_agent(bus)
+    try:
+        _register_agent(bus)
+        dev = dbus.Interface(
+            bus.get_object(_BLUEZ, _dev_path(mac), introspect=False),
+            "org.bluez.Device1")
+        loop = GLib.MainLoop()
+        result = []  # set exactly once by whichever handler fires
+
+        def ok():
+            result.append((PAIR_OK, "Pairing successful"))
+            loop.quit()
+
+        def err(e):
+            result.append(_map_pair_error(e.get_dbus_name() or "", str(e)))
+            loop.quit()
+
+        dev.Pair(reply_handler=ok, error_handler=err, timeout=60)
+        # belt and braces: on timeout dbus-python fires err() with
+        # NoReply, but a lost reply must never hang the process
+        guard = GLib.timeout_add_seconds(75, loop.quit)
+        loop.run()
+        if result:  # guard never fired (it would have been the quitter)
+            GLib.source_remove(guard)
+        return result[0] if result else (PAIR_ERROR,
+                                         "pair timed out (no reply)")
+    finally:
+        _unregister_agent(bus)
+        try:
+            agent.remove_from_connection()
+        except Exception:
+            pass
+        try:
+            bus.close()
+        except Exception:
+            pass
+
+
+def pairing_window(secs):
+    """Incoming pairing mode: make the box discoverable and be the
+    DEFAULT agent so a car/head unit can pair US (they drive; speakers
+    pair the other way round). DiscoverableTimeout is set BEFORE
+    Discoverable so bluez itself turns visibility off whatever happens
+    to this process — SIGKILL mid-window can never leave the box
+    permanently visible (dead-man switch). New bonds are trusted INSIDE
+    the window: the peer's A2DP service authorization lands after our
+    agent is gone, and Trusted bypasses it. Exactly one bond per window
+    (closes ~3s after the first, lingering so that authorization
+    completes). Returns [{mac, name}]. Raises RuntimeError with a human
+    message when the dbus stack is unavailable — bt.py turns that into
+    exit 2; there is deliberately no cli fallback (bluetoothctl's
+    interactive agent is the wrong tool unattended)."""
+    try:
+        import dbus
+        from gi.repository import GLib
+        bus = _agent_bus()
+    except ImportError as e:
+        raise RuntimeError("pairing mode needs the dbus backend "
+                           "(python3-dbus + python3-gi)") from e
+    except Exception as e:
+        raise RuntimeError("pairing mode: cannot reach the system bus "
+                           f"({e.__class__.__name__})") from e
+    newly = {}
+    agent = _make_agent(bus)
+    props = dbus.Interface(bus.get_object(_BLUEZ, _ADAPTER_PATH),
+                           "org.freedesktop.DBus.Properties")
+    try:
+        _register_agent(bus, default=True)
+        # bt_up() ran in the flow; Pairable again is belt and braces
+        # (without it bluez does a NON-BONDING pairing — bt.py docstring)
+        props.Set("org.bluez.Adapter1", "Pairable",
+                  dbus.Boolean(True), timeout=10)
+        props.Set("org.bluez.Adapter1", "DiscoverableTimeout",
+                  dbus.UInt32(secs), timeout=10)  # the dead-man switch
+        props.Set("org.bluez.Adapter1", "Discoverable",
+                  dbus.Boolean(True), timeout=10)
+        loop = GLib.MainLoop()
+
+        def bonded(path):
+            try:
+                all_p = dbus.Interface(
+                    _bus().get_object(_BLUEZ, path, introspect=False),
+                    "org.freedesktop.DBus.Properties").GetAll(
+                        "org.bluez.Device1", timeout=10)
+            except Exception:
+                all_p = {}
+            mac = str(all_p.get("Address") or _mac_from_path(path)).upper()
+            if mac in newly:
+                return
+            name = str(all_p.get("Alias") or mac)
+            newly[mac] = {"mac": mac, "name": name}
+            try:
+                _dbus_trust(mac)  # inside the window — see docstring
+            except Exception as e:
+                log(f"bt visible: trust failed ({e.__class__.__name__})")
+            GLib.timeout_add_seconds(3, loop.quit)  # linger, then done
+
+        def on_props_changed(iface, changed, _invalidated, path=None):
+            if str(iface) == "org.bluez.Device1" and changed.get("Paired"):
+                bonded(path)
+
+        def on_ifaces_added(path, ifaces):
+            if (ifaces.get("org.bluez.Device1") or {}).get("Paired"):
+                bonded(path)
+
+        bus.add_signal_receiver(
+            on_props_changed, signal_name="PropertiesChanged",
+            dbus_interface="org.freedesktop.DBus.Properties",
+            path_keyword="path")
+        bus.add_signal_receiver(
+            on_ifaces_added, signal_name="InterfacesAdded",
+            dbus_interface="org.freedesktop.DBus.ObjectManager")
+        GLib.timeout_add_seconds(secs, loop.quit)  # window end
+        loop.run()
+        return sorted(newly.values(), key=lambda d: d["mac"])
+    finally:
+        try:  # explicit off; the DiscoverableTimeout self-clears anyway
+            props.Set("org.bluez.Adapter1", "Discoverable",
+                      dbus.Boolean(False), timeout=10)
+        except Exception:
+            pass
+        _unregister_agent(bus)
+        try:
+            agent.remove_from_connection()
+        except Exception:
+            pass
+        try:
+            bus.close()
+        except Exception:
+            pass
