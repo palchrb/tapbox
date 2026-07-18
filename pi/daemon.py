@@ -629,24 +629,40 @@ class Orchestrator:
                 # coexistence load that crashes the Zero's BT firmware)
                 restarted = False
             else:
-                st = go_status()
+                try:
+                    st = go_status(timeout=2)
+                except OSError:
+                    st = {}  # api busy/flapping — the checks below cope
                 # box-initiated playback only: a phone streaming its own
                 # music through the box must not get hijacked into the
                 # box's old target after the restart
                 spot_was_playing = (spotify_playing(st)
                                     and st.get("play_origin")
                                     in ("go-librespot", "", None))
+                # A resume IN FLIGHT loads its track PAUSED (play_spotify
+                # loads, seeks, then unpauses) — so 'was playing' misses
+                # it, the restart killed the loading session, and nobody
+                # picked the baton back up: the player child waited 20s on
+                # a dead session, resumed into an EMPTY new one (silent
+                # no-op) and exited (field 2026-07-18 18:01:36 — box came
+                # up mute). A live spotify player child IS playback intent.
+                spot_resuming = (self.child is not None
+                                 and self.child.poll() is None
+                                 and self.source == "spotify")
                 restarted = _retarget_go_librespot(pcm)
                 if restarted:
                     _note_go_restart()
-                if restarted and spot_was_playing and self.target \
-                        and is_spotify(self.target):
+                if restarted and (spot_was_playing or spot_resuming) \
+                        and self.target and is_spotify(self.target):
                     # unlike mpv (live IPC retarget), the restart killed
                     # the session mid-song — bring the music back where
                     # it was (player.py waits for the session, then
                     # resumes from the bookmark). --exact: this is an
                     # interruption, not a re-tap — even 0:08 into a song
-                    # must come back at 0:08, or it reads as a restart
+                    # must come back at 0:08, or it reads as a restart.
+                    # Stop a still-waiting old player first: left alive it
+                    # would fire ITS resume into the fresh session later.
+                    self._stop_child()
                     self._spawn(self.target, resume=self.resume, exact=True)
                     log("output switch: resuming spotify from the bookmark")
             log(f"output -> {device} (pcm {pcm}, "
