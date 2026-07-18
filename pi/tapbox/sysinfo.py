@@ -35,12 +35,18 @@ SETTING_SPECS = {
     "idle_shutdown_min": (30, 0, 240),
     "volume_cap": (100, 30, 100),
     "spotify_cache_gb": (20, 1, 100),
+    "spotify_bitrate": (160, 96, 320),  # further constrained to BITRATES
     "resume_on_boot": (1, 0, 1),
     "wifi_auto_off_min": (15, 0, 240),  # 0 = never auto-off
     "wifi_probe": (1, 0, 1),  # auto-off'd wifi: 1 = re-probe ~10 min,
     # 0 = stay off until the PWA/screen reconnect button
     "simple_nav": (0, 0, 1),  # 1 = kid mode: flat big-cover carousel
 }
+
+
+# go-librespot streams Ogg Vorbis at exactly these rates — an in-range
+# but unknown value (say 200) would make it fail to start
+BITRATES = (96, 160, 320)
 
 
 def load_settings():
@@ -53,6 +59,8 @@ def load_settings():
                 out[k] = max(spec[1], min(spec[2], int(saved[k])))
     except (OSError, ValueError):
         pass
+    if out["spotify_bitrate"] not in BITRATES:
+        out["spotify_bitrate"] = SETTING_SPECS["spotify_bitrate"][0]
     return out
 
 
@@ -67,6 +75,8 @@ def update_settings(changes):
         lo, hi = SETTING_SPECS[k][1], SETTING_SPECS[k][2]
         if not lo <= v <= hi:
             raise ValueError(f"{k} must be {lo}-{hi}")
+        if k == "spotify_bitrate" and int(v) not in BITRATES:
+            raise ValueError("spotify_bitrate must be one of 96, 160, 320")
     merged = {**load_settings(), **{k: int(v) for k, v in changes.items()}}
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
     with open(SETTINGS_FILE + ".tmp", "w") as f:
@@ -75,6 +85,8 @@ def update_settings(changes):
     log(f"settings updated: {changes}")
     if "spotify_cache_gb" in changes:
         output.resize_spotify_cache(merged["spotify_cache_gb"])
+    if "spotify_bitrate" in changes:
+        output.set_spotify_bitrate(merged["spotify_bitrate"])
     return merged
 
 

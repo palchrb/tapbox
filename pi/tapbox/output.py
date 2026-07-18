@@ -42,6 +42,34 @@ def resize_spotify_cache(gb):
         log(f"go-librespot restart failed ({e!r}) — restart it manually")
 
 
+def set_spotify_bitrate(kbps):
+    """Write the stream bitrate into go-librespot's config (startup-only,
+    like audio_device/size_limit) and restart it. 320 is best quality but
+    doubles CDN airtime per track on the shared 2.4GHz radio — the disk
+    cache absorbs that for repeat plays."""
+    if not GO_CONFIG:
+        return
+    try:
+        with open(GO_CONFIG) as f:
+            text = f.read()
+    except OSError:
+        return
+    line = f"bitrate: {kbps}  # 96 | 160 | 320 (kbps, Ogg Vorbis)"
+    new, n = re.subn(r"(?m)^\s*bitrate:.*$", line, text, count=1)
+    if n == 0:
+        new = text.rstrip("\n") + "\n" + line + "\n"
+    if new == text:
+        return
+    with open(GO_CONFIG + ".tmp", "w") as f:
+        f.write(new)
+    os.replace(GO_CONFIG + ".tmp", GO_CONFIG)
+    log(f"spotify bitrate -> {kbps} kbps (restarting go-librespot)")
+    try:
+        subprocess.run(["systemctl", "restart", "go-librespot"], timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"go-librespot restart failed ({e!r}) — restart it manually")
+
+
 # --- audio output (bt speaker vs built-in/HAT) ----------------------------------
 
 def _i2s_card_present():
