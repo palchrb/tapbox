@@ -89,3 +89,24 @@ er allerede dempet (commit `4bb107b`/`b81aada`). Ikke verdt permanent mer
 skjørhet for å gjøre et sjeldent bytte sømløst — med mindre bruk viser at
 man bytter ofte. Da er aloop-broen det letteste førstevalget; skisser den
 før bygging.
+
+---
+
+## go-librespot-forken: ikke-blokkerende API — *middels, målrettet*
+
+**Hva:** Forkens HTTP-API blokkerer mens spilleren laster et spor (audio-key
++ CDN + PCM-åpning): /status, /player/next og put-state svarer ikke før
+lastingen er ferdig (1–19 s målt i felt 2026-07-18). Hele klassen av
+kontroll-timeouts, «tom sesjon»-blipper og treg skip-kvittering stammer fra
+dette ene kvelepunktet.
+
+**Hvordan:** I forken (Go): server /status fra minnetilstand (siste kjente
+spor + en `loading`-markør) og legg kontrollkommandoer i kø med umiddelbar
+kvittering, i stedet for å la HTTP-handleren vente på spilleløkka.
+
+**Gevinst:** Skip kvitterer øyeblikkelig uansett CDN-vær; tapbox-lagets
+timeout-vern (busy-drops, timeout-hold, empty-recheck) blir sovende
+sikkerhetsnett i stedet for daglig brukte krykker.
+
+**Kostnad/risiko:** Go-endring i forken + rebase-vedlikehold. Middels.
+Verdt det når skip-følelsen er neste prioritet.
