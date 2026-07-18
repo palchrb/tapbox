@@ -24,9 +24,11 @@ order; card slot flow implemented behind it.
 Target hardware: Raspberry Pi Zero 2 W, optional PiSugar 3 battery,
 a Bluetooth speaker (or the Pimoroni Pirate Audio Speaker HAT), and a
 Spotify **Premium** account (family member accounts work). Assumed
-already done: Raspberry Pi OS **(Trixie-based; Bookworm also works)** flashed with the Raspberry
-Pi Imager (set hostname, user, Wi-Fi and SSH there), and — if you want
-remote admin — Tailscale installed and logged in.
+already done: Raspberry Pi OS **(Trixie-based; Bookworm also works)**
+flashed with the Raspberry Pi Imager (set hostname, user, Wi-Fi and
+SSH there — that's a one-time provisioning; install.sh disables
+cloud-init afterwards). Remote admin over Tailscale is possible but
+entirely optional (own installer + interactive auth).
 
 ### 1. Install TapBox
 
@@ -76,6 +78,9 @@ Bluetooth speaker**:
 - The chosen speaker becomes the *configured* output: audio and
   auto-reconnect follow it. Pairing more speakers is fine — tap
   *Connect* on one to make it the active output.
+- **Rename** gives a speaker your own name ("The car", "Kids' room");
+  it shows in this list and on the box's screen. Blank resets to the
+  factory name.
 
 From now on, turning the speaker on is enough; the box reconnects by
 itself within seconds (btwatchd listens for BlueZ D-Bus events; set
