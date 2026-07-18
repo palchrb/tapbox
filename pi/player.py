@@ -508,15 +508,6 @@ def main():
     elif cache_n not in (None, 0) and len(urls) > 1 \
             and target.startswith(("http://", "https://")):
         sync_args = ["sync-feed", target, str(cache_n)]
-    if sync_args:
-        # content.py is stdlib-only and runs fine as a plain script.
-        # Runs on battery too — nice-19 keeps it from competing with mpv.
-        subprocess.Popen([sys.executable, content.__file__, *sync_args],
-                         stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL,
-                         preexec_fn=lambda: os.nice(19))  # never compete
-        log(f"background sync started: {' '.join(sync_args)}")
-
     # Wait for mpv's IPC socket, then seek to the resume position
     for _ in range(100):
         if proc.poll() is not None:
@@ -532,6 +523,17 @@ def main():
             ipc(sock, "seek", start_pos, "absolute")
         except OSError:
             log("could not seek to resume position — playing from start")
+
+    # Background episode caching starts ONLY now — AFTER mpv is up. Launched
+    # before the IPC wait it competed with mpv's own file open for the (cold,
+    # right-after-boot) SD cache, adding seconds to tap->audio. content.py is
+    # stdlib-only; nice-19 keeps it out of mpv's way from here on.
+    if sync_args:
+        subprocess.Popen([sys.executable, content.__file__, *sync_args],
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         preexec_fn=lambda: os.nice(19))  # never compete
+        log(f"background sync started: {' '.join(sync_args)}")
 
     def survive_dead_audio(stable):
         """When the audio output dies mid-play (BT chip crash, speaker

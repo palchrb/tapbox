@@ -173,6 +173,10 @@ STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
 RESUME_MIN_S = float(os.environ.get("TAPBOX_RESUME_MIN", "20"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("TAPBOX_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("TAPBOX_SETTLE_TOL", "3"))
+# how long after a spawn to trust player.py's published paused-state while
+# mpv's IPC socket is still coming up (the ~1-3s tap->audio window), so the
+# screen shows 'playing' at once instead of a dead card
+MPV_START_GRACE_S = float(os.environ.get("TAPBOX_MPV_START_GRACE", "12"))
 WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/tapbox/web")
@@ -804,7 +808,19 @@ class Orchestrator:
                "output": current_output()["output"]}
         if mpv_alive:
             out["shuffle"] = self.mpv_shuffle
-            out["playing"] = mpv_get("pause") is False
+            pause = mpv_get("pause")
+            if pause is None and (time.monotonic() - self.child_started
+                                  < MPV_START_GRACE_S):
+                # mpv is spawned but its IPC socket isn't up yet (the ~1-3s
+                # window right after a tap): trust the intent player.py
+                # published BEFORE launching mpv, so the screen shows
+                # 'playing' at once instead of a dead card for a few seconds
+                try:
+                    with open(NOW_FILE) as f:
+                        pause = bool(json.load(f).get("paused"))
+                except (OSError, ValueError):
+                    pause = False  # a fresh tap means to play
+            out["playing"] = pause is False
             out["title"] = mpv_get("media-title")
             out["position"] = mpv_get("playback-time")
             out["duration"] = mpv_get("duration")  # None = live stream

@@ -184,5 +184,25 @@ mpv["playback-time"] = 3.0
 assert orch.status()["position"] == 3.0, "still frozen past the window"
 print("11. hold is bounded to the settle window OK")
 
+# 12. tap->audio window: mpv is spawned but its IPC socket isn't up yet
+# (mpv_get('pause') is None). Within the start grace, /status must show
+# 'playing' from player.py's published intent, not a dead card.
+with open(daemon.NOW_FILE, "w") as f:
+    json.dump({"id": "e2", "url": E2, "title": "x", "image": None,
+               "paused": False, "duration": None, "target": orch.target}, f)
+mpv["pause"] = None                        # IPC not answering yet
+orch.child_started = time.monotonic()      # just spawned
+assert orch.status()["playing"] is True, "startup should show playing at once"
+# a published pause (kid hit pause before mpv came up) is honored
+with open(daemon.NOW_FILE, "w") as f:
+    json.dump({"id": "e2", "url": E2, "title": "x", "image": None,
+               "paused": True, "duration": None, "target": orch.target}, f)
+assert orch.status()["playing"] is False, "published pause must win"
+# past the grace, a dead IPC is NOT optimistically 'playing'
+orch.child_started = time.monotonic() - daemon.MPV_START_GRACE_S - 1
+assert orch.status()["playing"] is False, "no optimism past the grace window"
+mpv["pause"] = False
+print("12. tap->audio: startup shows playing at once, bounded by the grace OK")
+
 print("NOW PLAYING OK — no filename flashes, art bridges track changes, "
       "position holds steady on the bookmark.")
