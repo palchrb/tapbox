@@ -64,16 +64,19 @@ class StopLoop(Exception):
     pass
 
 
-def run_governor(initial_get, streaming_seq):
-    """Run the governor with a scripted streaming sequence; returns the
-    iw set-calls made."""
+def run_governor(get_seq, streaming_seq):
+    """Run the governor: get_seq scripts the baseline get_power_save
+    reads (last value repeats), streaming_seq the _streaming_now ticks.
+    Returns the iw set-calls made."""
     calls = []
+    gets = list(get_seq)
     seq = list(streaming_seq)
+    os.environ["TAPBOX_WIFI_PS_BASELINE_TRIES"] = str(max(2, len(gets)))
 
     def fake_run(cmd, **k):
         if "get" in cmd:
             class R:
-                stdout = initial_get
+                stdout = gets.pop(0) if len(gets) > 1 else gets[0]
             return R()
         calls.append(tuple(cmd))
 
@@ -82,6 +85,8 @@ def run_governor(initial_get, streaming_seq):
         return R2()
 
     def fake_sleep(_s):
+        if _s == 10:  # the baseline poll's pacing — free in tests
+            return
         if not seq:
             raise StopLoop
 
@@ -100,15 +105,25 @@ def run_governor(initial_get, streaming_seq):
 
 # 6. streaming starts -> one 'off'; stays streaming -> no repeat; idle
 # again -> one 'on'
-calls = run_governor("Power save: on\n", [False, True, True, False])
+calls = run_governor(["Power save: on\n"], [False, True, True, False])
 sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], sets
 print("6. governor: off on stream start, on when idle, no chatter OK")
 
-# 7. PS already off at boot (perf mode / operator choice) -> untouched
-calls = run_governor("Power save: off\n", [True, False, True])
+# 7. PS never seen on (perf mode / operator choice) -> untouched
+calls = run_governor(["Power save: off\n"], [True, False, True])
 assert calls == [], f"must not manage an operator's PS-off: {calls}"
 print("7. operator PS-off is respected (governor stands down) OK")
+
+# 8. boot race: PS reads 'off' at daemon start (NetworkManager enables
+# it ~2min later, tapbox-power re-asserts it) — the baseline poll must
+# WAIT until it's seen on, then manage. A one-shot read stood down
+# forever and left PS ON through every stream (field 2026-07-18 15:43).
+calls = run_governor(["Power save: off\n", "Power save: off\n",
+                      "Power save: on\n"], [True, False])
+sets = [c[-1] for c in calls]
+assert sets == ["off", "on"], f"late-enabled PS must still be managed: {sets}"
+print("8. baseline poll waits out the boot race, then manages OK")
 
 print("WIFI PS GOVERNOR OK — power save off only while streaming, "
       "battery naps when idle, operator choice respected.")

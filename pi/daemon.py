@@ -2205,15 +2205,31 @@ def _wifi_ps_governor():
     preference) the governor leaves it alone entirely."""
     if os.environ.get("TAPBOX_WIFI_PS_GOVERNOR", "1") != "1":
         return
-    try:
-        r = subprocess.run(["iw", "dev", "wlan0", "get", "power_save"],
-                           capture_output=True, text=True, timeout=10)
-        if "on" not in (r.stdout or ""):
-            log("wifi ps governor: power save already off — not managing")
-            return
-    except (OSError, subprocess.TimeoutExpired):
-        return  # no iw / no wlan0 — nothing to govern
-    ps_off = False  # current state we set (boot state = on)
+    # The baseline read must WAIT OUT the boot: at daemon start wlan0
+    # exists but PS is still off — NetworkManager enables it ~2min later
+    # and tapbox-power(save) re-asserts it. Reading 'off' once at t=0 and
+    # standing down forever left PS ON through every stream (field
+    # 2026-07-18 15:43: no governor log line the whole session, controls
+    # starved). Poll until PS is seen ON once (then manage); a box whose
+    # operator keeps PS off never shows 'on' and the governor stands down.
+    managed = False
+    tries = int(os.environ.get("TAPBOX_WIFI_PS_BASELINE_TRIES", "30"))
+    for i in range(tries):
+        try:
+            r = subprocess.run(["iw", "dev", "wlan0", "get", "power_save"],
+                               capture_output=True, text=True, timeout=10)
+            if "on" in (r.stdout or ""):
+                managed = True
+                break
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # no iw / wlan0 not up yet — keep waiting
+        if i + 1 < tries:
+            time.sleep(10)
+    if not managed:
+        log("wifi ps governor: power save never seen on — not managing")
+        return
+    log("wifi ps governor: managing (ps off while streaming, on when idle)")
+    ps_off = False  # current state we set (baseline = on)
     while True:
         time.sleep(WIFI_PS_TICK_S)
         try:
