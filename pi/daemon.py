@@ -177,6 +177,9 @@ POSITION_SETTLE_TOL_S = float(os.environ.get("TAPBOX_SETTLE_TOL", "3"))
 # mpv's IPC socket is still coming up (the ~1-3s tap->audio window), so the
 # screen shows 'playing' at once instead of a dead card
 MPV_START_GRACE_S = float(os.environ.get("TAPBOX_MPV_START_GRACE", "12"))
+# how long after the daemon starts to prewarm mpv's decode path (idle, off
+# the boot rush) so the first human play hits a warm page cache
+PREWARM_DELAY_S = float(os.environ.get("TAPBOX_PREWARM_DELAY", "15"))
 WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/tapbox/web")
@@ -2040,20 +2043,46 @@ def _portal_server():
     srv.serve_forever()
 
 
+def _a_cached_audio_file():
+    """Newest downloaded episode, to warm the exact demux/decode/resample
+    path the next play will fault in (newest = most likely to be tapped).
+    None when the cache is empty."""
+    cache = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
+    newest, newest_mtime = None, -1.0
+    for root, _dirs, files in os.walk(cache):
+        for fn in files:
+            if fn.endswith((".mp3", ".m4a", ".aac", ".opus", ".ogg")):
+                p = os.path.join(root, fn)
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    continue
+                if mt > newest_mtime:
+                    newest, newest_mtime = p, mt
+    return newest
+
+
 def _prewarm_mpv():
     """The first mpv launch of a boot cold-loads mpv + the ffmpeg stack
-    (tens of MB) from the SD card at the powersave clock — field log
-    2026-07-17: 11s of silence between the player's 'resuming ...' and
-    the first audio, with an impatient second press pausing it right as
-    it started. Page the libraries in once while the box is idle; later
-    launches hit the page cache (~2-3s). The delay keeps it out of the
-    boot rush (boot resume, service starts) — the point is warming the
-    cache BEFORE the first human play, not during boot I/O."""
-    time.sleep(15)
+    (tens of MB) from the SD card — field log 2026-07-17: 11s of silence
+    before the first audio. A plain 'mpv --version' pages the binary in
+    but NOT the demux/decode/resample path (dlopened on demand) nor the
+    specific episode file — so the first real play still faulted them in.
+    Instead decode ~0.3s of a cached episode to a NULL sink (no DAC
+    touched, no sound, works with the speaker off): that warms the real
+    codec + 44.1kHz resample path and the mp3's own pages. The delay keeps
+    it off the boot rush — the point is a warm cache BEFORE the first play."""
+    time.sleep(PREWARM_DELAY_S)
+    warm = _a_cached_audio_file() or "av://lavfi:sine=f=440"
     try:
-        subprocess.run(["mpv", "--version"], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=120)
-        log("mpv prewarmed (libraries paged in)")
+        subprocess.run(
+            ["mpv", "--no-config", "--no-video", "--really-quiet",
+             "--load-scripts=no", "--no-ytdl",
+             "--ao=null", "--ao-null-untimed",  # decode full-speed, no DAC
+             "--audio-samplerate=44100", "--audio-channels=stereo",
+             "--length=0.3", warm],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        log("mpv prewarmed (decode path paged in)")
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"mpv prewarm failed: {e!r}")
 

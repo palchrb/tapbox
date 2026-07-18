@@ -289,8 +289,18 @@ GO_CHANGED=0
 write_if_changed /etc/systemd/system/go-librespot.service <<EOF && GO_CHANGED=1
 [Unit]
 Description=go-librespot Spotify Connect daemon
-After=network-online.target bluetooth.service
+# After tapbox-rtc so a TLS handshake to the Spotify AP never runs against
+# an unset (1970) clock on the RTC-less Zero — a cert notBefore failure
+# there would exit go-librespot straight into the retry backoff.
+After=network-online.target bluetooth.service tapbox-rtc.service
 Wants=network-online.target
+# A single early exit (a DNS blip, dealer/audio-key warmup, a clock/TLS
+# hiccup) must NOT cost 30s of silence on the Spotify path — retry in 2s.
+# The burst limit still stops a genuinely broken loop; the ExecStartPre
+# DNS wait keeps the happy path a single clean start, so this only spaces
+# retries after a real crash (rig 2026-07-18).
+StartLimitIntervalSec=90
+StartLimitBurst=6
 
 [Service]
 User=$RUN_USER
@@ -298,18 +308,16 @@ User=$RUN_USER
 # starting' — before wlan0 has a DHCP lease AND before systemd-resolved
 # answers, so at boot go-librespot's first Spotify AP lookup hit a dead
 # resolver ('apresolve.spotify.com on [::1]:53: connection refused'),
-# exited, and RestartSec below pushed Spotify ~30s past when the net was
-# actually up (rig 2026-07-18). Hold ExecStart until DNS can actually
-# resolve the AP host, so go-librespot starts the moment the internet is
-# truly up and succeeds first try. Bounded by timeout + '-' prefixed:
-# offline it gives up after 60s and lets go-librespot fail-and-retry as
-# before, instead of hanging forever in 'activating'.
+# exited, and RestartSec below pushed Spotify past when the net was
+# actually up. Hold ExecStart until DNS can actually resolve the AP host,
+# so go-librespot starts the moment the internet is truly up and succeeds
+# first try. Bounded by timeout + '-' prefixed: offline it gives up after
+# 60s and lets go-librespot fail-and-retry, instead of hanging in
+# 'activating' forever.
 ExecStartPre=-/usr/bin/timeout 60 /bin/sh -c 'until getent hosts apresolve.spotify.com >/dev/null 2>&1; do sleep 1; done'
 ExecStart=/usr/local/bin/go-librespot --config_dir $CONF_DIR
 Restart=always
-# offline, ExecStartPre now absorbs the wait (no tight fail-loop that
-# burned CPU on the Zero), so this only spaces restarts after a real crash
-RestartSec=30
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target

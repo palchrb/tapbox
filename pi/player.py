@@ -162,13 +162,38 @@ def rotate_to_bookmark(urls, st, url_by_id):
     return urls[idx:] + urls[:idx], (pos if pos > RESUME_MIN_S else 0.0)
 
 
-def online():
+def mpv_command(urls, volume, sock, pcm):
+    """The mpv argv for a play. Extracted so a test can pin the
+    audio-critical flags — dropping --audio-samplerate/--audio-channels
+    plays low-bitrate audiobooks SILENTLY over A2DP, so they must never be
+    lost to a 'startup trim'."""
+    return [
+        "mpv", "--no-video", "--really-quiet",
+        # Startup trims (shave cold-spawn; none change what plays):
+        #  --ao=alsa   : straight to ALSA, skip the AO autoprobe
+        #  --no-config : no mpv.conf exists — skip the config scans
+        #  --load-scripts=no / --no-ytdl : URLs are pre-expanded by
+        #                content.py, so the ytdl Lua hook is never needed
+        "--ao=alsa", "--no-config", "--load-scripts=no", "--no-ytdl",
+        # A2DP/SBC to the speaker runs at 44100 Hz; low-bitrate audiobooks
+        # arrive at 16000 Hz which the BT link can't deliver (silence).
+        # Resample everything to 44100 stereo so any source rate plays.
+        "--audio-samplerate=44100", "--audio-channels=stereo",
+        f"--volume={volume}",
+        f"--audio-device=alsa/{pcm}",
+        f"--input-ipc-server={sock}",
+    ] + list(urls)
+
+
+def online(timeout=2):
     """Quick connectivity probe. TAPBOX_OFFLINE=1 forces offline mode
-    (manual travel switch / tests). Plain IP:port — no DNS to hang on."""
+    (manual travel switch / tests). Plain IP:port — no DNS to hang on. A
+    healthy link connects in well under 1s, so the caller can pass a short
+    timeout when this probe is on the tap->audio path."""
     if os.environ.get("TAPBOX_OFFLINE"):
         return False
     try:
-        socket.create_connection(("1.1.1.1", 443), timeout=2).close()
+        socket.create_connection(("1.1.1.1", 443), timeout=timeout).close()
         return True
     except OSError:
         return False
@@ -372,7 +397,7 @@ def main():
     # Offline? Don't let mpv grind through dead stream URLs — play what is
     # on disk. (All-remote queues are left alone: failing is the only option.)
     streams = [u for u in urls if u.startswith(("http://", "https://"))]
-    if streams and len(streams) < len(urls) and not online():
+    if streams and len(streams) < len(urls) and not online(timeout=1):
         urls = [u for u in urls if not u.startswith(("http://", "https://"))]
         log(f"offline — playing {len(urls)} cached episode(s), "
             f"skipping {len(streams)} streams")
@@ -383,7 +408,10 @@ def main():
             log("starting fresh — cleared remembered position")
 
     try:
-        spotify.go("/player/pause")  # don't talk over Spotify
+        # short timeout: this blocks the mpv launch, and go-librespot can be
+        # slow to answer while it warms up right after boot — a paused
+        # session is nice-to-have, not worth stalling audio for
+        spotify.go("/player/pause", timeout=1)  # don't talk over Spotify
     except OSError:
         pass
 
@@ -472,15 +500,7 @@ def main():
             volume = max(0, min(100, round(json.load(f)["volume"])))
     except (OSError, ValueError, KeyError, TypeError):
         volume = 100
-    proc = subprocess.Popen(
-        ["mpv", "--no-video", "--really-quiet",
-         # A2DP/SBC to the speaker runs at 44100 Hz; low-bitrate audiobooks
-         # come in at 16000 Hz which the BT link can't deliver (silence).
-         # Resample everything to 44100 stereo so any source rate plays.
-         "--audio-samplerate=44100", "--audio-channels=stereo",
-         f"--volume={volume}",
-         f"--audio-device=alsa/{output_pcm()}",
-         f"--input-ipc-server={sock}"] + urls)
+    proc = subprocess.Popen(mpv_command(urls, volume, sock, output_pcm()))
     terminated = []  # set when WE are told to stop (reboot/daemon restart)
 
     def _stop(*_args):
