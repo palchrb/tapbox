@@ -475,6 +475,35 @@ EOF
   fi
 fi
 
+# --- boot & power tuning (reproduces the rig's manual tweaks) ---------------
+# Everything here is idempotent and was field-verified on zero2 2026-07-18.
+
+# boot_delay=0: drops a fixed ~1s firmware wait before the kernel loads.
+# The ONLY config.txt boot knob that survived measurement: the boot
+# governor is already ondemand (initial_turbo would gain ~nothing), the
+# rainbow splash is HDMI-only (invisible on the SPI screen), and the
+# autodetect probes are worth <1s combined.
+BOOT_FW=/boot/firmware
+[[ -f $BOOT_FW/config.txt ]] || BOOT_FW=/boot
+if [[ -f $BOOT_FW/config.txt ]] && ! grep -q '^boot_delay=' "$BOOT_FW/config.txt"; then
+  printf '\n[all]\nboot_delay=0\n' >> "$BOOT_FW/config.txt"
+  echo "    config.txt: boot_delay=0 (takes effect next reboot)"
+fi
+
+# cloud-init: a first-boot provisioning tool (Imager customisation). After
+# setup it re-scans its datasources on EVERY boot for ~6s while gating
+# sysinit — which held the screen back. Everything it manages (user, wifi,
+# hostname, ssh) is already materialised on disk; disabling is the soft,
+# reversible switch (rm the file to re-enable).
+if command -v cloud-init >/dev/null 2>&1 \
+    && [[ ! -f /etc/cloud/cloud-init.disabled ]]; then
+  touch /etc/cloud/cloud-init.disabled
+  echo "    cloud-init disabled (~6s off every boot; rm /etc/cloud/cloud-init.disabled to undo)"
+fi
+
+# (power save at boot is enabled further down, after tapbox-power is
+# installed — the unit's ExecStart must point at the installed copy)
+
 # PiSugar RTC: the Zero has no real-time clock, so an offline boot starts
 # in 1970 until NTP (if it ever) syncs — the battery logger and journal
 # timestamps go haywire, and time-of-day features can't work. The PiSugar
@@ -555,6 +584,19 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
+# Power save at boot: governor powersave + LEDs/HDMI off + wifi power save
+# (tapbox-power save) applied automatically at every boot. Runs after
+# multi-user so it never slows the boot itself. Invoked via the INSTALLED
+# copy so the generated unit's ExecStart points at /usr/local/bin.
+# NOTE: 'tapbox-power boot-off' removes the unit, but a later install.sh
+# run re-adds it (power save at boot is the tapbox default).
+if [[ ! -f /etc/systemd/system/tapbox-power.service ]]; then
+  /usr/local/bin/tapbox-power boot-on >/dev/null \
+    && echo "    power save applied at every boot (tapbox-power boot-on)"
+fi
+# The battery CSV logger (tapbox-power log-on) stays OPT-IN: it's a
+# calibration tool that writes the SD card every 60s forever — enable it
+# only while measuring a discharge curve.
 IDLE_CHANGED=0
 install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  && IDLE_CHANGED=1
 # Idle auto-shutdown: enabled by default — the PWA setting
