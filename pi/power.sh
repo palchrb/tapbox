@@ -315,7 +315,10 @@ PY
       # this, the boot-time socket race exited _logloop and RestartSec=10
       # landed on the boot critical path (systemd-analyze 2026-07-18).
       if vals="$( (for p in battery_v battery_i battery battery_power_plugged; do
-                     echo "get $p"; sleep 0.2
+                     # 2>/dev/null: when nc dies early (pisugar-server not
+                     # up yet) the echo takes a SIGPIPE and spams 'Broken
+                     # pipe' into the journal on every boot
+                     echo "get $p" 2>/dev/null; sleep 0.2
                    done) | nc -q1 127.0.0.1 8423 2>/dev/null )" && [[ -n $vals ]]; then
         echo "$(date +'%F %T'),$(val battery_v),$(val battery_i),$(val battery),$(val battery_power_plugged)" >> "$LOG_FILE"
       fi

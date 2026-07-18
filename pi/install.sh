@@ -224,20 +224,38 @@ fi
 mkdir -p /var/lib/tapbox/spotify-cache
 chown "$RUN_USER:" /var/lib/tapbox/spotify-cache
 
-# Persistent journal, capped at 200M: a wedged box always gets a power
-# cycle, and the default volatile journal loses exactly the evidence we
-# need afterwards (BT firmware crashes, watchdog decisions). bt.py's
-# crash detection reads the kernel journal too. The cap protects the SD
-# card; journald prunes oldest-first long before it matters.
+# Persistent journal: a wedged box always gets a power cycle, and the
+# default volatile journal loses exactly the evidence we need afterwards
+# (BT firmware crashes, watchdog decisions). bt.py's crash detection
+# reads the kernel journal too. 64M (was 200M): with the noise cuts
+# below (bluealsa at warning, NetworkManager at WARN) that still holds
+# days of history, prunes oldest-first, and wears the SD card less.
+# Small files = finer-grained rotation, so pruning frees space sooner.
 if write_if_changed /etc/systemd/journald.conf.d/tapbox.conf <<'EOF'
 [Journal]
 Storage=persistent
-SystemMaxUse=200M
+SystemMaxUse=64M
+SystemMaxFileSize=8M
 EOF
 then
   systemctl restart systemd-journald 2>/dev/null || true
   journalctl --flush 2>/dev/null || true  # move the boot's volatile logs to disk
-  echo "    journald: persistent storage, capped at 200M"
+  journalctl --vacuum-size=64M >/dev/null 2>&1 || true  # shrink NOW, not at rotation
+  echo "    journald: persistent storage, capped at 64M"
+fi
+
+# NetworkManager's <info> stream (state machine per interface, DHCP
+# transactions, plugin loads) is one of the biggest journal writers on
+# the box. The field evidence we actually diagnose with — association,
+# 4-way handshake, deauth reason codes — comes from wpa_supplicant,
+# which keeps logging. NM warnings/errors still land.
+if write_if_changed /etc/NetworkManager/conf.d/90-tapbox-logging.conf <<'EOF'
+[logging]
+level=WARN
+EOF
+then
+  systemctl try-reload-or-restart NetworkManager 2>/dev/null || true
+  echo "    NetworkManager log level WARN (wpa_supplicant evidence unaffected)"
 fi
 
 # --- 4. bluetooth + go-librespot services ------------------------------------
@@ -280,22 +298,36 @@ BA_UNIT=""
 for u in bluealsa.service bluealsad.service; do
   systemctl cat "$u" >/dev/null 2>&1 && BA_UNIT="$u" && break
 done
-if [[ -n $BA_UNIT && $BT_KEEPALIVE -gt 0 ]]; then
+if [[ -n $BA_UNIT ]]; then
   # first ExecStart= in systemctl cat is the distro unit's own line (our
   # drop-in, if present, appears after) — so re-runs read the base line
   # and write_if_changed re-applies only when the VALUE actually changes
   exec_line="$(systemctl cat "$BA_UNIT" | grep -m1 '^ExecStart=' \
-                 | sed 's/ --keep-alive=[0-9]*//' || true)"
+                 | sed -e 's/ --keep-alive=[0-9]*//' \
+                       -e 's/ --loglevel=[a-z]*//' || true)"
   if [[ -n $exec_line ]]; then
-    if write_if_changed "/etc/systemd/system/$BA_UNIT.d/keep-alive.conf" <<KEEPALIVE
+    extra=""
+    [[ $BT_KEEPALIVE -gt 0 ]] && extra+=" --keep-alive=$BT_KEEPALIVE"
+    # bluealsa's per-PCM chatter (a dbus.c/transport line for every open,
+    # close, pause and codec step — ~40 lines per play/pause) is the
+    # single biggest journal writer on the box. Warnings and errors (the
+    # lines we diagnose with: socket disconnects, SBC config failures)
+    # still land. Guarded: 3.x builds don't have the flag.
+    ba_bin="${exec_line#ExecStart=}"; ba_bin="${ba_bin%% *}"
+    if [[ -x $ba_bin ]] && "$ba_bin" --help 2>&1 | grep -q -- --loglevel; then
+      extra+=" --loglevel=warning"
+    fi
+    if [[ -n $extra ]]; then
+      if write_if_changed "/etc/systemd/system/$BA_UNIT.d/keep-alive.conf" <<KEEPALIVE
 [Service]
 ExecStart=
-$exec_line --keep-alive=$BT_KEEPALIVE
+$exec_line$extra
 KEEPALIVE
-    then
-      systemctl daemon-reload
-      systemctl restart "$BA_UNIT"
-      echo "    bluealsa keep-alive=${BT_KEEPALIVE}s (transport survives output switches + pauses)"
+      then
+        systemctl daemon-reload
+        systemctl restart "$BA_UNIT"
+        echo "    bluealsa:${extra} (transport survives pauses; journal quiet)"
+      fi
     fi
   fi
 fi
