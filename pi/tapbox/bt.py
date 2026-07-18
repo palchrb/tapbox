@@ -329,8 +329,11 @@ def connect(mac):
         log("Debug with: bluealsa-aplay -L   and   journalctl -u bluealsa -n 20")
 
     os.makedirs(os.path.dirname(MAC_FILE), exist_ok=True)
-    with open(MAC_FILE, "w") as f:
+    # tmp+rename: a battery brown-out mid-write must never leave a
+    # truncated MAC file (= no remembered speaker, btwatchd goes idle)
+    with open(MAC_FILE + ".tmp", "w") as f:
         f.write(mac + "\n")
+    os.replace(MAC_FILE + ".tmp", MAC_FILE)
     _route_alsa(mac)
     _disconnect_others(mac)
     return True
@@ -356,7 +359,10 @@ def _route_alsa(mac):
                 return
     except OSError:
         pass
-    with open(ASOUND, "w") as f:
+    # tmp+rename: a brown-out mid-write would otherwise truncate
+    # asound.conf — BOTH pcms gone, every output silent, and nothing
+    # heals it (review 2026-07-18 R3)
+    with open(ASOUND + ".tmp", "w") as f:
         f.write(f'''# Managed by tapbox (bt.py)
 pcm.tapbox_bt {{
     type plug
@@ -373,6 +379,7 @@ pcm.tapbox_local {{
     slave.pcm "hw:sndrpihifiberry"
 }}
 ''')
+    os.replace(ASOUND + ".tmp", ASOUND)
     log(f"==> ALSA output routed to {mac}, restarting go-librespot...")
     _run(["systemctl", "restart", "go-librespot"], timeout=30)
 

@@ -117,6 +117,14 @@ def library_with_covers():
     return lib
 
 
+# Serializes every load->mutate->save of library.json: three writers
+# exist (PUT /library, /library/section-logo, the sweeper's profile
+# sync right after every save) and an unserialized pair silently
+# reverts the loser's edit (review 2026-07-18 R4). Never hold this
+# across network I/O — fetch first, then lock, re-load, apply, save.
+LIB_LOCK = threading.Lock()
+
+
 def save_library(lib):
     _EXPAND_CACHE.clear()  # order/cache settings may have changed
     os.makedirs(os.path.dirname(LIB_FILE), exist_ok=True)
@@ -144,36 +152,47 @@ def sync_profile_sections():
     when the library changed (and was saved). A profile that can't be
     fetched (offline, no credentials, deleted user) keeps the entries from
     the last successful sweep — the box never loses content over a blip."""
-    lib = load_library()
-    if not any(s.get("spotify_user") for s in lib["sections"]):
+    users = [s.get("spotify_user") for s in load_library()["sections"]
+             if s.get("spotify_user")]
+    if not users:
         return False
-    # Manually curated targets win: a playlist already in a normal section
-    # is skipped here, or normalize_library would reject the duplicate id.
-    seen = {e["target"] for s in lib["sections"]
-            if not s.get("spotify_user") for e in s["entries"]}
-    changed = False
-    for sec in lib["sections"]:
-        user = sec.get("spotify_user")
-        if not user:
-            continue
+    # Network first, WITHOUT the lock — a slow Web API call must never
+    # block a parent's PUT /library
+    fetched = {}
+    for user in users:
         try:
-            playlists = spotify_web.user_playlists(user)
+            fetched[user] = spotify_web.user_playlists(user)
         except Exception as exc:
             log(f"profile sync: {user}: {exc!r}")
-            seen.update(e["target"] for e in sec["entries"])
-            continue
-        entries = [{"name": p["name"], "target": p["target"], "order": "auto",
-                    "cache": 0, "resume": True}
-                   for p in playlists if p["target"] not in seen]
-        seen.update(e["target"] for e in entries)
-        if [(e["name"], e["target"]) for e in entries] != \
-           [(e["name"], e["target"]) for e in sec["entries"]]:
-            sec["entries"] = entries
-            changed = True
-            log(f"profile sync: {user}: {len(entries)} public playlist(s)")
-    if changed:
-        save_library(normalize_library(lib))
-    return changed
+    # Then re-load fresh under the lock and apply: edits that landed
+    # while we were fetching are preserved instead of reverted
+    with LIB_LOCK:
+        lib = load_library()
+        # Manually curated targets win: a playlist already in a normal
+        # section is skipped here, or normalize_library would reject the
+        # duplicate id.
+        seen = {e["target"] for s in lib["sections"]
+                if not s.get("spotify_user") for e in s["entries"]}
+        changed = False
+        for sec in lib["sections"]:
+            user = sec.get("spotify_user")
+            if not user:
+                continue
+            if user not in fetched:  # fetch failed — keep last sweep's list
+                seen.update(e["target"] for e in sec["entries"])
+                continue
+            entries = [{"name": p["name"], "target": p["target"],
+                        "order": "auto", "cache": 0, "resume": True}
+                       for p in fetched[user] if p["target"] not in seen]
+            seen.update(e["target"] for e in entries)
+            if [(e["name"], e["target"]) for e in entries] != \
+               [(e["name"], e["target"]) for e in sec["entries"]]:
+                sec["entries"] = entries
+                changed = True
+                log(f"profile sync: {user}: {len(entries)} public playlist(s)")
+        if changed:
+            save_library(normalize_library(lib))
+        return changed
 
 
 # --- background episode caching (the "offline: keep newest N" setting) ----------

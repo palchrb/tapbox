@@ -91,8 +91,11 @@ def zeroconf_open():
 
 
 def _set_zeroconf(enabled):
-    """Flip the zeroconf_enabled line in config.yml. In-place truncate-write
-    keeps the file's owner (go-librespot runs as the login user, not root).
+    """Flip the zeroconf_enabled line in config.yml. tmp+rename so a
+    battery brown-out mid-write can never truncate the config (a broken
+    config.yml = go-librespot won't start at all); ownership is copied to
+    the tmp file first — go-librespot runs as the login user, not root,
+    and a root-owned config would break the next manual edit.
     Returns True when the file actually changed."""
     want = "true" if enabled else "false"
     try:
@@ -106,8 +109,14 @@ def _set_zeroconf(enabled):
         new = f"zeroconf_enabled: {want}\n" + src
     if new == src:
         return False
-    with open(CONFIG, "w") as f:
+    st = os.stat(CONFIG)
+    with open(CONFIG + ".tmp", "w") as f:
         f.write(new)
+    try:
+        os.chown(CONFIG + ".tmp", st.st_uid, st.st_gid)
+    except OSError:
+        pass  # unprivileged test runs — ownership already ours
+    os.replace(CONFIG + ".tmp", CONFIG)
     return True
 
 

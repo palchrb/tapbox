@@ -86,12 +86,10 @@ The daemon stays a thin, state-owning router.
 """
 
 import base64
-import hashlib
 import json
 import mimetypes
 import os
 import signal
-import re
 import socket
 import subprocess
 import sys
@@ -211,11 +209,11 @@ from tapbox import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
 from tapbox import library as _library  # noqa: E402 — BUSY_CHECK wiring
 from tapbox import radio as _radio  # noqa: E402 — shared-radio yield markers
 from tapbox.library import (  # noqa: E402
-    ORDERS, artwork_allowed, expand_target, find_entry, library_with_covers,
+    artwork_allowed, expand_target, find_entry, library_with_covers,
     load_library, normalize_library, save_library, state_key, _cache_sweeper,
     _natural_order, _sync_wake)
 from tapbox.netmgmt import (  # noqa: E402
-    HOTSPOT_PSK, HOTSPOT_SSID, hotspot_active, set_wifi, start_hotspot,
+    HOTSPOT_PSK, HOTSPOT_SSID, set_wifi, start_hotspot,
     stop_hotspot, wifi_add, wifi_connect, wifi_forget, wifi_reconnect,
     wifi_scan, wifi_state, _wifi_watchdog)
 from tapbox.output import (  # noqa: E402
@@ -1363,7 +1361,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send(400, {"error": str(e)})
                 return
-            save_library(lib)
+            with _library.LIB_LOCK:  # vs the sweeper's profile sync
+                save_library(lib)
             log(f"library updated ({sum(len(s['entries']) for s in lib['sections'])} entries)")
             # Free the disk held by entries just removed (or flipped to 'no
             # offline'): only entries that still want offline copies keep them.
@@ -1454,37 +1453,39 @@ class Handler(BaseHTTPRequestHandler):
                 # Upload (base64/data-URI) or remove (data: null) a home-
                 # screen logo for one section. The PWA downsizes client-side.
                 sid = str(body.get("id") or "")
-                lib = load_library()
-                sec = next((s for s in lib["sections"] if s["id"] == sid),
-                           None)
-                if not sec:
-                    self._send(404, {"error": f"no section {sid!r}"})
-                    return
-                path = os.path.join(ART_DIR, f"section-{sid}.jpg")
-                data = body.get("data")
-                if not data:  # remove the logo
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                    sec.pop("image", None)
-                else:
-                    try:
-                        b64 = data.split(",", 1)[1] \
-                            if data.startswith("data:") else data
-                        raw = base64.b64decode(b64, validate=True)
-                    except (ValueError, AttributeError):
-                        self._send(400, {"error": "invalid image data"})
+                with _library.LIB_LOCK:  # load->mutate->save, one writer
+                    lib = load_library()
+                    sec = next((s for s in lib["sections"]
+                                if s["id"] == sid), None)
+                    if not sec:
+                        self._send(404, {"error": f"no section {sid!r}"})
                         return
-                    if not 100 <= len(raw) <= 3_000_000:
-                        self._send(400, {"error": "image must be 100B-3MB"})
-                        return
-                    os.makedirs(ART_DIR, exist_ok=True)
-                    with open(path + ".tmp", "wb") as f:
-                        f.write(raw)
-                    os.replace(path + ".tmp", path)
-                    sec["image"] = path
-                save_library(normalize_library(lib))
+                    path = os.path.join(ART_DIR, f"section-{sid}.jpg")
+                    data = body.get("data")
+                    if not data:  # remove the logo
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
+                        sec.pop("image", None)
+                    else:
+                        try:
+                            b64 = data.split(",", 1)[1] \
+                                if data.startswith("data:") else data
+                            raw = base64.b64decode(b64, validate=True)
+                        except (ValueError, AttributeError):
+                            self._send(400, {"error": "invalid image data"})
+                            return
+                        if not 100 <= len(raw) <= 3_000_000:
+                            self._send(400,
+                                       {"error": "image must be 100B-3MB"})
+                            return
+                        os.makedirs(ART_DIR, exist_ok=True)
+                        with open(path + ".tmp", "wb") as f:
+                            f.write(raw)
+                        os.replace(path + ".tmp", path)
+                        sec["image"] = path
+                    save_library(normalize_library(lib))
                 log(f"section logo {'set' if data else 'removed'}: {sid}")
                 self._send(200, lib)
             elif self.path == "/wifi/reconnect":
@@ -1844,18 +1845,31 @@ def _bt_transport_lost():
     can never kill local playback."""
     if current_output()["output"] != "bt":
         return {"stopped": False}
+    # _BT_WAIT writes go under _BT_WAIT_LOCK (a bare write can be
+    # consumed by a stale transport-up event in _bt_wait_advance, review
+    # R7) — but NEVER while holding ORCH.lock: the established order is
+    # _BT_WAIT_LOCK -> ORCH.lock (_bt_wait_advance holds the wait lock
+    # and calls source_is_spotify, which takes ORCH.lock). Taking them
+    # in the opposite order here would be an AB/BA deadlock, so the
+    # mpv branch stops the child under ORCH.lock and arms the wait
+    # AFTER releasing it.
+    stopped_mpv = False
     with ORCH.lock:
         if ORCH._mpv_alive():
             log("bt transport lost mid-play — stopping (bookmark survives)")
             ORCH._stop_child()
+            stopped_mpv = True
+    if stopped_mpv:
+        with _BT_WAIT_LOCK:
             _BT_WAIT["lost"] = time.monotonic()
-            return {"stopped": True}
+        return {"stopped": True}
     try:
         if spotify_playing():
             log("bt transport lost mid-play — pausing spotify")
             go("/player/pause")
-            _BT_WAIT["lost"] = time.monotonic()
-            _BT_WAIT["lost_spotify"] = True
+            with _BT_WAIT_LOCK:
+                _BT_WAIT["lost"] = time.monotonic()
+                _BT_WAIT["lost_spotify"] = True
             return {"stopped": True}
     except OSError:
         pass  # go-librespot unreachable = nothing playing through it
@@ -1946,6 +1960,12 @@ def _bt_wait_advance():
     blip auto-resume never fired until a button woke the screen (field
     2026-07-17: 'have to press once for it to start'). No-op unless a
     wait is pending, so it's cheap on the timer."""
+    # LOCK DISCIPLINE (review R7): _BT_WAIT_LOCK is a LEAF lock — held
+    # only for dict reads/writes, never across I/O and never while
+    # taking ORCH.lock. Writers that already hold ORCH.lock (play ->
+    # _kick_bt_connect) may then take it safely. The transport probe
+    # (dbus) and source_is_spotify (ORCH.lock) run between two short
+    # critical sections, with a re-check in the second.
     with _BT_WAIT_LOCK:
         now = time.monotonic()
         # expire stale intents first (the kid walked away with the speaker
@@ -1955,21 +1975,29 @@ def _bt_wait_advance():
             _BT_WAIT.pop("lost_spotify", None)
         if _BT_WAIT["since"] and now - _BT_WAIT["since"] > BT_WAIT_S:
             _BT_WAIT["since"] = 0.0  # stale intent
-        # The speaker coming back is ONE physical event. Both a mid-play
-        # drop (lost) and a play-intent (since) can be pending together —
-        # you switch the output to bt, then the link blips before A2DP
-        # settles. Resuming for each separately calls _speaker_back TWICE
-        # = two go-librespot restarts + two respawns racing (field storm
-        # 2026-07-17 23:07, 'rebuilding output' logged twice a second
-        # apart). Coalesce: resume ONCE, clearing both intents.
-        if (_BT_WAIT["lost"] or _BT_WAIT["since"]) and _bt_transport_ready():
-            spot = _BT_WAIT.pop("lost_spotify", False) or source_is_spotify()
-            # the most RECENT intent decides the blip window (be lenient:
-            # a fresh play-intent right before the drop is still a blip)
-            elapsed = now - max(_BT_WAIT["lost"], _BT_WAIT["since"])
-            _BT_WAIT["lost"] = 0.0
-            _BT_WAIT["since"] = 0.0
-            _BT_WAIT["ready_until"] = _speaker_back(now, elapsed, spot)
+        pending = bool(_BT_WAIT["lost"] or _BT_WAIT["since"])
+    if not pending or not _bt_transport_ready():
+        return
+    # The speaker coming back is ONE physical event. Both a mid-play
+    # drop (lost) and a play-intent (since) can be pending together —
+    # you switch the output to bt, then the link blips before A2DP
+    # settles. Resuming for each separately calls _speaker_back TWICE
+    # = two go-librespot restarts + two respawns racing (field storm
+    # 2026-07-17 23:07, 'rebuilding output' logged twice a second
+    # apart). Coalesce: resume ONCE, clearing both intents atomically.
+    with _BT_WAIT_LOCK:
+        if not (_BT_WAIT["lost"] or _BT_WAIT["since"]):
+            return  # another thread consumed the event during the probe
+        spot_flag = _BT_WAIT.pop("lost_spotify", False)
+        # the most RECENT intent decides the blip window (be lenient:
+        # a fresh play-intent right before the drop is still a blip)
+        elapsed = now - max(_BT_WAIT["lost"], _BT_WAIT["since"])
+        _BT_WAIT["lost"] = 0.0
+        _BT_WAIT["since"] = 0.0
+    ready_until = _speaker_back(now, elapsed,
+                                spot_flag or source_is_spotify())
+    with _BT_WAIT_LOCK:
+        _BT_WAIT["ready_until"] = ready_until
 
 
 def _bt_wait_watcher():
@@ -1993,7 +2021,9 @@ def _bt_wait_state(playing):
         # connected, so audio is still coming from the built-in speaker.
         # Keep the 'not connected' popup up (X connects it, A drops back
         # to the built-in) until it connects or the output goes local.
-        if (_BT_WAIT["since"] and current_output()["output"] == "bt"
+        with _BT_WAIT_LOCK:
+            since = _BT_WAIT["since"]
+        if (since and current_output()["output"] == "bt"
                 and not _bt_transport_ready()):
             return True, False, False
         with _BT_WAIT_LOCK:
@@ -2002,9 +2032,10 @@ def _bt_wait_state(playing):
         return False, False, False
     _bt_wait_advance()
     now = time.monotonic()
-    return (bool(_BT_WAIT["since"]),  # still pending, transport not ready
-            now < _BT_WAIT["ready_until"],
-            bool(_BT_WAIT["lost"]))
+    with _BT_WAIT_LOCK:  # one consistent snapshot for the three flags
+        return (bool(_BT_WAIT["since"]),  # pending, transport not ready
+                now < _BT_WAIT["ready_until"],
+                bool(_BT_WAIT["lost"]))
 
 
 def source_is_spotify():
@@ -2019,7 +2050,8 @@ def _kick_bt_connect():
     on late. No-op on the built-in output or with the speaker connected."""
     if current_output()["output"] != "bt" or _bt_transport_ready():
         return
-    _BT_WAIT["since"] = time.monotonic()  # the screen shows "waiting..."
+    with _BT_WAIT_LOCK:  # leaf lock — safe under ORCH.lock (see advance)
+        _BT_WAIT["since"] = time.monotonic()  # screen shows "waiting..."
     try:
         with open(_bt.KICK_FILE + ".tmp", "w") as f:
             f.write(str(time.time()))

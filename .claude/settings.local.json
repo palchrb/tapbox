@@ -105,7 +105,15 @@
       "Bash(git -C /workspace/tapbox log --oneline -3)",
       "Bash(pkg-config --exists dbus-1)",
       "Bash(pkg-config --exists glib-2.0)",
-      "Read(//usr/lib/**)"
+      "Read(//usr/lib/**)",
+      "Bash(git -C /tmp/claude-1001/-workspace-tapbox/46f6684b-e4f4-409a-bd9c-b070ab98d89f/scratchpad/musicbox log -1 '--format=%ci  %s')",
+      "WebFetch(domain:medium.com)",
+      "Bash(grep -n 'install_if_changed 755 \"$SCRIPT_DIR/power.sh\"' pi/install.sh)",
+      "Bash(grep -oE '\"/[a-zA-Z0-9/_-]+\"|`/[a-zA-Z0-9/_-]+' pi/web/app.js)",
+      "Bash(awk -F'sleep\\\\\\\\\\(' '{print $1 $2}')",
+      "Bash(awk '/^function |^async function /{if\\(name&&NR-start>60\\)print name\" \"start\" \"NR-start; name=$2; start=NR} END{if\\(name&&NR-start>60\\)print name\" \"start\" \"NR-start}' pi/web/app.js)",
+      "Bash(awk '/ *)",
+      "Bash(grep -n \"^import hashlib\\\\|^import re$\\\\|ORDERS\\\\|hotspot_active\" pi/daemon.py)"
     ]
   }
 }
