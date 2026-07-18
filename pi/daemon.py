@@ -2120,6 +2120,66 @@ def _prewarm_mpv():
         log(f"mpv prewarm failed: {e!r}")
 
 
+WIFI_PS_TICK_S = float(os.environ.get("TAPBOX_WIFI_PS_TICK", "15"))
+
+
+def _streaming_now():
+    """True while audio is streaming OVER THE NETWORK — Spotify, or mpv
+    playing a remote URL. Cached/local playback returns False: there the
+    wifi radio has no job, and LESS wifi airtime is better for A2DP on
+    the shared antenna."""
+    try:
+        if spotify_playing():
+            return True
+    except OSError:
+        pass
+    with ORCH.lock:
+        alive = ORCH._mpv_alive()
+    if alive and mpv_get("pause") is False:
+        p = mpv_get("path")
+        if isinstance(p, str) and p.startswith(("http://", "https://")):
+            return True
+    return False
+
+
+def _wifi_ps_governor():
+    """Wi-Fi power save trades latency for battery — and the two sides
+    win at DIFFERENT times. Idle/cached: PS on is pure battery win.
+    Network streaming: the AP buffers packets until the radio's next
+    nap-wakeup, and under BT coexistence those latency spikes starved
+    go-librespot's control plane (put-state 'context deadline exceeded',
+    /next timeouts — field 2026-07-18 15:30). Toggle PS off only while
+    something streams over the net, back on when idle. Respects the
+    boot-time choice: if PS was already OFF (perf mode / operator
+    preference) the governor leaves it alone entirely."""
+    if os.environ.get("TAPBOX_WIFI_PS_GOVERNOR", "1") != "1":
+        return
+    try:
+        r = subprocess.run(["iw", "dev", "wlan0", "get", "power_save"],
+                           capture_output=True, text=True, timeout=10)
+        if "on" not in (r.stdout or ""):
+            log("wifi ps governor: power save already off — not managing")
+            return
+    except (OSError, subprocess.TimeoutExpired):
+        return  # no iw / no wlan0 — nothing to govern
+    ps_off = False  # current state we set (boot state = on)
+    while True:
+        time.sleep(WIFI_PS_TICK_S)
+        try:
+            want_off = _streaming_now()
+            if want_off == ps_off:
+                continue
+            subprocess.run(["iw", "dev", "wlan0", "set", "power_save",
+                            "off" if want_off else "on"],
+                           timeout=10, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            ps_off = want_off
+            log("wifi power save off (streaming)" if want_off
+                else "wifi power save on (idle)")
+        except Exception as e:
+            log(f"wifi ps governor error: {e!r}")
+
+
 def _audible_now():
     """Is anything actually making sound (or about to)? The cache
     sweeper's busy-gate: its downloads must never share the radio with
@@ -2146,6 +2206,7 @@ def main():
     except ValueError:
         pass  # not the main thread (tests run main() in a thread)
     _library.BUSY_CHECK = _audible_now  # the sweep yields to live audio
+    threading.Thread(target=_wifi_ps_governor, daemon=True).start()
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_prewarm_mpv, daemon=True).start()
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()
