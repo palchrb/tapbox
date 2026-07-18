@@ -198,6 +198,7 @@ def player_path():
 # --- tests' daemon.<name> monkeypatching working unchanged ----------------------
 
 from tapbox import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
+from tapbox import library as _library  # noqa: E402 — BUSY_CHECK wiring
 from tapbox.library import (  # noqa: E402
     ORDERS, artwork_allowed, expand_target, find_entry, library_with_covers,
     load_library, normalize_library, save_library, state_key, _cache_sweeper,
@@ -1912,16 +1913,18 @@ def _spotify_supervisor():
                     # nothing but a switched-off headset
                     continue
                 try:
-                    if spotify_playing():
-                        # Audio streaming right now IS proof the session
-                        # lives — parking would kill the music over a lost
-                        # probe. And the probe lies under self-inflicted
-                        # load: cache sweep downloads + the Spotify stream
-                        # + A2DP all share the 2.4GHz radio (field
-                        # 2026-07-18 15:09: parked mid-song during the
-                        # sweep; ~13s of silence and a track restart for
-                        # nothing). A truly dead net stops playback by
-                        # itself, and THEN we park.
+                    if go_status(timeout=2).get("track"):
+                        # A LOADED session — playing OR paused — is never
+                        # parked. Playing audio is proof the net works
+                        # (the probe lies under self-inflicted load: the
+                        # cache sweep's downloads + the stream + A2DP all
+                        # share the 2.4GHz radio). And parking a PAUSED
+                        # session destroys the kid's pause: the session
+                        # dies, the next button hits 'session is empty ->
+                        # replaying last' and the music RESTARTS (field
+                        # 2026-07-18 15:13-15:15: pause fought the parker
+                        # for two minutes). Idle-shutdown covers the
+                        # battery angle for a box left paused offline.
                         misses = 0
                         continue
                 except OSError:
@@ -2102,11 +2105,32 @@ def _prewarm_mpv():
         log(f"mpv prewarm failed: {e!r}")
 
 
+def _audible_now():
+    """Is anything actually making sound (or about to)? The cache
+    sweeper's busy-gate: its downloads must never share the radio with
+    live audio. A just-spawned mpv (IPC not up yet) counts as audible —
+    that's exactly the tap->audio window the sweep must stay out of."""
+    with ORCH.lock:
+        alive = ORCH._mpv_alive()
+        started = ORCH.child_started
+    if alive:
+        p = mpv_get("pause")
+        if p is False:
+            return True
+        if p is None and time.monotonic() - started < MPV_START_GRACE_S:
+            return True
+    try:
+        return bool(spotify_playing())
+    except OSError:
+        return False
+
+
 def main():
     try:
         signal.signal(signal.SIGTERM, _on_term)
     except ValueError:
         pass  # not the main thread (tests run main() in a thread)
+    _library.BUSY_CHECK = _audible_now  # the sweep yields to live audio
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_prewarm_mpv, daemon=True).start()
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()

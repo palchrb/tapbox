@@ -207,6 +207,27 @@ def _sync_args_for(target, n):
 
 SWEEP_STAMP = os.path.join(STATE_DIR, "last-sweep.json")
 SYNC_STAGGER_S = int(os.environ.get("TAPBOX_SYNC_STAGGER", 4))
+# The sweep must NEVER disturb active listening: its downloads share the
+# single 2.4GHz radio with the Spotify stream AND the A2DP link, and a
+# saturated radio starves control calls and fools the offline prober
+# (field 2026-07-18: the sweep made pausing a song a two-minute fight).
+# The daemon sets BUSY_CHECK to "is anything audible right now"; while it
+# returns True the sweep holds off, and an in-flight download is
+# ABANDONED (terminated, retried next sweep — syncs are incremental so
+# little is lost) the moment playback starts.
+BUSY_CHECK = None  # set by the daemon; None = never busy (CLI use)
+SYNC_BUSY_RECHECK_S = int(os.environ.get("TAPBOX_SYNC_BUSY_RECHECK", 30))
+
+
+def _busy():
+    try:
+        return bool(BUSY_CHECK and BUSY_CHECK())
+    except Exception:
+        return False  # a broken check must never stall the sweep forever
+
+
+class SweepYield(Exception):
+    """Raised when a running sync is abandoned because playback started."""
 
 
 def _last_sweep():
@@ -233,12 +254,32 @@ def _stamp_sweep():
 def _sync_one(args):
     """Run one content.py sync, kept off the audio's back: nice-19, and
     pinned to a single core (taskset) so the ffmpeg transcode can't take
-    both cores from playback. Downloads are sequential (one at a time)."""
+    both cores from playback. Downloads are sequential (one at a time).
+    Watched: if playback starts MID-download the child is terminated and
+    SweepYield raised — the radio belongs to the music, and the next
+    sweep re-runs the (incremental) sync for pennies."""
     cmd = [sys.executable, content.__file__, *args]
     if _TASKSET:
         cmd = [_TASKSET, "-c", "1"] + cmd
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   timeout=3600, preexec_fn=lambda: os.nice(19))
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            preexec_fn=lambda: os.nice(19))
+    deadline = time.monotonic() + 3600
+    while True:
+        try:
+            proc.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        if _busy() or time.monotonic() > deadline:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(cmd, 3600)
+            raise SweepYield()
 
 
 _TASKSET = shutil.which("taskset")
@@ -257,6 +298,9 @@ def _cache_sweeper():
     _sync_wake.wait(due_in)
     _sync_wake.clear()
     while True:
+        while _busy():  # active listening owns the radio — hold the sweep
+            _sync_wake.wait(SYNC_BUSY_RECHECK_S)
+            _sync_wake.clear()
         try:
             # First, so new playlists get covers in this very sweep.
             sync_profile_sections()
@@ -281,9 +325,15 @@ def _cache_sweeper():
                 args = _sync_args_for(e["target"], n) if n != 0 else None
                 if not args:
                     continue
+                while _busy():  # re-checked before EVERY entry
+                    _sync_wake.wait(SYNC_BUSY_RECHECK_S)
+                    _sync_wake.clear()
                 log(f"cache sweep: {e['name']} ({' '.join(args)})")
                 try:
                     _sync_one(args)
+                except SweepYield:
+                    log(f"cache sweep yields to playback ({e['name']} "
+                        "abandoned — retried next sweep)")
                 except (OSError, subprocess.TimeoutExpired) as exc:
                     log(f"cache sweep failed for {e['name']}: {exc!r}")
                 _sync_wake.wait(SYNC_STAGGER_S)  # breathe between entries
