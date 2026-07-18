@@ -127,8 +127,14 @@ case "${1:-}" in
       systemctl stop tailscaled 2>/dev/null || true
       echo "tailscaled stopped (STOP_TAILSCALE=1) — no remote ssh until 'normal'"
     fi
-    echo "Power save ON — resulting state:"
-    status_report
+    # At boot (no tty) skip the status report: its PiSugar reads block on a
+    # still-starting pisugar-server (~5s) and this unit runs After=multi-user,
+    # so the report needlessly stretched 'Startup finished' (and threw the
+    # broken-pipe noise). Interactive `tapbox-power save` still prints it.
+    if [ -t 1 ]; then
+      echo "Power save ON — resulting state:"
+      status_report
+    fi
     ;;
   perf)
     set_cores 1

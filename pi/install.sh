@@ -564,7 +564,13 @@ install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && D
 write_if_changed /etc/systemd/system/tapbox-daemon.service <<EOF && DAEMON_CHANGED=1
 [Unit]
 Description=TapBox orchestration daemon (playback state + API)
-After=go-librespot.service
+# Deliberately NOT ordered After=go-librespot / network-online: the daemon
+# resumes cached podcasts and serves the PWA with no network, and it
+# already waits INTERNALLY for whatever a target needs (go-librespot login
+# for Spotify, internet for a fresh mpv stream). Ordering it behind the
+# network held the screen's 'ready' state and cached-content resume ~18s
+# into every boot — the daemon now starts at basic.target instead
+# (systemd-analyze rig 2026-07-18: multi-user waited on network-online).
 
 [Service]
 Environment=TAPBOX_GO_CONFIG=$CONF_DIR/config.yml
