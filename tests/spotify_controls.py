@@ -19,6 +19,7 @@ os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
                                             "lib.json")
+os.environ["TAPBOX_EMPTY_RECHECK"] = "0.05"  # fast transient-empty recheck
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -61,13 +62,52 @@ assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
 print("2. dead session: playpause replays, next/prev stay dead buttons OK")
 
 # 2b. album ran off its end: the API ANSWERS and says the session is
-# empty — next must WRAP (replay the target) instead of going dead
-# (field 2026-07-18: next on the last Coco track showed nothing at all)
+# empty — TWICE (transient-empty recheck) — then next WRAPS (replays)
+# instead of going dead (field: next on the last Coco track did nothing)
 SPAWNED.clear()
+orch._spot_cmd_timeout_at = 0.0
 daemon.go_status = lambda **k: {}          # reachable, cleanly empty
 r = orch.command("next")
 assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
-print("2b. clean empty session: next wraps (replays the target) OK")
+print("2b. stable empty session: next wraps (replays the target) OK")
+
+# 2b-ii. TRANSIENT empty: a slow track load reads empty for a beat (field
+# 2026-07-18 16:14: prev at :47 saw 'empty', Del 4 finished at :49). The
+# recheck sees the loaded track -> the skip routes to spotify, NO replay.
+SPAWNED.clear()
+CMDS.clear()
+READS = [{}, {"track": {"uri": "spotify:track:d4"}, "paused": False,
+              "stopped": False}]
+daemon.go_status = lambda **k: READS.pop(0) if READS else READS
+r = orch.command("next")
+assert r["routed"] == "spotify" and CMDS == ["next"], (r, CMDS)
+assert SPAWNED == [], f"transient empty must never replay: {SPAWNED}"
+print("2b-ii. mid-load empty blip: recheck routes the skip, no replay OK")
+
+# 2b-iii. a control TIMED OUT moments ago: an 'empty' session proves
+# nothing (the command is likely still executing) — skips drop as busy
+SPAWNED.clear()
+orch._spot_cmd_timeout_at = __import__("time").monotonic()
+daemon.go_status = lambda **k: {}
+r = orch.command("next")
+assert r.get("busy") is True and SPAWNED == [], (r, SPAWNED)
+orch._spot_cmd_timeout_at = 0.0
+print("2b-iii. empty right after a control timeout: dropped, no replay OK")
+
+# 2b-iv. the control call itself timing out returns a clean busy (no 500)
+# and stamps the hold window
+def _cmd_boom(a):
+    raise TimeoutError("timed out")
+
+daemon.spotify_command = _cmd_boom
+daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:x"},
+                                "paused": False, "stopped": False}
+r = orch.command("next")
+assert r.get("busy") is True, r
+assert orch._spot_cmd_timeout_at > 0, "timeout must stamp the hold window"
+orch._spot_cmd_timeout_at = 0.0
+daemon.spotify_command = lambda a: CMDS.append(a)
+print("2b-iv. timed-out control -> clean busy drop + hold stamped OK")
 
 # 2c. a finished mpv queue replays on next too (go-librespot state is
 # irrelevant for a podcast box — even unreachable must not block it)
@@ -81,6 +121,7 @@ print("2c. finished podcast queue: next replays regardless of spotify OK")
 
 # 3. loaded session: everything routes to spotify as before
 SPAWNED.clear()
+CMDS.clear()
 daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:x"},
                                 "paused": False, "stopped": False,
                                 "play_origin": "go-librespot"}

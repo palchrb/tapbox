@@ -173,6 +173,13 @@ STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
 RESUME_MIN_S = float(os.environ.get("TAPBOX_RESUME_MIN", "20"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("TAPBOX_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("TAPBOX_SETTLE_TOL", "3"))
+# a spotify session that reads 'empty' right after a timed-out control is
+# very likely a SLOW TRACK LOAD, not a finished album — hold skips off the
+# replay fallback for this long after any control timeout
+SPOT_TIMEOUT_HOLD_S = float(os.environ.get("TAPBOX_SPOT_TIMEOUT_HOLD", "30"))
+# and even without a recent timeout, re-read an 'empty' session after this
+# beat before concluding the album truly ended (mid-load blips resolve)
+EMPTY_RECHECK_S = float(os.environ.get("TAPBOX_EMPTY_RECHECK", "2"))
 # how long after a spawn to trust player.py's published paused-state while
 # mpv's IPC socket is still coming up (the ~1-3s tap->audio window), so the
 # screen shows 'playing' at once instead of a dead card
@@ -245,6 +252,7 @@ class Orchestrator:
         except (OSError, ValueError):
             pass
         self.child_started = 0.0
+        self._spot_cmd_timeout_at = 0.0  # last spotify control timeout
         threading.Thread(target=self._arbiter, daemon=True).start()
         threading.Thread(target=self._stall_watchdog, daemon=True).start()
 
@@ -722,6 +730,23 @@ class Orchestrator:
             log("stop (bookmark cleared)")
             return {"stopped": True}
 
+    def _spot_control(self, action):
+        """Run one spotify control; False = it timed out / failed. The
+        timeout moment is remembered: for the next SPOT_TIMEOUT_HOLD_S a
+        session that reads 'empty' is treated as still-loading, because
+        the timed-out command is very likely still executing inside
+        go-librespot (field 2026-07-18 16:14: the timed-out /next
+        finished 14s later). Also turns what used to be a 500 on the
+        HTTP handler into a clean busy-drop."""
+        try:
+            spotify_command(action)
+            return True
+        except OSError as e:
+            self._spot_cmd_timeout_at = time.monotonic()
+            log(f"{action}: spotify control failed ({e.__class__.__name__})"
+                " — dropped, press again")
+            return False
+
     def command(self, action):
         # Drop, don't queue, presses that arrive while a control is still
         # running. go-librespot's API can take seconds per next/prev while
@@ -793,7 +818,8 @@ class Orchestrator:
                 return {"routed": None, "busy": True}
         # 2) Spotify actively playing (covers phone-initiated sessions)
         if st and spotify_playing(st):
-            spotify_command(action)
+            if not self._spot_control(action):
+                return {"routed": None, "busy": True}
             self.source = "spotify"
             self._persist()
             log(f"{action} -> spotify (active)")
@@ -805,19 +831,46 @@ class Orchestrator:
         # rule 4 instead: replay the target, which resumes exactly.
         if self.source == "spotify" and st is not None:
             if (st.get("track") or {}) and not st.get("stopped"):
-                spotify_command(action)
+                if not self._spot_control(action):
+                    return {"routed": None, "busy": True}
                 log(f"{action} -> spotify (last)")
                 return {"routed": "spotify"}
+            # The session READS empty — but a SLOW track load looks
+            # exactly like this for a beat (field 2026-07-18 16:14: /next
+            # timed out at :35, prev at :47 saw an 'empty' session, Del 4
+            # finished loading at :49). Two guards before a skip may
+            # treat emptiness as the album's end:
+            if action != "playpause":
+                if (time.monotonic() - self._spot_cmd_timeout_at
+                        < SPOT_TIMEOUT_HOLD_S):
+                    # a control timed out moments ago — it is very likely
+                    # STILL EXECUTING; emptiness proves nothing
+                    log(f"{action}: session reads empty right after a "
+                        "slow control — dropped (likely still loading)")
+                    return {"routed": None, "busy": True}
+                # transient-empty guard: re-read after a beat; a mid-load
+                # blip resolves, a finished album stays empty
+                time.sleep(EMPTY_RECHECK_S)
+                try:
+                    st2 = go_status(timeout=2)
+                except OSError:
+                    log(f"{action}: session state unclear — dropped")
+                    return {"routed": None, "busy": True}
+                if (st2.get("track") or {}) and not st2.get("stopped"):
+                    if not self._spot_control(action):
+                        return {"routed": None, "busy": True}
+                    log(f"{action} -> spotify (loaded during recheck)")
+                    return {"routed": "spotify"}
             log("spotify session is empty — replaying last target")
         # 4) dead session + remembered target -> bring it back. Playpause
         # always may (unambiguous 'give me music'). next/prev may TOO —
         # but only when the emptiness is TRUSTWORTHY: the API answered
-        # and said so (album ran off its end — next on the last Coco
-        # track must wrap to the start, not go dead; field 2026-07-18),
-        # or the source isn't spotify at all (a finished podcast queue).
-        # What must never replay on a skip is an UNREACHABLE spotify API
-        # (st is None): that's busy-not-dead, and replaying there
-        # restarted a playing album from 0:00 (the 15:44 disaster).
+        # and said so twice (album ran off its end — next on the last
+        # Coco track must wrap to the start, not go dead), or the source
+        # isn't spotify at all (a finished podcast queue). What must
+        # never replay on a skip is an UNREACHABLE spotify API (st is
+        # None): busy-not-dead — replaying there restarted a playing
+        # album from 0:00 (the 15:44 disaster).
         trusted = st is not None or self.source != "spotify"
         if (action == "playpause" or trusted) \
                 and self.target and not self._mpv_alive():
