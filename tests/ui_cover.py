@@ -23,6 +23,7 @@ def make_app(status):
     app = object.__new__(ui.App)
     app.status = status
     app.system = {}
+    app._now_art_prev = (None, None)
     app.wifi_connecting_until = 0.0
     app.bt_connecting_until = 0.0
     app.volume_flash = 0.0
@@ -71,6 +72,44 @@ print("3. remote episode art async + local show cover fallback OK")
 render({"source": None, "title": None})
 assert ASYNC == [] and SYNC == [], (ASYNC, SYNC)
 print("4. no artwork -> no fetch, clean render OK")
+
+# 4b. track change within the SAME target: while the new remote cover
+# loads, the PREVIOUS cover stays up — no mosaic flash on every skip
+# (field 2026-07-18: mosaic blinked on each next press)
+app = make_app({"source": "spotify", "title": "A",
+                "target": "https://open.spotify.com/playlist/p1",
+                "artwork": "http://i.scdn.co/a.jpg",
+                "artwork_local": "/cache/mosaic.jpg"})
+thumb = Image.new("RGB", (128, 128), (10, 10, 10))
+app.artwork = lambda ref, size=110: (SYNC.append(ref), thumb)[1]
+app.artwork_async = lambda ref, size=110: (ASYNC.append(ref), None)[1]
+img = Image.new("RGB", (ui.W, ui.H), (0, 0, 0))
+SYNC.clear(); ASYNC.clear()
+app.render_now(ImageDraw.Draw(img), img)   # first paint: mosaic fallback
+assert SYNC == ["/cache/mosaic.jpg"], SYNC
+# next track, new remote URL, fetch pending -> previous cover reused,
+# the mosaic is NOT redrawn
+app.status = {"source": "spotify", "title": "B",
+              "target": "https://open.spotify.com/playlist/p1",
+              "artwork": "http://i.scdn.co/b.jpg",
+              "artwork_local": "/cache/mosaic.jpg"}
+SYNC.clear(); ASYNC.clear()
+app.render_now(ImageDraw.Draw(img), img)
+assert ASYNC == ["http://i.scdn.co/b.jpg"], ASYNC
+assert SYNC == [], f"mosaic must not flash on a track change: {SYNC}"
+print("4b. track change keeps the previous cover, no mosaic flash OK")
+
+# 4c. a TARGET change must never reuse the old album's art — mosaic
+# fallback returns until the new cover lands
+app.status = {"source": "spotify", "title": "C",
+              "target": "https://open.spotify.com/playlist/p2",
+              "artwork": "http://i.scdn.co/c.jpg",
+              "artwork_local": "/cache/mosaic2.jpg"}
+SYNC.clear(); ASYNC.clear()
+app.render_now(ImageDraw.Draw(img), img)
+assert SYNC == ["/cache/mosaic2.jpg"], \
+    f"stale art must not leak across targets: {SYNC}"
+print("4c. target switch falls back to its own mosaic, no stale art OK")
 
 # 5. failure backoff escalates 5s -> 10 -> 20 ... capped at 60, and a
 # success clears the ladder. Boot is fast enough that the resume's cover

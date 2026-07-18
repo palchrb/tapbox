@@ -540,6 +540,7 @@ class App:
         self.artwork_cache = {}
         self._art_pending = set()   # remote covers being fetched off-thread
         self._art_fails = {}        # per-cover failure count -> retry backoff
+        self._now_art_prev = (None, None)  # (target, last shown now-cover)
         self._lib_at = 0.0          # last /library fetch (TTL'd)
 
     # -- data ---------------------------------------------------------------
@@ -1299,8 +1300,19 @@ class App:
             art = self.artwork(ep_art, 128)
         if art is None and ep_art and str(ep_art).startswith("http"):
             art = self.artwork_async(ep_art, 128)  # non-blocking; may be None
+        if art is None:
+            # New remote cover still loading (track change): keep showing
+            # the PREVIOUS cover for this target instead of flashing the
+            # mosaic for a second on every skip (field 2026-07-18). The
+            # mosaic is only the first-paint fallback; a target switch
+            # never reuses another album's art.
+            prev_target, prev_art = self._now_art_prev
+            if prev_art is not None and prev_target == st.get("target"):
+                art = prev_art
         if art is None and local:
             art = self.artwork(local, 128)  # offline-proof fallback
+        if art is not None:
+            self._now_art_prev = (st.get("target"), art)
         if art:
             img.paste(art, ((W - art.width) // 2, 24))
             ty = 156
