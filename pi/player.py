@@ -162,6 +162,25 @@ def rotate_to_bookmark(urls, st, url_by_id):
     return urls[idx:] + urls[:idx], (pos if pos > RESUME_MIN_S else 0.0)
 
 
+_sync_child = None  # the per-play background sync (content.py) subprocess
+
+
+def _stop_sync_child():
+    """Terminate the per-play sync when THIS player stops. player.py's
+    death (stop / target switch / reboot) must take the sync down with
+    it: left alone it becomes an orphan that keeps downloading while the
+    next source plays — the same shared-radio contention the sweep's
+    busy-gate exists to prevent. A natural queue end doesn't call this
+    (the box is idle then; finishing the sync is free and useful)."""
+    global _sync_child
+    p, _sync_child = _sync_child, None
+    if p is not None and p.poll() is None:
+        try:
+            p.terminate()
+        except OSError:
+            pass
+
+
 def mpv_command(urls, volume, sock, pcm):
     """The mpv argv for a play. Extracted so a test can pin the
     audio-critical flags — dropping --audio-samplerate/--audio-channels
@@ -506,6 +525,10 @@ def main():
     def _stop(*_args):
         terminated.append(True)
         proc.terminate()
+        _stop_sync_child()  # the per-play sync dies WITH us — otherwise it
+        # keeps downloading as an orphan while the NEXT source streams
+        # (field 2026-07-18: a 336-episode feed sync survived a switch to
+        # Spotify and chewed the shared radio through Vaiana)
     signal.signal(signal.SIGTERM, _stop)
 
     # Background episode caching. A library entry's cache setting (--cache N,
@@ -549,10 +572,11 @@ def main():
     # right-after-boot) SD cache, adding seconds to tap->audio. content.py is
     # stdlib-only; nice-19 keeps it out of mpv's way from here on.
     if sync_args:
-        subprocess.Popen([sys.executable, content.__file__, *sync_args],
-                         stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL,
-                         preexec_fn=lambda: os.nice(19))  # never compete
+        global _sync_child
+        _sync_child = subprocess.Popen(
+            [sys.executable, content.__file__, *sync_args],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            preexec_fn=lambda: os.nice(19))  # never compete
         log(f"background sync started: {' '.join(sync_args)}")
 
     def survive_dead_audio(stable):
