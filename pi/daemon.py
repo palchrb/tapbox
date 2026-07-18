@@ -256,7 +256,9 @@ class Orchestrator:
         except (OSError, ValueError):
             pass
         self.child_started = 0.0
-        self._spot_cmd_timeout_at = 0.0  # last spotify control timeout
+        # last spotify control timeout; far past, NOT 0.0 — on a young
+        # monotonic clock 0.0 would read as 'timed out seconds ago'
+        self._spot_cmd_timeout_at = -1e9
         threading.Thread(target=self._arbiter, daemon=True).start()
         threading.Thread(target=self._stall_watchdog, daemon=True).start()
 
@@ -450,6 +452,7 @@ class Orchestrator:
         args.append(target)
         if is_spotify(target) or target.startswith(("http://", "https://")):
             _radio.touch_busy()  # network-heavy start: blind BT pages yield
+            _PS_KICK.set()       # and wifi power save flips off NOW
         self.child = subprocess.Popen(args)
         self.child_started = time.monotonic()
 
@@ -783,12 +786,17 @@ class Orchestrator:
         try:
             if action in ("next", "prev"):
                 _radio.touch_busy()  # a skip = an imminent CDN track load
+                _PS_KICK.set()       # wifi power save off before the fetch
             spotify_command(action)
             return True
         except OSError as e:
             self._spot_cmd_timeout_at = time.monotonic()
-            log(f"{action}: spotify control failed ({e.__class__.__name__})"
-                " — dropped, press again")
+            # NOT 'press again': the timed-out command usually still
+            # executes inside go-librespot (field 2026-07-18 20:26: the
+            # 'dropped' /next landed 15s later) — a repeat press would
+            # double-skip
+            log(f"{action}: spotify control slow ({e.__class__.__name__})"
+                " — it likely still lands; give it a moment")
             return False
 
     def command(self, action):
@@ -2054,10 +2062,16 @@ def _spotify_supervisor():
     output switch rewrote its config) get re-parked on the next tick."""
     parked = False
     misses = 0
+    park_grace_s = float(os.environ.get("TAPBOX_SPOT_PARK_GRACE", "180"))
     while True:
         time.sleep(20)  # a cheap TCP probe; 60s made "no internet" and
         # the recovery lag a button-press generation behind reality
         try:
+            if _radio.paging():
+                # a BT page owns the radio right now — a probe result is
+                # noise either way (field 2026-07-18 20:17: page-deauthed
+                # wifi + a probe mid-DHCP parked go-librespot for nothing)
+                continue
             if _internet_up():
                 misses = 0
                 _SPOT_OFFLINE[0] = False
@@ -2107,6 +2121,15 @@ def _spotify_supervisor():
                     if _go_unit_active():
                         misses = 0
                         continue
+                if _radio.uptime() < park_grace_s:
+                    # boot is a storm of self-inflicted radio events (BT
+                    # boot pages, wifi association, DHCP) — a failed
+                    # probe here says nothing about the internet. Field
+                    # 2026-07-18 20:17:11: parked 70s after boot because
+                    # a page deauthed wifi mid-DHCP. Misses keep
+                    # counting, so a REAL offline box parks the moment
+                    # the grace expires.
+                    continue
                 _SPOT_OFFLINE[0] = True
                 subprocess.run(["systemctl", "stop", "go-librespot"],
                                timeout=30)
@@ -2307,6 +2330,10 @@ def _prewarm_mpv():
 
 
 WIFI_PS_TICK_S = float(os.environ.get("TAPBOX_WIFI_PS_TICK", "15"))
+# Play intent kicks the governor NOW: waiting for the next tick left PS
+# ON through an entire 27s resume (field 2026-07-18 20:04) — the flip
+# must land before the CDN burst, not after it.
+_PS_KICK = threading.Event()
 
 
 def _streaming_now():
@@ -2318,6 +2345,12 @@ def _streaming_now():
     governor once read that blind spot as 'not streaming' and switched
     power save ON in the middle of a CDN download, stretching a track
     load to ~19s (field 2026-07-18 16:14:44)."""
+    # A fresh BUSY marker = a network-heavy start/skip is in flight RIGHT
+    # NOW, whatever the api says — during a /next the api can answer with
+    # an idle-looking state mid-load, and the governor flipped PS ON in
+    # the middle of the CDN fetch (field 2026-07-18 20:26:32, 23s skip)
+    if _radio.busy():
+        return True
     with ORCH.lock:
         alive = ORCH._mpv_alive()
     if alive and mpv_get("pause") is False:
@@ -2330,6 +2363,12 @@ def _streaming_now():
     except OSError:
         if _go_unit_active():
             return None  # api busy (likely loading) — hold the PS state
+    # a control that timed out moments ago means a load is very likely
+    # still in flight even though the api now answers idle-ish — unknown,
+    # never 'idle' (same field skip as above: the /next was 'dropped' at
+    # 8s but executed at 23s)
+    if time.monotonic() - ORCH._spot_cmd_timeout_at < SPOT_TIMEOUT_HOLD_S:
+        return None
     return False
 
 
@@ -2370,12 +2409,28 @@ def _wifi_ps_governor():
         return
     log("wifi ps governor: managing (ps off while streaming, on when idle)")
     ps_off = False  # current state we set (baseline = on)
+    idle_since = None  # when continuous not-streaming began (PS still off)
+    hyst_s = float(os.environ.get("TAPBOX_WIFI_PS_HYST", "180"))
     while True:
-        time.sleep(WIFI_PS_TICK_S)
+        _PS_KICK.wait(WIFI_PS_TICK_S)  # play intent ends the wait early
+        _PS_KICK.clear()
         try:
             want_off = _streaming_now()
             if want_off is None:  # api mid-load: never flip PS blindly
                 continue
+            if want_off:
+                idle_since = None
+            elif ps_off:
+                # Hysteresis: PS goes back ON only after a LONG idle.
+                # Flipping 10s after a pause killed the Spotify AP TCP
+                # (silent 'pong ack' death -> re-auth on the next play)
+                # and a flip mid-activity has caused a field problem
+                # every single time. ~3 min of PS-off idle costs ~0.2%
+                # battery per pause (RF review 2026-07-18).
+                if idle_since is None:
+                    idle_since = time.monotonic()
+                if time.monotonic() - idle_since < hyst_s:
+                    continue
             if want_off == ps_off:
                 continue
             subprocess.run(["iw", "dev", "wlan0", "set", "power_save",

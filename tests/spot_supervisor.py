@@ -16,6 +16,11 @@ os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
                                             "lib.json")
+os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()  # no stale radio markers
+# 0 by default: the boot-grace scenarios opt in — and a CI container's
+# real uptime may be under the 180s default, which would mask the
+# parking scenarios entirely
+os.environ["TAPBOX_SPOT_PARK_GRACE"] = "0"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -104,6 +109,33 @@ daemon._SPOT_OFFLINE[0] = True
 run_ticks(2, internet=True, go_st={})
 assert daemon._SPOT_OFFLINE[0] is False
 print("4. internet back: offline banner clears OK")
+
+# 5. boot grace: the first minutes of uptime are a storm of
+# self-inflicted radio events (BT boot pages deauthed wifi mid-DHCP and
+# parked go-librespot 70s after boot on a FALSE 'no internet' — field
+# 2026-07-18 20:17:11). Within the grace nothing parks and no banner
+# shows, however many probes fail.
+os.environ["TAPBOX_SPOT_PARK_GRACE"] = "999999999"
+daemon._SPOT_OFFLINE[0] = False
+daemon._go_unit_active = lambda: False
+run_ticks(6, internet=False, go_st={})
+assert CALLS == [], f"parked within the boot grace: {CALLS}"
+assert daemon._SPOT_OFFLINE[0] is False, "false offline banner in the grace"
+os.environ["TAPBOX_SPOT_PARK_GRACE"] = "0"
+print("5. boot grace: no parking, no banner in the first minutes OK")
+
+# 6. a fresh PAGING marker (btwatchd mid-connect) skips the probe tick
+# entirely — a page owns the radio, so the probe result is noise either
+# way (a page-deauthed wifi read as 'offline' in the field)
+daemon._SPOT_OFFLINE[0] = False
+daemon._radio.touch_paging()
+run_ticks(6, internet=False, go_st={})
+assert CALLS == [] and daemon._SPOT_OFFLINE[0] is False, CALLS
+daemon._radio.clear_paging()
+run_ticks(5, internet=False, go_st={})
+assert ("systemctl", "stop", "go-librespot") in CALLS, \
+    "parking must resume once the page is over"
+print("6. probes hold during a BT page, resume after OK")
 
 print("SPOT SUPERVISOR OK — a loaded session (playing OR paused) is never "
       "parked; idle offline still parks after the hysteresis.")

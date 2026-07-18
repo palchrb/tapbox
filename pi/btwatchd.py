@@ -98,7 +98,12 @@ CONNECT_TIMEOUT_S = 30
 # signals are never gated. See tapbox/radio.py for the rationale.
 YIELD_RETRY_S = float(os.environ.get("TAPBOX_RECON_YIELD_RETRY", "4"))
 YIELD_GIVEUP_S = float(os.environ.get("TAPBOX_RECON_YIELD_GIVEUP", "120"))
-WIFI_GATE_S = float(os.environ.get("TAPBOX_RECON_WIFI_GATE", "15"))
+# 45, not 15: NetworkManager doesn't even bring wlan0 up until ~27s of
+# uptime on this box, so a 15s gate expired BEFORE the association it
+# was meant to protect (field 2026-07-18 20:00: boot pages at 23s and
+# 33s landed in the assoc window). Free once wifi settles (route up);
+# an offline cabin boot delays blind pages <=45s — kicks bypass.
+WIFI_GATE_S = float(os.environ.get("TAPBOX_RECON_WIFI_GATE", "45"))
 # ~4 failed boot pages = the speaker is off; the 5s boot cadence would
 # otherwise burn ~24 pages against nothing, exactly while wifi comes up
 BOOT_FAIL_LIMIT = int(os.environ.get("TAPBOX_RECON_BOOT_FAILS", "4"))

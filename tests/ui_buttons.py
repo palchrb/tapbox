@@ -88,4 +88,56 @@ inp._pressed("y")
 assert inp._events() == ["y"], "menu Y must stay an instant press"
 print("6. Y: quick=next, hold=episode picker, instant in menus OK")
 
-print("UI BUTTONS OK — A selects/plays, B backs/rewinds, hold-B goes back.")
+# --- the dark-screen waking press ------------------------------------------
+# The press that wakes a dark screen is swallowed — EXCEPT A while music
+# plays: needing a second press to pause read as "won't let me pause"
+# (field 2026-07-18 20:18). Playing is checked with a FRESH probe:
+# self.status can be hours stale in the dark, and a stale playing=True
+# would replay the last target — surprise audio from a bag.
+
+app = object.__new__(ui.App)
+app.status = {"playing": True}  # STALE — must never be trusted
+app.last_status = 1e18
+POSTS = []
+PROBE = [{"playing": True}]
+
+
+def fake_get(path, timeout=10):
+    if isinstance(PROBE[0], Exception):
+        raise PROBE[0]
+    return PROBE[0]
+
+
+ui.api_get = fake_get
+ui.api_post = lambda path, body=None, timeout=15: POSTS.append(path)
+
+# 7. dark A while a fresh probe confirms playing -> pause fires with the
+# wake (one press, not two)
+app._wake_press(["a"])
+assert POSTS == ["/playpause"], POSTS
+print("7. dark A while playing: pause fires on the waking press OK")
+
+# 8. fresh probe says idle -> wake only, NEVER start playback blind
+POSTS.clear()
+PROBE[0] = {"playing": False}
+app._wake_press(["a"])
+assert POSTS == [], f"dark A while idle must not start audio: {POSTS}"
+print("8. dark A while idle: wake only, no surprise audio OK")
+
+# 9. probe unreachable -> wake only (stale status must not decide)
+PROBE[0] = OSError("daemon busy")
+app._wake_press(["a"])
+assert POSTS == [], "an unreachable probe must fail to plain wake"
+print("9. dark A with no probe: stale status never trusted OK")
+
+# 10. B/Y/X stay wake-only even while playing — buttons squeezed in a
+# bag must not scramble the queue in the dark
+PROBE[0] = {"playing": True}
+app._wake_press(["b"])
+app._wake_press(["y"])
+app._wake_press(["x"])
+assert POSTS == [], f"only A may act from the dark: {POSTS}"
+print("10. dark B/Y/X: wake only (no queue scrambling from a bag) OK")
+
+print("UI BUTTONS OK — A selects/plays, B backs/rewinds, hold-B goes back, "
+      "and a dark A pauses in one press without surprise audio.")

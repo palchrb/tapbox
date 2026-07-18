@@ -266,6 +266,10 @@ def accept_spot_bookmark(bm, uri, exact=False):
     return bm
 
 
+# first /player/play timeout: see the retry comment in play_spotify
+PLAY_TIMEOUT_S = float(os.environ.get("TAPBOX_SPOT_PLAY_TIMEOUT", "8"))
+
+
 def play_spotify(target, fresh=False, exact=False):
     uri = spotify.to_uri(target)
     if not uri:
@@ -311,16 +315,40 @@ def play_spotify(target, fresh=False, exact=False):
     # Even with the session up, the FIRST request after a restart can be
     # slow server-side (dealer/audio-key fetch still warming: 'context
     # deadline exceeded' in go-librespot's log) — retry instead of dying.
+    # 8s, not 15: when the server has genuinely failed the retry lands on
+    # a WARM context in ~1s (field 2026-07-18 20:04: 15s wait, then a 1s
+    # retry), so failing fast wins. But an aborted request usually KEEPS
+    # executing inside go-librespot — so before re-POSTing (which would
+    # reload the whole context behind it), check whether it landed.
+    pre_uri = None
+    try:
+        pre_uri = (spotify.status(timeout=2).get("track") or {}).get("uri")
+    except OSError:
+        pass
     last_err = None
     for attempt in range(3):
         try:
-            spotify.go("/player/play", timeout=15, body=body)
+            spotify.go("/player/play", timeout=PLAY_TIMEOUT_S, body=body)
             last_err = None
             break
         except OSError as e:
             last_err = e
-            log(f"play attempt {attempt + 1} failed ({e}) — retrying in 3s")
-            time.sleep(3)
+            for _ in range(3):  # did the timed-out request land anyway?
+                try:
+                    tr = (spotify.status(timeout=2).get("track")
+                          or {}).get("uri")
+                except OSError:
+                    time.sleep(2)  # api busy = still chewing on it
+                    continue
+                if tr and (tr == bm["uri"] if bm else tr != pre_uri):
+                    last_err = None
+                    log(f"play attempt {attempt + 1} timed out but "
+                        "landed — continuing")
+                break
+            if last_err is None:
+                break
+            log(f"play attempt {attempt + 1} failed ({e}) — retrying in 1s")
+            time.sleep(1)
     if last_err is not None:
         log(f"go-librespot API unreachable ({last_err}) — check: journalctl -u go-librespot")
         sys.exit(1)

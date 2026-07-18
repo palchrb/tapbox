@@ -1512,6 +1512,33 @@ class App:
                font=F_SMALL, fill=DIM, anchor="ma")
         return True
 
+    def _wake_press(self, events):
+        """The press that wakes a dark screen is swallowed — EXCEPT A
+        while music plays: pausing is the most urgent action there is,
+        and needing a second press read as 'won't let me pause' (field
+        2026-07-18 20:18). Playing is checked with a FRESH probe —
+        self.status can be hours stale in the dark, and acting on a
+        stale playing=True would REPLAY the last target: surprise audio
+        from a bag. Probe fails or shows idle -> plain wake, nothing
+        else. B/Y stay wake-only too (buttons squeezed in a bag must
+        not scramble the queue in the dark). A goes straight to
+        /playpause, never through handle_now — its popup branches map A
+        to 'play on box speaker'."""
+        if "a" not in events:
+            return
+        try:
+            st = api_get("/status", timeout=1.5)
+        except OSError:
+            return
+        if not st.get("playing"):
+            return
+        self.status = st
+        try:
+            api_post("/playpause", timeout=CONTROL_TIMEOUT)
+            self.last_status = 0.0
+        except OSError as e:
+            log(f"dark-pause failed: {e}")
+
     def _play_on_local(self):
         """The speaker popup's A action: drop back to the built-in
         speaker. If nothing's sounding (bt_lost stopped it, or a fresh
@@ -1717,7 +1744,8 @@ class App:
                     self.display.set_backlight(True)
                     self.last_system = 0.0   # refetch battery/system now
                     self.last_status = 0.0
-                    self.dirty = True  # swallow the waking press
+                    self.dirty = True  # the waking press is swallowed
+                    self._wake_press(events)
                 else:
                     for ev in events:
                         self.handle(ev)

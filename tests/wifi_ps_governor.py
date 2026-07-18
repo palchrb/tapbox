@@ -15,6 +15,7 @@ os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
                                             "lib.json")
+os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()  # no stale radio markers
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -76,20 +77,42 @@ assert daemon._audible_now() is False
 orch._mpv_alive = lambda: True
 print("5c. audible-gate: blocked api + running unit = busy OK")
 
+# 5d. a fresh BUSY marker = a start/skip is in flight NOW, whatever the
+# api answers — during a /next the api can read idle-ish mid-load and
+# the governor flipped PS ON in the middle of the CDN fetch (field
+# 2026-07-18 20:26: a 23s skip)
+daemon._radio.touch_busy()
+assert daemon._streaming_now() is True
+old = _time.time() - daemon._radio.BUSY_TTL_S - 1
+os.utime(daemon._radio.BUSY_FILE, (old, old))  # marker stale again
+print("5d. fresh busy marker counts as streaming OK")
+
+# 5e. a control that timed out moments ago = a load is very likely in
+# flight: unknown, never idle. An ancient stamp must NOT hold.
+daemon.spotify_playing = lambda st=None: False
+daemon.ORCH._spot_cmd_timeout_at = _time.monotonic()
+assert daemon._streaming_now() is None
+daemon.ORCH._spot_cmd_timeout_at = -1e9
+MPV["pause"] = True
+assert daemon._streaming_now() is False
+print("5e. recent control timeout holds; ancient stamp does not OK")
+
 
 # --- the governor loop ------------------------------------------------------
 class StopLoop(Exception):
     pass
 
 
-def run_governor(get_seq, streaming_seq):
+def run_governor(get_seq, streaming_seq, hyst="0"):
     """Run the governor: get_seq scripts the baseline get_power_save
     reads (last value repeats), streaming_seq the _streaming_now ticks.
-    Returns the iw set-calls made."""
+    Returns the iw set-calls made. hyst pins TAPBOX_WIFI_PS_HYST — 0 by
+    default so the pre-hysteresis scenarios keep their instant flips."""
     calls = []
     gets = list(get_seq)
     seq = list(streaming_seq)
     os.environ["TAPBOX_WIFI_PS_BASELINE_TRIES"] = str(max(2, len(gets)))
+    os.environ["TAPBOX_WIFI_PS_HYST"] = hyst
 
     def fake_run(cmd, **k):
         if "get" in cmd:
@@ -102,14 +125,22 @@ def run_governor(get_seq, streaming_seq):
             stdout = ""
         return R2()
 
+    class FakeKick:  # the tick wait: ends the loop when the script is done
+        def wait(self, _s):
+            if not seq:
+                raise StopLoop
+
+        def clear(self):
+            pass
+
     def fake_sleep(_s):
         if _s == 10:  # the baseline poll's pacing — free in tests
             return
-        if not seq:
-            raise StopLoop
 
     daemon.subprocess.run = fake_run
     daemon._streaming_now = lambda: seq.pop(0)
+    real_kick = daemon._PS_KICK
+    daemon._PS_KICK = FakeKick()
     real_sleep = _time.sleep
     _time.sleep = fake_sleep
     try:
@@ -118,6 +149,7 @@ def run_governor(get_seq, streaming_seq):
         pass
     finally:
         _time.sleep = real_sleep
+        daemon._PS_KICK = real_kick
     return calls
 
 
@@ -149,6 +181,37 @@ calls = run_governor(["Power save: on\n"], [True, None, None, False])
 sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], f"unknown must hold, not flip: {sets}"
 print("9. mid-load unknown holds the PS state OK")
+
+# 10. hysteresis: after streaming stops, PS stays OFF through short
+# idle — flipping ON 10s after a pause silently killed the Spotify AP
+# TCP ('did not receive last pong ack', field 2026-07-18 20:24) and a
+# mid-activity flip has caused a field problem every single time
+calls = run_governor(["Power save: on\n"],
+                     [True, False, False, False, False], hyst="3600")
+sets = [c[-1] for c in calls]
+assert sets == ["off"], f"short idle must not flip PS back on: {sets}"
+print("10. hysteresis: short idle keeps PS off (AP link survives) OK")
+
+# 10b. a LONG idle (clock past the window) does flip back to 'on'.
+# Clock calls in the loop: idle-start stamp, then one compare per idle
+# tick — script it so the second idle tick lands past the window.
+real_mono = daemon.time.monotonic
+clock = iter([1000.0, 1000.0, 5000.0])
+last = [1000.0]
+
+def fake_mono():
+    last[0] = next(clock, last[0])
+    return last[0]
+
+daemon.time.monotonic = fake_mono
+try:
+    calls = run_governor(["Power save: on\n"], [True, False, False],
+                         hyst="3600")
+finally:
+    daemon.time.monotonic = real_mono
+sets = [c[-1] for c in calls]
+assert sets == ["off", "on"], f"long idle must flip PS on: {sets}"
+print("10b. long idle past the window flips PS back on OK")
 
 print("WIFI PS GOVERNOR OK — power save off only while streaming, "
       "battery naps when idle, operator choice respected.")

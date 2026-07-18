@@ -245,6 +245,21 @@ fi
 echo "==> [4/8] Services (bluetooth, bluealsa, go-librespot, bt-reconnect)..."
 usermod -aG audio,bluetooth "$RUN_USER" || true
 rfkill unblock bluetooth 2>/dev/null || true
+# Unblock the radio BEFORE bluetoothd powers the adapter — systemd-rfkill
+# persists a soft-block across reboots, and until now the only boot-time
+# unblock lived in btwatchd's (slow) python start: the box was DEAF to
+# the headset's inbound reconnect for the first 25-40s of every boot
+# (field 2026-07-18 20:16: headset on since before boot, first inbound
+# window missed, connected a full retry cycle later). '-' = a missing
+# rfkill binary must never block bluetoothd itself.
+if write_if_changed /etc/systemd/system/bluetooth.service.d/tapbox-rfkill.conf <<'EOF'
+[Service]
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
+EOF
+then
+  systemctl daemon-reload
+  echo "    bluetooth: rfkill unblock runs before bluetoothd (radio listens from boot)"
+fi
 systemctl enable --now bluetooth.service
 # Debian bookworm ships the daemon as bluealsa.service; newer releases as bluealsad.service
 systemctl enable --now bluealsa.service 2>/dev/null \
