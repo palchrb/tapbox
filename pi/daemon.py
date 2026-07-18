@@ -1911,6 +1911,21 @@ def _spotify_supervisor():
                     # go-librespot park/start churn mid-Spotify, from
                     # nothing but a switched-off headset
                     continue
+                try:
+                    if spotify_playing():
+                        # Audio streaming right now IS proof the session
+                        # lives — parking would kill the music over a lost
+                        # probe. And the probe lies under self-inflicted
+                        # load: cache sweep downloads + the Spotify stream
+                        # + A2DP all share the 2.4GHz radio (field
+                        # 2026-07-18 15:09: parked mid-song during the
+                        # sweep; ~13s of silence and a track restart for
+                        # nothing). A truly dead net stops playback by
+                        # itself, and THEN we park.
+                        misses = 0
+                        continue
+                except OSError:
+                    pass  # go-librespot unreachable — genuinely down
                 _SPOT_OFFLINE[0] = True
                 subprocess.run(["systemctl", "stop", "go-librespot"],
                                timeout=30)

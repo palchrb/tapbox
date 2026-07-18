@@ -204,4 +204,27 @@ wait_for("lost-popup X connects", lambda: POSTS)
 assert POSTS[0][0] == "/bt/connect", POSTS
 print("10. X on the lost popup reconnects the speaker OK")
 
+# --- the no-internet popup (same shape as the speaker popups) ---------------
+
+# 11. renders for an offline ACTIVE spotify source; silent for mpv
+# (cached podcasts play fine offline — no scary popup) and when online
+app.wifi_connecting_until = 0.0
+img, d = blank_draw()
+app.status = {"spotify_offline": True, "source": "spotify"}
+assert app._net_overlay(d) is True
+img, d = blank_draw()
+app.status = {"spotify_offline": True, "source": "mpv"}
+assert app._net_overlay(d) is False
+img, d = blank_draw()
+app.status = {"spotify_offline": False, "source": "spotify"}
+assert app._net_overlay(d) is False
+print("11. net popup: offline spotify only — never for mpv/online OK")
+
+# 12. speaker trouble outranks net trouble (only one popup at a time):
+# render_now must not stack both — verified via the overlay contract
+img, d = blank_draw()
+app.status = {"bt_lost": True, "spotify_offline": True, "source": "spotify"}
+assert app._bt_overlay(d) is True  # bt popup wins; render_now skips net
+print("12. bt popup outranks the net popup OK")
+
 print("ui_bt_popup: all OK")

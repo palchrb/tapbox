@@ -1282,13 +1282,9 @@ class App:
     def render_now(self, d, img):
         st = self.status or {}
         battery_corner(d, self.system)
-        if st.get("spotify_offline") and st.get("source") == "spotify":
-            # spotify NEEDS the net: say so, and offer an on-demand
-            # reconnect on X (far better than waiting out the prober)
-            msg = ("reconnecting Wi-Fi..."
-                   if time.monotonic() < self.wifi_connecting_until
-                   else "No internet - X: reconnect")
-            d.text((10, 4), msg, font=F_SMALL, fill=WARN)
+        # (no-internet is a POPUP now — _net_overlay at the end — matching
+        # the BT-disconnect popup instead of a thin banner; field ask
+        # 2026-07-18)
         # Cover priority: a per-item image already on disk (podcast
         # episode art) is instant; a remote cover (Spotify album art,
         # gfx.nrk.no episode art) is fetched OFF the render thread so it
@@ -1367,7 +1363,8 @@ class App:
         d.polygon([(W - 19, 178), (W - 19, 192), (W - 9, 185)], fill=DIM)
         d.rectangle([W - 7, 178, W - 5, 192], fill=DIM)
         self._volume_overlay(d)
-        self._bt_overlay(d)
+        if not self._bt_overlay(d):  # speaker trouble outranks net trouble
+            self._net_overlay(d)
         return rolls
 
     def _volume_overlay(self, d):
@@ -1427,6 +1424,28 @@ class App:
                    anchor="ma")
             return True
         return False
+
+    def _net_overlay(self, d):
+        """No-internet popup for an active Spotify source — the SAME
+        shape as the speaker popups (field ask 2026-07-18: the thin text
+        banner over the album art read as decoration, not as something
+        to act on). X runs the on-demand wifi reconnect, exactly like X
+        reconnects the speaker on the BT popup. Only when spotify is the
+        active source: cached podcasts play fine offline and must not get
+        a scary popup."""
+        st = self.status or {}
+        if not (st.get("spotify_offline") and st.get("source") == "spotify"):
+            return False
+        d.rounded_rectangle([22, 70, W - 22, 156], radius=10,
+                            fill=(45, 30, 30))
+        d.text((W // 2, 80), "No internet", font=F_MED,
+               fill=WARN, anchor="ma")
+        hint = ("reconnecting Wi-Fi..." if time.monotonic()
+                < self.wifi_connecting_until else "X: reconnect Wi-Fi")
+        d.text((W // 2, 108), hint, font=F_SMALL, fill=FG, anchor="ma")
+        d.text((W // 2, 130), "Spotify needs internet",
+               font=F_SMALL, fill=DIM, anchor="ma")
+        return True
 
     def _play_on_local(self):
         """The speaker popup's A action: drop back to the built-in
