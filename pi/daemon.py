@@ -809,11 +809,18 @@ class Orchestrator:
                 log(f"{action} -> spotify (last)")
                 return {"routed": "spotify"}
             log("spotify session is empty — replaying last target")
-        # 4) dead session + remembered target -> bring it back. ONLY for
-        # playpause: that's an unambiguous 'give me music'. A next/prev
-        # respawn REPLAYS the target — restarting the album because a
-        # skip hit a hiccup is far worse than a dead button press.
-        if action == "playpause" and self.target and not self._mpv_alive():
+        # 4) dead session + remembered target -> bring it back. Playpause
+        # always may (unambiguous 'give me music'). next/prev may TOO —
+        # but only when the emptiness is TRUSTWORTHY: the API answered
+        # and said so (album ran off its end — next on the last Coco
+        # track must wrap to the start, not go dead; field 2026-07-18),
+        # or the source isn't spotify at all (a finished podcast queue).
+        # What must never replay on a skip is an UNREACHABLE spotify API
+        # (st is None): that's busy-not-dead, and replaying there
+        # restarted a playing album from 0:00 (the 15:44 disaster).
+        trusted = st is not None or self.source != "spotify"
+        if (action == "playpause" or trusted) \
+                and self.target and not self._mpv_alive():
             if is_spotify(self.target) \
                     and not self._ensure_spotify_backend():
                 log(f"{action}: no internet — spotify can't start")

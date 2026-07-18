@@ -60,6 +60,25 @@ r = orch.command("playpause")
 assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
 print("2. dead session: playpause replays, next/prev stay dead buttons OK")
 
+# 2b. album ran off its end: the API ANSWERS and says the session is
+# empty — next must WRAP (replay the target) instead of going dead
+# (field 2026-07-18: next on the last Coco track showed nothing at all)
+SPAWNED.clear()
+daemon.go_status = lambda **k: {}          # reachable, cleanly empty
+r = orch.command("next")
+assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
+print("2b. clean empty session: next wraps (replays the target) OK")
+
+# 2c. a finished mpv queue replays on next too (go-librespot state is
+# irrelevant for a podcast box — even unreachable must not block it)
+SPAWNED.clear()
+orch.source = "mpv"
+daemon.go_status = _unreachable
+r = orch.command("next")
+assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
+orch.source = "spotify"
+print("2c. finished podcast queue: next replays regardless of spotify OK")
+
 # 3. loaded session: everything routes to spotify as before
 SPAWNED.clear()
 daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:x"},
