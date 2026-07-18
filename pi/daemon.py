@@ -723,76 +723,107 @@ class Orchestrator:
             return {"stopped": True}
 
     def command(self, action):
-        with self.lock:
-            _kick_bt_connect()  # any transport control = sound intent
-            # 1) a running mpv session owns the controls
-            if self._mpv_alive() and self.source == "mpv":
-                try:
-                    if action == "prev":
-                        # >5s into the episode: restart it (standard player
-                        # semantics). A second prev (within 5s of the start)
-                        # goes to the PREVIOUS episode.
-                        pos = mpv_get("playback-time")
-                        if isinstance(pos, (int, float)) and pos > 5:
-                            cmd = ["seek", 0, "absolute"]
-                        else:
-                            # Resume ROTATES the queue so the bookmarked
-                            # episode sits in slot 0 — the previous episode
-                            # wraps to the END of the playlist. mpv's
-                            # playlist-prev is a no-op at slot 0, which
-                            # made the second prev fall through to
-                            # 'nothing to control' (field 2026-07-18:
-                            # 'prev just restarts the same track').
-                            ppos = mpv_get("playlist-pos")
-                            count = mpv_get("playlist-count")
-                            if ppos == 0 and isinstance(count, int) \
-                                    and count > 1:
-                                cmd = ["set_property", "playlist-pos",
-                                       count - 1]
-                            else:
-                                cmd = ["playlist-prev"]
+        # Drop, don't queue, presses that arrive while a control is still
+        # running. go-librespot's API can take seconds per next/prev while
+        # it loads the new track; each queued press then held this lock
+        # for ANOTHER slow HTTP round, the UI timed out, the kid mashed
+        # harder, and stale prev/next commands fired half a minute late
+        # (field 2026-07-18 15:43: a prev storm landing out of order). A
+        # dropped press is honest: nothing happened, press again.
+        if not self.lock.acquire(timeout=1.0):
+            log(f"{action}: control busy — dropped (previous command "
+                "still running)")
+            return {"routed": None, "busy": True}
+        try:
+            return self._command_locked(action)
+        finally:
+            self.lock.release()
+
+    def _command_locked(self, action):
+        _kick_bt_connect()  # any transport control = sound intent
+        # 1) a running mpv session owns the controls
+        if self._mpv_alive() and self.source == "mpv":
+            try:
+                if action == "prev":
+                    # >5s into the episode: restart it (standard player
+                    # semantics). A second prev (within 5s of the start)
+                    # goes to the PREVIOUS episode.
+                    pos = mpv_get("playback-time")
+                    if isinstance(pos, (int, float)) and pos > 5:
+                        cmd = ["seek", 0, "absolute"]
                     else:
-                        cmd = {"playpause": ["cycle", "pause"],
-                               "next": ["playlist-next"]}[action]
-                    if mpv_ipc(cmd).get("error") == "success":
-                        log(f"{action} -> mpv")
-                        return {"routed": "mpv"}
-                except OSError:
-                    pass  # child starting up; fall through but don't respawn
-            # 2) Spotify actively playing (covers phone-initiated sessions)
-            if spotify_playing():
+                        # Resume ROTATES the queue so the bookmarked
+                        # episode sits in slot 0 — the previous episode
+                        # wraps to the END of the playlist. mpv's
+                        # playlist-prev is a no-op at slot 0, which
+                        # made the second prev fall through to
+                        # 'nothing to control' (field 2026-07-18:
+                        # 'prev just restarts the same track').
+                        ppos = mpv_get("playlist-pos")
+                        count = mpv_get("playlist-count")
+                        if ppos == 0 and isinstance(count, int) \
+                                and count > 1:
+                            cmd = ["set_property", "playlist-pos",
+                                   count - 1]
+                        else:
+                            cmd = ["playlist-prev"]
+                else:
+                    cmd = {"playpause": ["cycle", "pause"],
+                           "next": ["playlist-next"]}[action]
+                if mpv_ipc(cmd).get("error") == "success":
+                    log(f"{action} -> mpv")
+                    return {"routed": "mpv"}
+            except OSError:
+                pass  # child starting up; fall through but don't respawn
+        # ONE short status probe feeds rules 2+3. The old shape called
+        # spotify_playing() (a 5s-timeout status) and then go_status()
+        # (another 5s) back to back while holding the control lock — a
+        # busy go-librespot turned every press into ~10s of lock time.
+        # And CRUCIALLY: an unreachable-because-BUSY API must never be
+        # mistaken for a dead session (field 2026-07-18 15:44: a /next
+        # during a slow track load fell through to rule 4 and RESTARTED
+        # the whole album from 0:00).
+        st = None
+        try:
+            st = go_status(timeout=2)
+        except OSError:
+            if self.source == "spotify" and _go_unit_active():
+                log(f"{action}: go-librespot is busy (api not answering) "
+                    "— dropped, press again")
+                return {"routed": None, "busy": True}
+        # 2) Spotify actively playing (covers phone-initiated sessions)
+        if st and spotify_playing(st):
+            spotify_command(action)
+            self.source = "spotify"
+            self._persist()
+            log(f"{action} -> spotify (active)")
+            return {"routed": "spotify"}
+        # 3) last thing used was Spotify -> resume/skip there — but only
+        # when a track is actually loaded. After a reboot go-librespot
+        # is logged in with an EMPTY session; a playpause into that void
+        # "succeeds" silently and the button feels dead. Fall through to
+        # rule 4 instead: replay the target, which resumes exactly.
+        if self.source == "spotify" and st is not None:
+            if (st.get("track") or {}) and not st.get("stopped"):
                 spotify_command(action)
-                self.source = "spotify"
-                self._persist()
-                log(f"{action} -> spotify (active)")
+                log(f"{action} -> spotify (last)")
                 return {"routed": "spotify"}
-            # 3) last thing used was Spotify -> resume/skip there — but only
-            # when a track is actually loaded. After a reboot go-librespot
-            # is logged in with an EMPTY session; a playpause into that void
-            # "succeeds" silently and the button feels dead. Fall through to
-            # rule 4 instead: replay the target, which resumes exactly.
-            if self.source == "spotify":
-                try:
-                    st = go_status()
-                    if (st.get("track") or {}) and not st.get("stopped"):
-                        spotify_command(action)
-                        log(f"{action} -> spotify (last)")
-                        return {"routed": "spotify"}
-                    log("spotify session is empty — replaying last target")
-                except OSError:
-                    pass
-            # 4) dead session + remembered target -> bring it back (resumes)
-            if self.target and not self._mpv_alive():
-                if is_spotify(self.target) \
-                        and not self._ensure_spotify_backend():
-                    log(f"{action}: no internet — spotify can't start")
-                    return {"routed": None, "error": "no-internet"}
-                self._spawn(self.target, reverse=self.reverse,
-                            resume=self.resume)
-                log(f"{action} -> resuming last: {self.target}")
-                return {"routed": "resume", "target": self.target}
-            log(f"{action}: nothing to control")
-            return {"routed": None}
+            log("spotify session is empty — replaying last target")
+        # 4) dead session + remembered target -> bring it back. ONLY for
+        # playpause: that's an unambiguous 'give me music'. A next/prev
+        # respawn REPLAYS the target — restarting the album because a
+        # skip hit a hiccup is far worse than a dead button press.
+        if action == "playpause" and self.target and not self._mpv_alive():
+            if is_spotify(self.target) \
+                    and not self._ensure_spotify_backend():
+                log(f"{action}: no internet — spotify can't start")
+                return {"routed": None, "error": "no-internet"}
+            self._spawn(self.target, reverse=self.reverse,
+                        resume=self.resume)
+            log(f"{action} -> resuming last: {self.target}")
+            return {"routed": "resume", "target": self.target}
+        log(f"{action}: nothing to control")
+        return {"routed": None}
 
     def _settle_position(self, live, now):
         """Hold the reported position steady at the resume bookmark while
@@ -1891,6 +1922,18 @@ def _internet_up():
         return False
 
 
+def _go_unit_active():
+    """Is go-librespot's systemd unit running? Distinguishes 'API busy'
+    (unit active, HTTP not answering — loading tracks, slow dealer) from
+    'actually down'. Busy must never be treated as dead."""
+    try:
+        return subprocess.run(
+            ["systemctl", "is-active", "--quiet", "go-librespot"],
+            timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired, AttributeError):
+        return False
+
+
 def _spotify_supervisor():
     """go-librespot is useless without internet, but restarts forever —
     each round costs ~1s of Zero CPU and journal noise. Park the unit
@@ -1943,7 +1986,15 @@ def _spotify_supervisor():
                         misses = 0
                         continue
                 except OSError:
-                    pass  # go-librespot unreachable — genuinely down
+                    # Unreachable is NOT proof of dead: a BUSY api (rapid
+                    # next/prev, slow track loads) times out too, and
+                    # parking then kills live music (field 2026-07-18
+                    # 15:44:38). Only park when the unit isn't even
+                    # running; an active-but-slow go-librespot is left
+                    # alone to finish what it's doing.
+                    if _go_unit_active():
+                        misses = 0
+                        continue
                 _SPOT_OFFLINE[0] = True
                 subprocess.run(["systemctl", "stop", "go-librespot"],
                                timeout=30)

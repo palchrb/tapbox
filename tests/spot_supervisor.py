@@ -78,15 +78,26 @@ assert ("systemctl", "stop", "go-librespot") in CALLS, CALLS
 assert daemon._SPOT_OFFLINE[0] is True
 print("2. offline and idle (no session): parked after two misses OK")
 
-# 3. go-librespot unreachable (OSError) counts as no-session -> parks
+# 3. unreachable API but the unit is ACTIVE = busy, not dead — a rapid
+# next/prev burst makes the HTTP api time out while music plays; parking
+# then kills it (field 2026-07-18 15:44:38). Never park a running unit.
 daemon._SPOT_OFFLINE[0] = False
 
 def _boom(**_k):
     raise OSError("connection refused")
 
+daemon._go_unit_active = lambda: True
+run_ticks(5, internet=False, go_st=_boom)
+assert CALLS == [], f"parked a busy-but-running go-librespot: {CALLS}"
+assert daemon._SPOT_OFFLINE[0] is False
+print("3. unreachable + unit active = busy: never parked OK")
+
+# 3b. unreachable AND the unit is down -> genuinely dead, parks
+daemon._SPOT_OFFLINE[0] = False
+daemon._go_unit_active = lambda: False
 run_ticks(5, internet=False, go_st=_boom)
 assert ("systemctl", "stop", "go-librespot") in CALLS, CALLS
-print("3. go-librespot unreachable: parks as before OK")
+print("3b. unreachable + unit down: parks as before OK")
 
 # 4. internet back after a park -> started again, banner cleared
 daemon._SPOT_OFFLINE[0] = True
