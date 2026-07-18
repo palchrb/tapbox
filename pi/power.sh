@@ -170,6 +170,10 @@ EOF
     cat > /etc/systemd/system/tapbox-batlog.service <<EOF
 [Unit]
 Description=TapBox battery logger
+# pisugar-server's socket (:8423) isn't up the instant we boot; order
+# after it so the first poll has something to talk to
+After=pisugar-server.service
+Wants=pisugar-server.service
 
 [Service]
 ExecStart=$SELF _logloop
@@ -300,10 +304,15 @@ PY
     # 12 journal lines in every 60s tick
     val() { awk -v k="$1:" '$1==k{print $2; exit}' <<<"$vals"; }
     while true; do
-      vals="$( (for p in battery_v battery_i battery battery_power_plugged; do
-                  echo "get $p"; sleep 0.2
-                done) | nc -q1 127.0.0.1 8423 2>/dev/null )"
-      echo "$(date +'%F %T'),$(val battery_v),$(val battery_i),$(val battery),$(val battery_power_plugged)" >> "$LOG_FILE"
+      # Tolerate a not-yet-ready / hiccuping pisugar-server: a failed poll
+      # must SKIP this tick, never let 'set -e' kill the logger. Before
+      # this, the boot-time socket race exited _logloop and RestartSec=10
+      # landed on the boot critical path (systemd-analyze 2026-07-18).
+      if vals="$( (for p in battery_v battery_i battery battery_power_plugged; do
+                     echo "get $p"; sleep 0.2
+                   done) | nc -q1 127.0.0.1 8423 2>/dev/null )" && [[ -n $vals ]]; then
+        echo "$(date +'%F %T'),$(val battery_v),$(val battery_i),$(val battery),$(val battery_power_plugged)" >> "$LOG_FILE"
+      fi
       sleep 60
     done
     ;;
