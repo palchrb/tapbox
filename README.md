@@ -117,13 +117,17 @@ files under `/var/lib/tapbox/cache`; Spotify caches encrypted audio
 
 ### 6. Power tuning — optional
 
-- `sudo tapbox-power save` — powersave governor, LEDs/HDMI off, Wi-Fi
-  power save. `sudo tapbox-power boot-on` applies it at every boot.
+- Power save at boot (powersave governor, LEDs/HDMI off, Wi-Fi power
+  save) is applied automatically — install.sh runs `tapbox-power
+  boot-on`. Undo per-box with `sudo tapbox-power boot-off`; back to
+  full speed anytime with `sudo tapbox-power perf`.
 - Settings in the PWA: auto-off when idle, Wi-Fi auto-off away from
   known networks, screen timeout, volume cap, resume on power-on.
 - Squeezing the last drops: add `maxcpus=2` to
   `/boot/firmware/cmdline.txt` by hand (the RPi OS kernel has no CPU
   hotplug, so `tapbox-power save` can't park cores at runtime).
+  Measured on zero2: idle cores sleep deeply anyway — the saving is a
+  few mA at best, so most boxes should skip this.
 
 ### 7. When the hardware arrives
 
@@ -165,16 +169,17 @@ position survives (bookmark + resume).
 
 | What | How | Why manual |
 |---|---|---|
-| OS basics | Raspberry Pi Imager (hostname, user, wifi, SSH) | pre-boot |
-| pisugar-server | PiSugar's own installer script | third-party interactive installer; install.sh patches its config when present |
+| OS basics | Raspberry Pi Imager (hostname, user, wifi, SSH) | pre-boot; cloud-init is disabled after first boot (install.sh) |
+| pisugar-server | PiSugar's own installer script, then re-run install.sh | third-party interactive installer; install.sh patches its config (battery curve, RTC units, log quieting) when present |
 | PiSugar safe-shutdown / taps | PiSugar web UI (:8421) or `tapbox-power taps-on` | user preference |
-| Tailscale (optional, remote admin) | official installer + `tailscale up` | interactive auth |
-| `maxcpus=2` in cmdline.txt (optional) | manual edit | kernel has no CPU hotplug; only for max battery |
-| Power-save at boot (optional) | `sudo tapbox-power boot-on` | opt-in trade-off |
 | Pirate Audio HAT (when mounted) | `sudo tapbox-power hat-audio-on` + reboot + enable `tapbox-ui` | hardware-gated |
 | PN532 RFID (when wired) | `sudo systemctl enable --now tapbox-rfid` | hardware-gated |
-| Spotify login | pick the box under Devices in the Spotify app (same wifi) | zeroconf by design |
+| Spotify login | pick the box under Devices in the Spotify app (same wifi) | zeroconf by design; install.sh waits for it in step 8/8 |
 | BT speaker pairing | PWA settings -> Bluetooth (or screen) | per-home config |
+
+(Power-save at boot, `boot_delay=0` and disabling cloud-init moved INTO
+install.sh 2026-07-18 — a reflash reproduces them. The battery CSV logger
+stays opt-in: `tapbox-power log-on` only while calibrating.)
 
 ## Why this exists
 
