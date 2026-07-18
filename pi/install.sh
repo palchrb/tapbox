@@ -294,10 +294,21 @@ Wants=network-online.target
 
 [Service]
 User=$RUN_USER
+# network-online.target fires the instant NetworkManager 'finishes
+# starting' — before wlan0 has a DHCP lease AND before systemd-resolved
+# answers, so at boot go-librespot's first Spotify AP lookup hit a dead
+# resolver ('apresolve.spotify.com on [::1]:53: connection refused'),
+# exited, and RestartSec below pushed Spotify ~30s past when the net was
+# actually up (rig 2026-07-18). Hold ExecStart until DNS can actually
+# resolve the AP host, so go-librespot starts the moment the internet is
+# truly up and succeeds first try. Bounded by timeout + '-' prefixed:
+# offline it gives up after 60s and lets go-librespot fail-and-retry as
+# before, instead of hanging forever in 'activating'.
+ExecStartPre=-/usr/bin/timeout 60 /bin/sh -c 'until getent hosts apresolve.spotify.com >/dev/null 2>&1; do sleep 1; done'
 ExecStart=/usr/local/bin/go-librespot --config_dir $CONF_DIR
 Restart=always
-# 30s: offline it exits instantly (no DNS) — a 5s loop burned ~1s CPU
-# per round on the Zero, forever, every time the box had no internet
+# offline, ExecStartPre now absorbs the wait (no tight fail-loop that
+# burned CPU on the Zero), so this only spaces restarts after a real crash
 RestartSec=30
 
 [Install]
