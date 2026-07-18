@@ -1664,8 +1664,27 @@ class App:
                 self.render()
 
 
+def _boot_splash(display):
+    """Light the panel with the boot splash the instant the display is up
+    — BEFORE the slower input (lgpio) init — so the screen shows life
+    early instead of staying blank through the rest of startup. Guarded:
+    a splash must never block the real UI coming up."""
+    try:
+        img = Image.new("RGB", (W, H), BG)
+        d = ImageDraw.Draw(img)
+        d.text((W // 2, H // 2 - 16), "TapBox", font=F_BIG, fill=HILITE,
+               anchor="mm")
+        d.text((W // 2, H // 2 + 18), "starting", font=F_SMALL, fill=DIM,
+               anchor="mm")
+        display.show(img)
+    except Exception as e:
+        log(f"boot splash skipped: {e!r}")
+
+
 def main():
-    app = App(make_display(), make_input())
+    display = make_display()
+    _boot_splash(display)          # screen lights up now, not after input init
+    app = App(display, make_input())
     app.run()
 
 
