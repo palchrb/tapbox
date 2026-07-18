@@ -47,16 +47,34 @@ daemon.spotify_playing = lambda: True
 assert daemon._streaming_now() is True
 print("4. spotify playing: streaming OK")
 
-# 5. go-librespot unreachable -> falls through gracefully
+# 5. go-librespot unreachable + unit DOWN -> genuinely not streaming
 def _boom():
     raise OSError("down")
 
 daemon.spotify_playing = _boom
+daemon._go_unit_active = lambda: False
 MPV["pause"] = False
 MPV["path"] = "/cache/show/e1.mp3"
 orch._mpv_alive = lambda: True
 assert daemon._streaming_now() is False
-print("5. unreachable go-librespot: no crash, not streaming OK")
+print("5. unreachable + unit down: not streaming OK")
+
+# 5b. unreachable + unit RUNNING = mid-track-load (the api blocks while
+# loading — exactly when the radio is busiest): UNKNOWN, never 'idle'.
+# The governor once flipped power save ON in that blind spot and
+# stretched a CDN load to ~19s (field 2026-07-18 16:14:44).
+daemon._go_unit_active = lambda: True
+assert daemon._streaming_now() is None
+print("5b. unreachable + unit running: unknown (hold PS state) OK")
+
+# 5c. the sweep's audible-gate has the same blind spot: api blocked +
+# unit running counts as BUSY (no sweep downloads mid-load)
+orch._mpv_alive = lambda: False
+assert daemon._audible_now() is True
+daemon._go_unit_active = lambda: False
+assert daemon._audible_now() is False
+orch._mpv_alive = lambda: True
+print("5c. audible-gate: blocked api + running unit = busy OK")
 
 
 # --- the governor loop ------------------------------------------------------
@@ -124,6 +142,13 @@ calls = run_governor(["Power save: off\n", "Power save: off\n",
 sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], f"late-enabled PS must still be managed: {sets}"
 print("8. baseline poll waits out the boot race, then manages OK")
+
+# 9. UNKNOWN ticks (api mid-load) hold the current state — no blind
+# flip to 'on (idle)' in the middle of a CDN download
+calls = run_governor(["Power save: on\n"], [True, None, None, False])
+sets = [c[-1] for c in calls]
+assert sets == ["off", "on"], f"unknown must hold, not flip: {sets}"
+print("9. mid-load unknown holds the PS state OK")
 
 print("WIFI PS GOVERNOR OK — power save off only while streaming, "
       "battery naps when idle, operator choice respected.")

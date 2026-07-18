@@ -2235,21 +2235,26 @@ WIFI_PS_TICK_S = float(os.environ.get("TAPBOX_WIFI_PS_TICK", "15"))
 
 
 def _streaming_now():
-    """True while audio is streaming OVER THE NETWORK — Spotify, or mpv
-    playing a remote URL. Cached/local playback returns False: there the
-    wifi radio has no job, and LESS wifi airtime is better for A2DP on
-    the shared antenna."""
-    try:
-        if spotify_playing():
-            return True
-    except OSError:
-        pass
+    """True while audio streams OVER THE NETWORK (Spotify, or mpv on a
+    remote URL); False when idle/cached; None when it CANNOT be known
+    right now. go-librespot's api blocks while it loads a track — which
+    is precisely when the radio works hardest — so an unreachable api
+    with a running unit means 'probably mid-load', NOT idle. The
+    governor once read that blind spot as 'not streaming' and switched
+    power save ON in the middle of a CDN download, stretching a track
+    load to ~19s (field 2026-07-18 16:14:44)."""
     with ORCH.lock:
         alive = ORCH._mpv_alive()
     if alive and mpv_get("pause") is False:
         p = mpv_get("path")
         if isinstance(p, str) and p.startswith(("http://", "https://")):
             return True
+    try:
+        if spotify_playing():
+            return True
+    except OSError:
+        if _go_unit_active():
+            return None  # api busy (likely loading) — hold the PS state
     return False
 
 
@@ -2294,6 +2299,8 @@ def _wifi_ps_governor():
         time.sleep(WIFI_PS_TICK_S)
         try:
             want_off = _streaming_now()
+            if want_off is None:  # api mid-load: never flip PS blindly
+                continue
             if want_off == ps_off:
                 continue
             subprocess.run(["iw", "dev", "wlan0", "set", "power_save",
@@ -2324,7 +2331,10 @@ def _audible_now():
     try:
         return bool(spotify_playing())
     except OSError:
-        return False
+        # api blocked + unit running = very likely mid-track-load, the
+        # worst moment for sweep downloads to grab the radio — busy.
+        # A parked/dead unit is genuinely not audible.
+        return _go_unit_active()
 
 
 def main():
