@@ -104,6 +104,27 @@ time.sleep(0.2)
 assert not STARTED, "no unpark on a failed reconnect"
 print("5. failed reconnect leaves offline flag + go-librespot alone OK")
 
+# /wifi/scan sweeps all 13 channels off-frequency — as A2DP-hostile as
+# BT discovery, so it must take the same quiesce, but ONLY on the bt
+# output (a scan can't hurt the built-in speaker, and stopping local
+# playback for it would be an audible interruption for nothing)
+daemon.wifi_scan = lambda: [{"ssid": "homenet"}]
+with open(daemon.OUT_FILE, "w") as f:
+    json.dump({"output": "bt", "pcm": "tapbox_bt"}, f)
+QUIESCED.clear()
+RESUMED.clear()
+code, r = post("/wifi/scan", {})
+assert code == 200 and QUIESCED and RESUMED, (code, QUIESCED, RESUMED)
+print("5b. /wifi/scan on the bt output quiesces A2DP around the sweep OK")
+
+with open(daemon.OUT_FILE, "w") as f:
+    json.dump({"output": "local", "pcm": "tapbox_local"}, f)
+QUIESCED.clear()
+RESUMED.clear()
+code, r = post("/wifi/scan", {})
+assert code == 200 and not QUIESCED, (code, QUIESCED)
+print("5c. /wifi/scan on the built-in output never touches playback OK")
+
 
 # --- 3. UI wiring: X on the offline-Spotify now-view reconnects -------------
 

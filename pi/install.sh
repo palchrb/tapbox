@@ -501,6 +501,18 @@ if command -v cloud-init >/dev/null 2>&1 \
   echo "    cloud-init disabled (~6s off every boot; rm /etc/cloud/cloud-init.disabled to undo)"
 fi
 
+# apt's daily timers: unattended update checks pick their own moment to
+# hammer the network — on the SHARED 2.4GHz radio that moment lands mid-
+# playback and starves A2DP/CDN loads. The box is an appliance: NO
+# automatic security patches after this; updates happen only when someone
+# runs install.sh (or apt) by hand over ssh.
+for t in apt-daily.timer apt-daily-upgrade.timer; do
+  if systemctl is-enabled --quiet "$t" 2>/dev/null; then
+    systemctl disable --now "$t" >/dev/null 2>&1 || true
+    echo "    $t disabled (no surprise network bursts; updates via manual runs)"
+  fi
+done
+
 # (power save at boot is enabled further down, after tapbox-power is
 # installed — the unit's ExecStart must point at the installed copy)
 

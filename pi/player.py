@@ -46,7 +46,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import content, mpv as _mpv, spotify  # noqa: E402
+from tapbox import content, mpv as _mpv, radio, spotify  # noqa: E402
 from tapbox.output import audio_ready  # noqa: E402
 from tapbox.paths import STATE_DIR  # noqa: E402
 
@@ -271,6 +271,13 @@ def play_spotify(target, fresh=False, exact=False):
     if not uri:
         log(f"could not parse spotify link: {target}")
         sys.exit(1)
+
+    # Shared 2.4GHz radio: claim it for the CDN-heavy session start, but
+    # let an in-flight BT page finish first (bounded). BUSY before the
+    # PAGING wait — the order stops btwatchd slipping a fresh page into
+    # the gap. See tapbox/radio.py.
+    radio.touch_busy()
+    radio.wait_paging_clear()
 
     # Exact resume: tapboxd bookkeeps track+position while Spotify plays
     # (its cloud only resumes for Spotify's own clients). Same context ->
@@ -519,6 +526,10 @@ def main():
             volume = max(0, min(100, round(json.load(f)["volume"])))
     except (OSError, ValueError, KeyError, TypeError):
         volume = 100
+    if any(u.startswith(("http://", "https://")) for u in urls):
+        # remote stream: claim the radio, let an in-flight BT page finish
+        radio.touch_busy()
+        radio.wait_paging_clear()
     proc = subprocess.Popen(mpv_command(urls, volume, sock, output_pcm()))
     terminated = []  # set when WE are told to stop (reboot/daemon restart)
 

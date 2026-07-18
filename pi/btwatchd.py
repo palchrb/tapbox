@@ -71,6 +71,7 @@ except ImportError as _e:
     _fallback(f"dbus/gi unavailable ({_e})")
 
 from tapbox import boxapi  # noqa: E402
+from tapbox import radio as _radio  # noqa: E402 — shared-radio yield
 from tapbox.bt import KICK_FILE, MAC_FILE, acquire_process_lock  # noqa: E402
 
 # timings are env-tunable so the test harness can run in seconds
@@ -91,6 +92,16 @@ DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_DEBOUNCE", "5"))
 LOCK_RETRY_S = float(os.environ.get("TAPBOX_RECON_LOCK_RETRY", "10"))
 FALLBACK_S = float(os.environ.get("TAPBOX_RECON_FALLBACK", "20"))
 CONNECT_TIMEOUT_S = 30
+# Radio yield: blind pages hold while wifi is mid-setup at boot or a
+# network stream/track load is in flight (advisory marker from tapboxd).
+# Only BLIND (timer/boot) pages — user-intent kicks and speaker-initiated
+# signals are never gated. See tapbox/radio.py for the rationale.
+YIELD_RETRY_S = float(os.environ.get("TAPBOX_RECON_YIELD_RETRY", "4"))
+YIELD_GIVEUP_S = float(os.environ.get("TAPBOX_RECON_YIELD_GIVEUP", "120"))
+WIFI_GATE_S = float(os.environ.get("TAPBOX_RECON_WIFI_GATE", "15"))
+# ~4 failed boot pages = the speaker is off; the 5s boot cadence would
+# otherwise burn ~24 pages against nothing, exactly while wifi comes up
+BOOT_FAIL_LIMIT = int(os.environ.get("TAPBOX_RECON_BOOT_FAILS", "4"))
 
 BLUEZ = "org.bluez"
 ADAPTER_PATH = "/org/bluez/hci0"
@@ -125,6 +136,8 @@ class Reconnector:
         self.disconnected_since = None  # when the target went away
         self._pcm_waiting = False    # a bt announcement awaits the PCM
         self._nudged = False         # one A2DP nudge per steady period
+        self.boot_fails = 0          # real page failures this boot window
+        self._yield_logged = False   # log the first radio-yield only
 
     # --- bus plumbing ------------------------------------------------------
 
@@ -222,6 +235,7 @@ class Reconnector:
     def enter_boot(self):
         self.state = "BOOT"
         self.boot_deadline = time.monotonic() + BOOT_WINDOW_S
+        self.boot_fails = 0
         self.cancel_timer()
         self._boot_tick()
 
@@ -229,9 +243,34 @@ class Reconnector:
         if self.state != "BOOT":
             return
         self._adapter_up()
-        if not self.connecting:
-            self.attempt("boot")
+        if self.connecting:
+            return
+        if self._radio_yield():
+            self.schedule(YIELD_RETRY_S, None)  # radio busy — hold the page
+            return
+        self.attempt("boot")
         # next step is scheduled by the attempt's outcome handlers
+
+    def _radio_yield(self):
+        """Should a BLIND page hold right now? Yes while wifi is in its
+        fragile boot window (association/DHCP — pages there deauthed
+        wifi, field 2026-07-18) or a network stream/track load is in
+        flight. Bounded: a long-absent speaker stops yielding after
+        YIELD_GIVEUP_S so markers can never starve reconnect."""
+        if _radio.uptime() < WIFI_GATE_S and not _radio.wifi_settled():
+            hold = True
+        elif (self.disconnected_since is not None
+                and time.monotonic() - self.disconnected_since
+                > YIELD_GIVEUP_S):
+            hold = False  # starvation belt: reconnect beats politeness
+        else:
+            hold = _radio.busy()
+        if hold and not self._yield_logged:
+            self._yield_logged = True
+            log("radio busy (wifi setup / track load) — holding the page")
+        elif not hold:
+            self._yield_logged = False
+        return hold
 
     def enter_steady(self, why):
         if self.state != "STEADY":
@@ -303,6 +342,7 @@ class Reconnector:
             return
         self.connecting = self.target
         self.lock = lock
+        _radio.touch_paging()
         log(f"connected but no A2DP transport — nudging profiles "
             f"({self.target})")
         try:
@@ -401,6 +441,7 @@ class Reconnector:
         self.connecting = self.target
         self.lock = lock
         self.cancel_timer()
+        _radio.touch_paging()  # a page is going on the air — player waits
         log(f"connecting {self.target} ({why})")
         try:
             # fresh proxy per attempt (never cached across bluez restarts);
@@ -442,10 +483,23 @@ class Reconnector:
             # and touching the output here flapped it mid-playback
             return
         if self.state == "BOOT":
-            if time.monotonic() < self.boot_deadline:
+            # NotReady = the adapter isn't powered yet, i.e. the page
+            # never went ON the air — that's boot machinery warming up,
+            # not evidence the speaker is off, so it doesn't count
+            if "NotReady" not in detail:
+                self.boot_fails += 1
+            if self.boot_fails >= BOOT_FAIL_LIMIT:
+                # the speaker is really off/away: stop the 5s boot
+                # cadence early (it would burn a page every 5s exactly
+                # while wifi associates) and take the backoff ladder
+                log(f"{self.boot_fails} boot pages failed — the speaker "
+                    "looks off; switching to the patient ladder")
+                self.state = "WAITING"
+            elif time.monotonic() < self.boot_deadline:
                 self.schedule(BOOT_RETRY_S, None)
                 return
-            self.state = "WAITING"
+            else:
+                self.state = "WAITING"
         log(f"connect failed ({detail}) — next blind attempt in "
             f"{int(self.backoff)}s")
         if self.disconnected_since is None:
@@ -463,6 +517,7 @@ class Reconnector:
         self.backoff = min(self.backoff * 2, BACKOFF_MAX_S)
 
     def _finish_attempt(self):
+        _radio.clear_paging()  # the single funnel every attempt exits by
         was, self.connecting = self.connecting, None
         lock, self.lock = self.lock, None
         if lock is not None:
@@ -509,6 +564,13 @@ class Reconnector:
         if self.state == "BOOT":
             self._boot_tick()
         elif self.state == "WAITING":
+            if time.monotonic() < self.boot_deadline:
+                # dropped out of BOOT early (boot_fails) but the adapter
+                # bring-up retries still belong to the boot window
+                self._adapter_up()
+            if self._radio_yield():
+                self.schedule(YIELD_RETRY_S, None)
+                return False
             self.attempt("timer")
         return False  # one-shot; outcomes schedule the next one
 

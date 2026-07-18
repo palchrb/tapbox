@@ -173,6 +173,9 @@ STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
 RESUME_MIN_S = float(os.environ.get("TAPBOX_RESUME_MIN", "20"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("TAPBOX_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("TAPBOX_SETTLE_TOL", "3"))
+# boot resume: silent grace before the speaker popup, and the wait tick
+BOOT_GRACE_S = float(os.environ.get("TAPBOX_BOOT_GRACE", "25"))
+BOOT_TICK_S = float(os.environ.get("TAPBOX_BOOT_TICK", "2"))
 # a spotify session that reads 'empty' right after a timed-out control is
 # very likely a SLOW TRACK LOAD, not a finished album — hold skips off the
 # replay fallback for this long after any control timeout
@@ -206,6 +209,7 @@ def player_path():
 
 from tapbox import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
 from tapbox import library as _library  # noqa: E402 — BUSY_CHECK wiring
+from tapbox import radio as _radio  # noqa: E402 — shared-radio yield markers
 from tapbox.library import (  # noqa: E402
     ORDERS, artwork_allowed, expand_target, find_entry, library_with_covers,
     load_library, normalize_library, save_library, state_key, _cache_sweeper,
@@ -444,12 +448,34 @@ class Orchestrator:
         if cache is not None:
             args += ["--cache", str(cache)]
         args.append(target)
+        if is_spotify(target) or target.startswith(("http://", "https://")):
+            _radio.touch_busy()  # network-heavy start: blind BT pages yield
         self.child = subprocess.Popen(args)
         self.child_started = time.monotonic()
 
     def play(self, target, fresh=False, episode=None, reverse=False,
-             cache=None, resume=True):
+             cache=None, resume=True, boot=False):
         with self.lock:
+            if boot:
+                # The boot-resume thread is the LAST of three possible
+                # starters: the A-press replay (command rule 4) and the
+                # transport-up blip resume both spawn under this same
+                # lock and stamp child_started. If anyone beat us here,
+                # our job is done — proceeding would hit play()'s
+                # stop-and-respawn shortcuts against a child whose IPC/
+                # session isn't up yet and audibly restart it (triple-
+                # start race, architect review 2026-07-18).
+                if self.child_started > 0:
+                    log("boot resume: playback already started — standing "
+                        "down")
+                    return {"status": "already-started"}
+                try:
+                    if spotify_playing(go_status(timeout=2)):
+                        log("boot resume: spotify already playing — "
+                            "standing down")
+                        return {"status": "already-started"}
+                except OSError:
+                    pass  # api busy/down — the guards above suffice
             _kick_bt_connect()  # pressing play = wanting sound NOW
             # Same card back in the slot (or same link replayed): if its
             # session is still loaded, unpause instead of restarting.
@@ -755,6 +781,8 @@ class Orchestrator:
         finished 14s later). Also turns what used to be a 500 on the
         HTTP handler into a clean busy-drop."""
         try:
+            if action in ("next", "prev"):
+                _radio.touch_busy()  # a skip = an imminent CDN track load
             spotify_command(action)
             return True
         except OSError as e:
@@ -1486,7 +1514,15 @@ class Handler(BaseHTTPRequestHandler):
                     stop_hotspot()
                     self._send(200, {"ok": True})
             elif self.path == "/wifi/scan":
+                # a wifi scan sweeps all 13 channels off-frequency — as
+                # A2DP-hostile as BT discovery, so it gets the same
+                # quiesce. Only on the bt output: a scan can't hurt the
+                # built-in speaker, and stopping local playback for it
+                # would be an audible interruption for nothing.
+                resume = (_bt_quiesce()
+                          if current_output()["output"] == "bt" else False)
                 r = wifi_scan()
+                _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "wifi operation already in progress"})
             elif self.path in ("/wifi/connect", "/wifi/forget",
@@ -2142,10 +2178,26 @@ def _boot_resume():
         return
     target = last["target"]
     log(f"boot resume: waiting for the audio path, then continuing {target}")
-    for _ in range(45):  # up to ~90s for the BT speaker to reconnect
+    # Silent grace first (the speaker usually reconnects in 10-20s), then
+    # — if the output is bt and the speaker is still away — raise the
+    # bt_waiting popup via _kick_bt_connect and KEEP the resume armed for
+    # its lifetime: transport-up auto-resumes (the blip machinery), A on
+    # the popup plays on the built-in speaker. The old behavior died
+    # SILENTLY at 90s — the kid saw a box that 'forgot' to continue
+    # (field 2026-07-18 18:01, box came up mute).
+    grace_at = time.monotonic() + BOOT_GRACE_S
+    deadline = grace_at + BT_WAIT_S
+    asked = False
+    while time.monotonic() < deadline:
         if _audio_ready():
             break
-        time.sleep(2)
+        if not asked and time.monotonic() >= grace_at \
+                and current_output()["output"] == "bt":
+            _kick_bt_connect()  # arms the popup + pages the speaker once
+            asked = True
+            log("boot resume: speaker still away — asking on the screen "
+                "(X: connect / A: box speaker)")
+        time.sleep(BOOT_TICK_S)
     else:
         log("boot resume: audio path never came up — press play to resume")
         return
@@ -2169,8 +2221,15 @@ def _boot_resume():
                 break
             except OSError:
                 time.sleep(2)
+    # Claim the transport-up event before playing: if the blip machinery
+    # (armed by the popup's 'since') already consumed it and resumed,
+    # play(boot=True) below stands down; clearing here makes sure it
+    # can't ALSO fire after we start (one starter per event).
+    with _BT_WAIT_LOCK:
+        _BT_WAIT.update(lost=0.0, since=0.0, ready_until=0.0)
+        _BT_WAIT.pop("lost_spotify", None)
     ORCH.play(target, reverse=bool(last.get("reverse")),
-              resume=bool(last.get("resume", True)))
+              resume=bool(last.get("resume", True)), boot=True)
 
 
 class PortalHandler(BaseHTTPRequestHandler):
