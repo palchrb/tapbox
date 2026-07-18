@@ -211,11 +211,7 @@ def online(timeout=2):
     timeout when this probe is on the tap->audio path."""
     if os.environ.get("TAPBOX_OFFLINE"):
         return False
-    try:
-        socket.create_connection(("1.1.1.1", 443), timeout=timeout).close()
-        return True
-    except OSError:
-        return False
+    return radio.internet_up(timeout)
 
 
 SPOT_RESUME_MIN_MS = 20000

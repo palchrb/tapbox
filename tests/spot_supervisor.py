@@ -77,7 +77,9 @@ assert daemon._SPOT_OFFLINE[0] is False
 print("1b. a paused session is never parked (pause survives) OK")
 
 # 2. offline with NO session loaded -> parked after the 2-miss hysteresis
+# (unit active -> the stop is actually issued; see 3b for the dead case)
 daemon._SPOT_OFFLINE[0] = False
+daemon._go_unit_active = lambda: True
 run_ticks(5, internet=False, go_st={})
 assert ("systemctl", "stop", "go-librespot") in CALLS, CALLS
 assert daemon._SPOT_OFFLINE[0] is True
@@ -97,12 +99,15 @@ assert CALLS == [], f"parked a busy-but-running go-librespot: {CALLS}"
 assert daemon._SPOT_OFFLINE[0] is False
 print("3. unreachable + unit active = busy: never parked OK")
 
-# 3b. unreachable AND the unit is down -> genuinely dead, parks
+# 3b. unreachable AND the unit is down -> genuinely dead: marked offline,
+# but NO systemctl stop is forked for an already-dead unit (review P1 —
+# the old code forked one every 20s tick forever on an offline cabin box)
 daemon._SPOT_OFFLINE[0] = False
 daemon._go_unit_active = lambda: False
 run_ticks(5, internet=False, go_st=_boom)
-assert ("systemctl", "stop", "go-librespot") in CALLS, CALLS
-print("3b. unreachable + unit down: parks as before OK")
+assert ("systemctl", "stop", "go-librespot") not in CALLS, CALLS
+assert daemon._SPOT_OFFLINE[0] is True, "dead unit must still read offline"
+print("3b. unreachable + unit down: offline flagged, no pointless stop OK")
 
 # 4. internet back after a park -> started again, banner cleared
 daemon._SPOT_OFFLINE[0] = True
@@ -117,7 +122,7 @@ print("4. internet back: offline banner clears OK")
 # shows, however many probes fail.
 os.environ["TAPBOX_SPOT_PARK_GRACE"] = "999999999"
 daemon._SPOT_OFFLINE[0] = False
-daemon._go_unit_active = lambda: False
+daemon._go_unit_active = lambda: True
 run_ticks(6, internet=False, go_st={})
 assert CALLS == [], f"parked within the boot grace: {CALLS}"
 assert daemon._SPOT_OFFLINE[0] is False, "false offline banner in the grace"

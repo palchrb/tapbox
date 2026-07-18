@@ -991,9 +991,37 @@ async function pollBattery() {
 }
 
 /* --- boot ------------------------------------------------------------------ */
+/* Poll only while the tab is actually visible: a PWA left open on a
+   docked phone otherwise wakes the box's wifi radio out of its power-
+   save nap every 2s around the clock (review P2). While nothing plays,
+   /status slows to 5s — the page has nothing moving to show. */
 
-pollStatus();
-setInterval(pollStatus, 2000);
+let statusTimer = null, battTimer = null;
+
+function statusPeriod() {
+  return (np.playing ? 2000 : 5000);
+}
+
+function schedStatus() {
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(async () => {
+    if (!document.hidden) await pollStatus();
+    schedStatus();
+  }, statusPeriod());
+}
+
+function startPolling() {
+  pollStatus();
+  pollBattery();
+  schedStatus();
+  clearInterval(battTimer);
+  battTimer = setInterval(() => { if (!document.hidden) pollBattery(); },
+                          60000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) startPolling();  // fresh data the moment we're back
+});
+
+startPolling();
 setInterval(renderProgress, 500);
-pollBattery();
-setInterval(pollBattery, 60000);

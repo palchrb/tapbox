@@ -25,6 +25,7 @@ waits on PAGING — so btwatchd can't slip a fresh page into the gap.
 Both waits are bounded; no hold-and-wait, no deadlock."""
 
 import os
+import socket
 import time
 
 _RUN = os.environ.get(
@@ -86,6 +87,22 @@ def wait_paging_clear(cap_s=6.0):
     deadline = time.monotonic() + cap_s
     while paging() and time.monotonic() < deadline:
         time.sleep(0.5)
+
+
+# One probe address for the whole box (daemon, player, content) —
+# env-overridable so tests never touch the real network (review M3/Q2)
+PROBE_ADDR = os.environ.get("TAPBOX_PROBE_ADDR", "1.1.1.1:443")
+
+
+def internet_up(timeout=2.0):
+    """Actual-internet probe (not just wifi association): plain IP, no
+    DNS to hang on."""
+    host, _, port = PROBE_ADDR.rpartition(":")
+    try:
+        socket.create_connection((host, int(port)), timeout=timeout).close()
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def uptime():

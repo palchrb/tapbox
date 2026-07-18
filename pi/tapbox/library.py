@@ -2,6 +2,7 @@
 playable episode lists, background episode caching, and the artwork-proxy
 allowlist. Extracted verbatim from daemon.py."""
 
+import copy
 import hashlib
 import json
 import os
@@ -93,12 +94,28 @@ def normalize_library(obj):
     return out
 
 
+# mtime-keyed parse cache: /status re-loads the library every second in
+# the box's most common state (stopped-but-remembered), and the full
+# json.load + normalize per poll is pure CPU on a battery box (review
+# P5). Callers mutate the returned dict, so hand out a deepcopy — still
+# ~10x cheaper than re-parsing, and mtime_ns catches every save.
+_LIB_CACHE = {"key": None, "lib": None}
+
+
 def load_library():
     try:
-        with open(LIB_FILE) as f:
-            return normalize_library(json.load(f))
-    except (OSError, ValueError):
+        st = os.stat(LIB_FILE)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
         return {"version": 1, "sections": []}
+    if _LIB_CACHE["key"] != key:
+        try:
+            with open(LIB_FILE) as f:
+                _LIB_CACHE["lib"] = normalize_library(json.load(f))
+            _LIB_CACHE["key"] = key
+        except (OSError, ValueError):
+            return {"version": 1, "sections": []}
+    return copy.deepcopy(_LIB_CACHE["lib"])
 
 
 def library_with_covers():

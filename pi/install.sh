@@ -258,6 +258,42 @@ then
   echo "    NetworkManager log level WARN (wpa_supplicant evidence unaffected)"
 fi
 
+# Background wifi scanning OFF (review R1): NM passes bgscan
+# "simple:30:-70" to wpa_supplicant — below -70 dBm that is a full
+# 13-channel off-channel sweep (~1.5-2s of radio absence) every 30s,
+# a macroscopic burst that bypasses the whole BUSY/PAGING marker system
+# and can stutter A2DP mid-stream. The box lives on ONE home AP:
+# roaming scans buy nothing. Guarded: the bgscan property needs a
+# recent NM; older ones just skip with a note.
+for c in $(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+             | awk -F: '$2=="802-11-wireless"{print $1}'); do
+  if nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null; then
+    echo "    wifi '$c': background scanning off (no mid-stream channel sweeps)"
+  else
+    echo "    NOTE: this NetworkManager lacks 802-11-wireless.bgscan —"
+    echo "          verify bgscan on the box: wpa_cli -i wlan0 status"
+  fi
+done
+
+# avahi: keep tapbox.local, drop the extra advertisement chatter — every
+# multicast answer wakes the radio after each DTIM regardless of power
+# save (review P7)
+if [[ -f /etc/avahi/avahi-daemon.conf ]]; then
+  AVAHI_CHANGED=0
+  grep -q '^publish-workstation=no' /etc/avahi/avahi-daemon.conf || {
+    sed -i 's/^#\?publish-workstation=.*/publish-workstation=no/' \
+        /etc/avahi/avahi-daemon.conf
+    grep -q '^publish-workstation=no' /etc/avahi/avahi-daemon.conf \
+      || sed -i '/^\[publish\]/a publish-workstation=no' \
+             /etc/avahi/avahi-daemon.conf
+    AVAHI_CHANGED=1
+  }
+  [[ $AVAHI_CHANGED = 1 ]] && {
+    systemctl try-reload-or-restart avahi-daemon 2>/dev/null || true
+    echo "    avahi: workstation advertisement off (less multicast chatter)"
+  }
+fi
+
 # --- 4. bluetooth + go-librespot services ------------------------------------
 
 echo "==> [4/8] Services (bluetooth, bluealsa, go-librespot, bt-reconnect)..."
@@ -597,7 +633,9 @@ Description=TapBox: periodically refresh the PiSugar RTC from the system clock
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=30min
+# 6h, not 30min: the RTC drifts seconds/month — refreshing it twice a
+# day is plenty, and each run forks timedatectl+nc (review P7)
+OnUnitActiveSec=6h
 
 [Install]
 WantedBy=timers.target

@@ -78,10 +78,14 @@ def _online():
     only times out (8s+) and falls back to the same cache anyway."""
     if os.environ.get("TAPBOX_OFFLINE"):
         return False
+    # same TAPBOX_PROBE_ADDR as radio.internet_up, inlined to keep this
+    # file runnable as a standalone stdlib-only script (sync subprocess)
+    host, _, port = os.environ.get("TAPBOX_PROBE_ADDR",
+                                   "1.1.1.1:443").rpartition(":")
     try:
-        socket.create_connection(("1.1.1.1", 443), timeout=2).close()
+        socket.create_connection((host, int(port)), timeout=2).close()
         return True
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 

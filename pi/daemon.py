@@ -219,6 +219,7 @@ from tapbox.netmgmt import (  # noqa: E402
 from tapbox.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
     _retarget_go_librespot)
+from tapbox import sysinfo as _sysinfo  # noqa: E402 — cache-size invalidation
 from tapbox.sysinfo import (  # noqa: E402
     load_settings, shutdown, system_status, update_settings,
     _battery_runtime_tracker)
@@ -1370,6 +1371,7 @@ class Handler(BaseHTTPRequestHandler):
                 keep = [e["target"] for s in lib["sections"] for e in s["entries"]
                         if e.get("cache")]
                 gone = content.prune_cache(keep)
+                _sysinfo.invalidate_dir_sizes()  # /system sizes are stale
                 if gone:
                     log(f"cache: pruned {len(gone)} orphaned offline "
                         f"cache(s): {', '.join(gone)}")
@@ -2065,13 +2067,10 @@ def _kick_bt_connect():
 
 
 def _internet_up():
-    """Actual-internet probe (not just wifi association): plain IP, no
-    DNS to hang on — same test player.py's offline filter uses."""
-    try:
-        socket.create_connection(("1.1.1.1", 443), timeout=2).close()
-        return True
-    except OSError:
-        return False
+    """Actual-internet probe — shared with player/content via radio.py
+    (env TAPBOX_PROBE_ADDR). Kept as a daemon-level name: tests patch
+    daemon._internet_up."""
+    return _radio.internet_up(2)
 
 
 def _go_unit_active():
@@ -2095,9 +2094,14 @@ def _spotify_supervisor():
     parked = False
     misses = 0
     park_grace_s = float(os.environ.get("TAPBOX_SPOT_PARK_GRACE", "180"))
+    # Two cadences (review P1): while offline/parked the 20s tick keeps
+    # recovery snappy (60s once made "no internet" lag a button-press
+    # generation behind reality). While ONLINE and idle, each probe is a
+    # radio wake out of the PS nap for nothing — noticing a loss can
+    # wait 2 minutes (the play paths surface errors on their own).
+    idle_tick_s = float(os.environ.get("TAPBOX_SPOT_PROBE_IDLE", "120"))
     while True:
-        time.sleep(20)  # a cheap TCP probe; 60s made "no internet" and
-        # the recovery lag a button-press generation behind reality
+        time.sleep(20 if (parked or _SPOT_OFFLINE[0]) else idle_tick_s)
         try:
             if _radio.paging():
                 # a BT page owns the radio right now — a probe result is
@@ -2163,8 +2167,9 @@ def _spotify_supervisor():
                     # the grace expires.
                     continue
                 _SPOT_OFFLINE[0] = True
-                subprocess.run(["systemctl", "stop", "go-librespot"],
-                               timeout=30)
+                if _go_unit_active():  # don't fork systemctl every tick
+                    subprocess.run(["systemctl", "stop", "go-librespot"],
+                                   timeout=30)
                 if not parked:
                     log("spotify: no internet — go-librespot parked "
                         "(auto-starts when connectivity returns)")
@@ -2271,11 +2276,9 @@ def _boot_resume():
         # A genuinely offline box proceeds after the wait — cached content
         # is then the RIGHT thing to play.
         for _ in range(15):  # up to ~30s
-            try:
-                socket.create_connection(("1.1.1.1", 443), timeout=2).close()
-                break
-            except OSError:
-                time.sleep(2)
+            if _internet_up():  # through the test seam, unlike the old
+                break           # inline socket copy (review M3)
+            time.sleep(2)
     # Claim the transport-up event before playing: if the blip machinery
     # (armed by the popup's 'since') already consumed it and resumed,
     # play(boot=True) below stands down; clearing here makes sure it

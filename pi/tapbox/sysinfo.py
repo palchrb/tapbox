@@ -191,8 +191,20 @@ CHARGE_CONFIRM_TICKS = int(os.environ.get("TAPBOX_CHARGE_CONFIRM", "2"))
 # one bad read used to wipe the whole counter mid-session.
 
 
+# In-memory runtime counter between disk flushes: a JSON write+rename
+# EVERY 60s tick kept the SD from sleeping and wore flash for a counter
+# whose consumers tolerate minutes of staleness (review P4). Memory is
+# authoritative while the daemon runs; disk is flushed every
+# BATT_FLUSH_S or on a >=1% battery change, so a hard power cut loses
+# at most that much accounting.
+_RUNTIME_MEM = None  # (accum, last_pct) once the tracker has run
+BATT_FLUSH_S = float(os.environ.get("TAPBOX_BATT_FLUSH", "300"))
+
+
 def _load_runtime():
-    """(accum_seconds, last_pct) from disk, or (None, None)."""
+    """(accum_seconds, last_pct) — memory first, else disk, else None."""
+    if _RUNTIME_MEM is not None:
+        return _RUNTIME_MEM
     try:
         with open(BATT_RUNTIME_FILE) as f:
             d = json.load(f)
@@ -242,6 +254,8 @@ def _battery_runtime_tracker():
     last = time.monotonic()
     first_tick = True  # the boot-vs-last-session comparison happens once
     charge_ticks = 0   # consecutive ticks reading plugged/charging
+    _flushed_at = 0.0  # last disk flush (first real step always flushes)
+    _flushed_pct = None
     while True:
         time.sleep(60)
         try:
@@ -263,17 +277,27 @@ def _battery_runtime_tracker():
             first_tick = False
             if step is HOLD:
                 continue  # unconfirmed charge — leave the counter untouched
+            global _RUNTIME_MEM
             if step is None:
+                _RUNTIME_MEM = None  # reset: back to disk-truth (absent)
                 try:
                     os.remove(BATT_RUNTIME_FILE)
                 except OSError:
                     pass
                 continue
             accum, last_pct = step
+            _RUNTIME_MEM = (int(accum), last_pct)
+            # flush to disk only every BATT_FLUSH_S or on a >=1% battery
+            # move — not every tick (SD wear + sleep, review P4)
+            pct_moved = (last_pct is not None and _flushed_pct is not None
+                         and abs(last_pct - _flushed_pct) >= 1)
+            if now - _flushed_at < BATT_FLUSH_S and not pct_moved:
+                continue
             os.makedirs(STATE_DIR, exist_ok=True)
             with open(BATT_RUNTIME_FILE + ".tmp", "w") as f:
                 json.dump({"accum": int(accum), "last_pct": last_pct}, f)
             os.replace(BATT_RUNTIME_FILE + ".tmp", BATT_RUNTIME_FILE)
+            _flushed_at, _flushed_pct = now, last_pct
         except Exception as e:
             log(f"battery runtime tracker error: {e!r}")
 
@@ -287,6 +311,29 @@ def _dir_size(path):
             except OSError:
                 pass
     return total
+
+
+# Cache-size TTL cache: /system is polled every 30s by the screen and
+# 60s by the PWA for the battery pill — but os.walk over a 20GB spotify
+# cache is tens of thousands of syscalls and periodic SD wakes for a
+# number that changes only when the sweeper/pruner runs (review P3).
+_DIR_SIZE_CACHE = {}  # path -> (measured_at, size)
+DIR_SIZE_TTL_S = float(os.environ.get("TAPBOX_DIR_SIZE_TTL", "600"))
+
+
+def _dir_size_cached(path):
+    now = time.monotonic()
+    hit = _DIR_SIZE_CACHE.get(path)
+    if hit and now - hit[0] < DIR_SIZE_TTL_S:
+        return hit[1]
+    size = _dir_size(path)
+    _DIR_SIZE_CACHE[path] = (now, size)
+    return size
+
+
+def invalidate_dir_sizes():
+    """The sweeper/pruner just changed a cache — measure fresh next time."""
+    _DIR_SIZE_CACHE.clear()
 
 
 
@@ -306,7 +353,7 @@ def system_status():
     for name, p in (("podcasts", CACHE_DIR),
                     ("spotify", "/var/lib/tapbox/spotify-cache")):
         if os.path.isdir(p):
-            caches[name] = _dir_size(p)
+            caches[name] = _dir_size_cached(p)
     temp = None
     try:
         with open("/sys/class/thermal/thermal_zone0/temp") as f:

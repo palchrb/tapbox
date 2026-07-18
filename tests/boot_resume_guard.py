@@ -97,7 +97,8 @@ class _FakeSock:
                 pass
         return C()
 
-daemon.socket = _FakeSock()  # the mpv path's wifi probe — instant
+daemon.socket = _FakeSock()  # (legacy stub — probe goes via _internet_up now)
+daemon._internet_up = lambda: True  # the mpv path's wifi wait — instant
 
 READY = [False]
 daemon._audio_ready = lambda: READY[0]

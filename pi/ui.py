@@ -50,6 +50,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
             sys.path.insert(0, _p)
         break
 from tapbox import boxapi  # noqa: E402
+from tapbox import radio as _radio  # noqa: E402 — artwork yields to audio
 
 api_get = boxapi.get
 api_post = boxapi.post
@@ -747,6 +748,15 @@ class App:
 
             def fetch():
                 try:
+                    # A remote cover request fires at the exact track-
+                    # change instant — when the CDN load and AVDTP are
+                    # busiest on the shared radio. Let the audio win: wait
+                    # out a fresh BUSY marker (bounded) before fetching
+                    # (review P6). Once cached the cover never refetches.
+                    for _ in range(10):
+                        if not _radio.busy():
+                            break
+                        time.sleep(2)
                     self.artwork(ref, size)
                 finally:
                     self._art_pending.discard(key)
