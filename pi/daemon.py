@@ -730,12 +730,27 @@ class Orchestrator:
                 try:
                     if action == "prev":
                         # >5s into the episode: restart it (standard player
-                        # semantics — also fixes prev being a no-op after a
-                        # resume, which rotates the episode to queue slot 0)
+                        # semantics). A second prev (within 5s of the start)
+                        # goes to the PREVIOUS episode.
                         pos = mpv_get("playback-time")
-                        cmd = ["seek", 0, "absolute"] \
-                            if isinstance(pos, (int, float)) and pos > 5 \
-                            else ["playlist-prev"]
+                        if isinstance(pos, (int, float)) and pos > 5:
+                            cmd = ["seek", 0, "absolute"]
+                        else:
+                            # Resume ROTATES the queue so the bookmarked
+                            # episode sits in slot 0 — the previous episode
+                            # wraps to the END of the playlist. mpv's
+                            # playlist-prev is a no-op at slot 0, which
+                            # made the second prev fall through to
+                            # 'nothing to control' (field 2026-07-18:
+                            # 'prev just restarts the same track').
+                            ppos = mpv_get("playlist-pos")
+                            count = mpv_get("playlist-count")
+                            if ppos == 0 and isinstance(count, int) \
+                                    and count > 1:
+                                cmd = ["set_property", "playlist-pos",
+                                       count - 1]
+                            else:
+                                cmd = ["playlist-prev"]
                     else:
                         cmd = {"playpause": ["cycle", "pause"],
                                "next": ["playlist-next"]}[action]
