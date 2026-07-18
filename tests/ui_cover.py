@@ -9,9 +9,12 @@ remote fetch failed with no net yet and there was no local fallback)."""
 import os
 import sys
 
+import tempfile
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
 os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
 
 import ui  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
@@ -152,5 +155,61 @@ delta = app.artwork_cache[(URL, 110)] - _t.monotonic()
 assert 3 < delta <= 6, delta
 print("6. a success resets the backoff ladder to 5s OK")
 
+# 7. remote covers persist to DISK: fetched once, then served from disk
+# across UI restarts (fresh caches) with NO network at all — kids replay
+# the same playlists, and re-fetching every cover on every track change
+# both delayed the art and fought the stream for the radio
+import io  # noqa: E402
+
+buf = io.BytesIO()
+Image.new("RGB", (64, 64), (200, 50, 50)).save(buf, "JPEG")
+JPG = buf.getvalue()
+
+
+class _FakeResp:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return JPG
+
+
+def fresh_app():
+    a = object.__new__(ui.App)
+    a.artwork_cache = {}
+    a._art_pending = set()
+    a._art_fails = {}
+    a._art_key = lambda ref, size: (ref, size)
+    return a
+
+
+URL2 = "http://i.scdn.co/exists.jpg"
+ui.urllib.request.urlopen = lambda ref, timeout=10: _FakeResp()
+app = fresh_app()
+r = app.artwork(URL2)
+assert r is not None, "fetch should succeed"
+assert os.path.exists(ui._art_disk(URL2, 110)), "thumbnail not persisted"
+# a NEW app (UI restart: empty memory cache) + network DOWN -> disk serves
+ui.urllib.request.urlopen = _no_net
+app = fresh_app()
+r = app.artwork(URL2)
+assert r is not None, "disk cache must serve the cover with no network"
+assert (URL2, 110) not in app._art_fails, "disk hit must not count as a miss"
+print("7. covers persist to disk — instant + offline after first fetch OK")
+
+# 8. a corrupt disk entry is removed and the fetch path takes over
+URL3 = "http://i.scdn.co/corrupt.jpg"
+os.makedirs(ui.UI_ART_DIR, exist_ok=True)
+with open(ui._art_disk(URL3, 110), "w") as f:
+    f.write("not a jpeg")
+app = fresh_app()
+r = app.artwork(URL3)  # network down -> fails clean, corrupt file dropped
+assert r is None
+assert not os.path.exists(ui._art_disk(URL3, 110)), "corrupt file kept"
+print("8. corrupt disk entry removed, falls back to fetching OK")
+
 print("UI COVER OK — remote off-thread, local fallback never blank, "
-      "boot-race failures retry fast.")
+      "boot-race failures retry fast, covers persist to disk.")

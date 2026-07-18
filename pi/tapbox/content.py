@@ -363,8 +363,11 @@ def prune_cache(keep_targets):
         if os.path.isdir(path):
             # spotify covers live under their own dir with their own
             # cleanup (ensure_spotify_art) — keyed per entry, not per
-            # cache setting, so this sweep must leave them alone
-            if name not in keep_dirs and name != SPOTIFY_ART_DIR:
+            # cache setting, so this sweep must leave them alone. Same
+            # for the screen's album-art disk cache (ui-art): it has its
+            # own size-capped pruning in ui.py.
+            if name not in keep_dirs and name not in (SPOTIFY_ART_DIR,
+                                                      UI_ART_DIR):
                 shutil.rmtree(path, ignore_errors=True)
                 removed.append(name)
         elif name.startswith("catalog-") and name.endswith(".json"):
@@ -388,6 +391,7 @@ def _feed_episode_id(enclosure_url):
 # Downloaded once by the cache sweeper; menus only ever read the file.
 
 SPOTIFY_ART_DIR = "spotify-art"  # under CACHE_DIR; prune_cache skips it
+UI_ART_DIR = "ui-art"  # the screen's album-art disk cache; also skipped
 
 
 def spotify_art_path(target):

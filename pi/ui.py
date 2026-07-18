@@ -57,6 +57,36 @@ api_put = boxapi.put
 
 W = H = 240
 PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
+
+# Album-art disk cache: remote covers are fetched ONCE ever, then served
+# from disk across track changes, UI restarts and reboots. Capped by
+# _art_disk_save's pruning; content.py's prune_cache leaves the dir alone.
+UI_ART_DIR = os.path.join(
+    os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache"), "ui-art")
+UI_ART_MAX_FILES = int(os.environ.get("TAPBOX_UI_ART_MAX", "400"))
+
+
+def _art_disk(ref, size):
+    import hashlib
+    h = hashlib.sha1(f"{ref}|{size}".encode()).hexdigest()[:16]
+    return os.path.join(UI_ART_DIR, f"{h}.jpg")
+
+
+def _art_disk_save(img, path):
+    """Persist a fetched thumbnail; cap the dir by dropping the oldest.
+    Best-effort — a full/broken SD must never break cover display."""
+    try:
+        os.makedirs(UI_ART_DIR, exist_ok=True)
+        img.save(path + ".part", "JPEG", quality=85)
+        os.replace(path + ".part", path)
+        names = [os.path.join(UI_ART_DIR, n) for n in os.listdir(UI_ART_DIR)
+                 if n.endswith(".jpg")]
+        if len(names) > UI_ART_MAX_FILES:
+            names.sort(key=os.path.getmtime)
+            for p in names[:len(names) - UI_ART_MAX_FILES]:
+                os.remove(p)
+    except OSError:
+        pass
 FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
@@ -640,16 +670,39 @@ class App:
                 return None
         elif key in self.artwork_cache:
             return cached
+        fetched = False
         try:
             if ref.startswith("http"):
-                with urllib.request.urlopen(ref, timeout=10) as r:
-                    raw = r.read()
-                import io
-                img = Image.open(io.BytesIO(raw))
+                # Disk cache first: kids replay the same playlists, and
+                # re-fetching every cover on every track change (and after
+                # every reboot) both delayed the cover seconds and fought
+                # the audio stream for the radio (field 2026-07-18). One
+                # fetch per cover EVER; thumbnails persist under
+                # CACHE_DIR/ui-art (prune_cache leaves it alone).
+                disk = _art_disk(ref, size)
+                img = None
+                try:
+                    img = Image.open(disk)
+                    img.load()
+                except OSError:
+                    if img is not None or os.path.exists(disk):
+                        try:
+                            os.remove(disk)  # corrupt — refetch below
+                        except OSError:
+                            pass
+                    img = None
+                if img is None:
+                    with urllib.request.urlopen(ref, timeout=10) as r:
+                        raw = r.read()
+                    import io
+                    img = Image.open(io.BytesIO(raw))
+                    fetched = True
             else:
                 img = Image.open(ref)
             img = img.convert("RGB")
             img.thumbnail((size, size))
+            if fetched:
+                _art_disk_save(img, _art_disk(ref, size))
             # drop stale versions of the same file (older mtime keys)
             for k in [k for k in self.artwork_cache
                       if k[:2] == (ref, size) and k != key]:
