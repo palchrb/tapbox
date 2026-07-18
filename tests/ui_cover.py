@@ -72,4 +72,46 @@ render({"source": None, "title": None})
 assert ASYNC == [] and SYNC == [], (ASYNC, SYNC)
 print("4. no artwork -> no fetch, clean render OK")
 
-print("UI COVER OK — remote off-thread, local fallback never blank.")
+# 5. failure backoff escalates 5s -> 10 -> 20 ... capped at 60, and a
+# success clears the ladder. Boot is fast enough that the resume's cover
+# fetch races wifi and LOSES (URLError seconds before DHCP; field
+# 2026-07-18) — a flat 60s backoff left the mosaic up a minute+ after
+# the net was fine, so the first retry must come quickly.
+import time as _t  # noqa: E402
+
+app = object.__new__(ui.App)
+app.artwork_cache = {}
+app._art_pending = set()
+app._art_fails = {}
+app._art_key = lambda ref, size: (ref, size)
+URL = "http://i.scdn.co/never-resolves.jpg"
+
+
+def _no_net(*a, **k):  # hermetic: the fetch always fails, instantly
+    raise OSError("no route")
+
+
+ui.urllib.request.urlopen = _no_net
+
+expected = [5, 10, 20, 40, 60, 60]
+for i, want in enumerate(expected, 1):
+    app.artwork_cache.pop((URL, 110), None)   # backoff elapsed -> retry
+    r = app.artwork(URL)                       # fetch fails (no such host)
+    assert r is None
+    until = app.artwork_cache[(URL, 110)]
+    delta = until - _t.monotonic()
+    assert want - 2 < delta <= want + 1, (i, want, delta)
+print("5. artwork failure backoff escalates 5,10,20,40,60 (capped) OK")
+
+# 6. a later success resets the ladder (next failure starts at 5s again)
+img = Image.new("RGB", (8, 8))
+app.artwork_cache[(URL, 110)] = img            # simulate a fetch landing
+app._art_fails.pop((URL, 110), None)           # what the success path does
+app.artwork_cache.pop((URL, 110))
+r = app.artwork(URL)
+delta = app.artwork_cache[(URL, 110)] - _t.monotonic()
+assert 3 < delta <= 6, delta
+print("6. a success resets the backoff ladder to 5s OK")
+
+print("UI COVER OK — remote off-thread, local fallback never blank, "
+      "boot-race failures retry fast.")

@@ -539,6 +539,7 @@ class App:
         self.car_sel = 0            # kid mode: index into the flat carousel
         self.artwork_cache = {}
         self._art_pending = set()   # remote covers being fetched off-thread
+        self._art_fails = {}        # per-cover failure count -> retry backoff
         self._lib_at = 0.0          # last /library fetch (TTL'd)
 
     # -- data ---------------------------------------------------------------
@@ -653,13 +654,23 @@ class App:
                       if k[:2] == (ref, size) and k != key]:
                 del self.artwork_cache[k]
             self.artwork_cache[key] = img
+            self._art_fails.pop(key, None)
             return img
         except Exception as e:
-            # Never cache a failure for good: the first fetch often races
-            # wifi at boot (auto-resume starts before DNS is up) and the
-            # cover would stay blank until the next ui restart.
-            log(f"artwork failed ({e.__class__.__name__}): {ref[:80]}")
-            self.artwork_cache[key] = time.monotonic() + 60
+            # Never cache a failure for good — and don't sit on the FIRST
+            # failure either: boot is now fast enough that the resume's
+            # cover fetch races wifi and loses (URLError seconds before
+            # DHCP; field 2026-07-18), and a flat 60s backoff left the
+            # mosaic up for a minute+ after the net was fine. Escalate
+            # instead: retry in 5s, then 10, 20, 40, capped at 60 — the
+            # boot race costs one short beat, a truly dead network still
+            # backs off to the old cadence.
+            fails = self._art_fails.get(key, 0) + 1
+            self._art_fails[key] = fails
+            backoff = min(60.0, 5.0 * (2 ** (fails - 1)))
+            log(f"artwork failed ({e.__class__.__name__}), retry in "
+                f"{backoff:.0f}s: {ref[:80]}")
+            self.artwork_cache[key] = time.monotonic() + backoff
             return None
 
     def artwork_async(self, ref, size=110):
