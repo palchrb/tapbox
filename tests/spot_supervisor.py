@@ -32,17 +32,20 @@ class StopLoop(Exception):
 
 def run_ticks(n, internet, go_st):
     """Drive n supervisor iterations with everything stubbed. go_st is
-    what go_status returns (a callable to raise instead)."""
+    what go_status returns (a callable to raise instead). Ticks go
+    through daemon._tick — patching the global time.sleep also hit the
+    daemon's OTHER live threads (arbiter/watchdog), which stole
+    scripted ticks and could catch StopLoop themselves (QA review Q2)."""
     CALLS.clear()
     left = [n]
 
-    def fake_sleep(_s):
+    def fake_tick(_s):
         if left[0] <= 0:
             raise StopLoop
         left[0] -= 1
 
-    real_sleep = _time.sleep
-    _time.sleep = fake_sleep
+    real_tick = daemon._tick
+    daemon._tick = fake_tick
     daemon._internet_up = lambda: internet
     daemon.go_status = go_st if callable(go_st) else (lambda **k: go_st)
     daemon._spotify.lock = lambda: False
@@ -52,7 +55,7 @@ def run_ticks(n, internet, go_st):
     except StopLoop:
         pass
     finally:
-        _time.sleep = real_sleep
+        daemon._tick = real_tick
 
 
 CALLS = []

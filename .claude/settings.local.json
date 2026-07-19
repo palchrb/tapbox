@@ -113,7 +113,12 @@
       "Bash(awk -F'sleep\\\\\\\\\\(' '{print $1 $2}')",
       "Bash(awk '/^function |^async function /{if\\(name&&NR-start>60\\)print name\" \"start\" \"NR-start; name=$2; start=NR} END{if\\(name&&NR-start>60\\)print name\" \"start\" \"NR-start}' pi/web/app.js)",
       "Bash(awk '/ *)",
-      "Bash(grep -n \"^import hashlib\\\\|^import re$\\\\|ORDERS\\\\|hotspot_active\" pi/daemon.py)"
+      "Bash(grep -n \"^import hashlib\\\\|^import re$\\\\|ORDERS\\\\|hotspot_active\" pi/daemon.py)",
+      "Bash(git -C /workspace/tapbox log --oneline -3 -- pi/ui.py)",
+      "Bash(git -C /workspace/tapbox log -1 --format=%H%n%ad -- pi/ui.py)",
+      "Bash(git -C /workspace/tapbox diff HEAD --stat)",
+      "Bash(git -C /workspace/tapbox log -S \"_radio.busy\\(\\)\" --oneline -- pi/ui.py)",
+      "Bash(git -C /workspace/tapbox log --format=\"%h %ad %s\" --date=format:\"%m-%d %H:%M\" -5 -- pi/ui.py)"
     ]
   }
 }

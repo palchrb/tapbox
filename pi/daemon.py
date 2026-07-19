@@ -988,7 +988,10 @@ class Orchestrator:
                "artwork": None, "episode_id": None, "shuffle": False,
                "spotify_offline": bool(_SPOT_OFFLINE[0]),
                "output": current_output()["output"]}
-        if mpv_alive:
+        if mpv_alive and source == "mpv":
+            # gated on source too: a lingering/starting mpv child while
+            # the box plays spotify leaked mpv's media-title (a raw URL)
+            # over the spotify card (field 2026-07-18 23:xx)
             out["shuffle"] = self.mpv_shuffle
             pause = mpv_get("pause")
             if pause is None and (time.monotonic() - self.child_started
@@ -1045,6 +1048,12 @@ class Orchestrator:
         # restarts (output switch / transport rebuild) — the default 5s
         # here froze the whole UI for ~5s on a BT drop (field 2026-07-17)
         st = go_status(timeout=GO_STATUS_TIMEOUT)
+        if st.get("track"):
+            self._go_st_cache = (time.monotonic(), st)
+        elif not st:
+            at, cached = getattr(self, "_go_st_cache", (0.0, None))
+            if cached and time.monotonic() - at < GO_ST_HOLD_S:
+                st = cached  # transient timeout — hold the good card
         track = st.get("track") or {}
         sp_playing = spotify_playing(st)
         out["spotify"] = {"playing": sp_playing,
@@ -1868,6 +1877,7 @@ BT_WAIT_TICK_S = float(os.environ.get("TAPBOX_BT_WAIT_TICK", "3"))
 BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 # /status must stay snappy for the 1/s screen poll; go-librespot can hang
 # a few seconds mid-restart, so cap how long its status query may block
+GO_ST_HOLD_S = float(os.environ.get("TAPBOX_GO_ST_HOLD", "5"))
 GO_STATUS_TIMEOUT = float(os.environ.get("TAPBOX_GO_STATUS_TIMEOUT", "1.5"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
 # auto-resume window after an auto-stop. 150s (not 30): a speaker OFF/ON

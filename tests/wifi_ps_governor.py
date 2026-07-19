@@ -141,6 +141,8 @@ def run_governor(get_seq, streaming_seq, hyst="0"):
     daemon._streaming_now = lambda: seq.pop(0)
     real_kick = daemon._PS_KICK
     daemon._PS_KICK = FakeKick()
+    real_tick = daemon._tick
+    daemon._tick = lambda s: None  # the baseline poll's 10s pacing
     real_sleep = _time.sleep
     _time.sleep = fake_sleep
     try:
@@ -150,6 +152,7 @@ def run_governor(get_seq, streaming_seq, hyst="0"):
     finally:
         _time.sleep = real_sleep
         daemon._PS_KICK = real_kick
+        daemon._tick = real_tick
     return calls
 
 
