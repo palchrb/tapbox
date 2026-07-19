@@ -193,6 +193,15 @@ WEB_DIR = os.environ.get("TAPBOX_WEB") or (
     else "/usr/share/tapbox/web")
 
 
+def _tick(seconds):
+    """All background loops wait through this seam. Tests monkeypatch
+    daemon._tick to drive loops deterministically — patching the global
+    time.sleep also hit OTHER live daemon threads (they stole scripted
+    ticks and the fake could raise inside the arbiter), a real flake
+    (QA review Q2)."""
+    time.sleep(seconds)
+
+
 def log(msg):
     print(f"tapboxd: {msg}", flush=True)
 
@@ -267,7 +276,7 @@ class Orchestrator:
         BT output. Watch for that takeover and yield mpv gracefully (its
         bookmark is saved, so the card resumes later)."""
         while True:
-            time.sleep(4)
+            _tick(4)
             try:
                 with self.lock:
                     alive = self._mpv_alive()
@@ -304,7 +313,7 @@ class Orchestrator:
         last_pos, last_change = None, time.monotonic()
         last_tx, last_tx_change = None, time.monotonic()
         while True:
-            time.sleep(STALL_POLL_S)
+            _tick(STALL_POLL_S)
             try:
                 with self.lock:
                     alive = self._mpv_alive()
@@ -959,7 +968,19 @@ class Orchestrator:
         return live  # within tolerance: seek landed, track live from here
 
     def status(self):
-        with self.lock:
+        # A control can hold the lock for ~20s against a wedged
+        # go-librespot api (prev = status + command + re-status, all
+        # slow) — the screen's 1/s poll must NEVER queue behind that
+        # (field 2026-07-18 23:xx: whole UI frozen). 0.5s, then fall
+        # back to racy-but-atomic attribute reads: a momentarily stale
+        # source/target beats a dead screen.
+        if self.lock.acquire(timeout=0.5):
+            try:
+                mpv_alive = self._mpv_alive()
+                target, source = self.target, self.source
+            finally:
+                self.lock.release()
+        else:
             mpv_alive = self._mpv_alive()
             target, source = self.target, self.source
         out = {"source": source, "target": target, "playing": False,
@@ -1202,16 +1223,70 @@ def _net_changed():
     minutes in 30-60s timeout storms that wedge its local API, which
     /status and /playpause block on: the field-reported frozen UI
     (2026-07-17). Restarting is ~5s and deterministic. try-restart:
-    a parked unit stays parked — the supervisor owns starting it."""
+    a parked unit stays parked — the supervisor owns starting it.
+    One debounce gate for BOTH triggers (the /wifi/connect hook and the
+    IP watchdog): skip when go-librespot was already restarted moments
+    ago (retarget, unpark, the other trigger racing) — its sockets are
+    already bound to the new address."""
+    with _GO_REBUILD_LOCK:
+        fresh = time.monotonic() - _GO_REBUILD["at"] < NET_HEAL_COOLDOWN_S
+    if fresh:
+        log("network changed — go-librespot restarted recently, skipping")
+        return
     log("network changed — restarting go-librespot (stale connections)")
     try:
         subprocess.run(["systemctl", "try-restart", "go-librespot"],
                        timeout=30)
+        _note_go_restart()
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"go-librespot restart after net change failed: {e!r}")
 
 
 _netmgmt.net_changed[0] = _net_changed
+NET_HEAL_COOLDOWN_S = float(os.environ.get("TAPBOX_NET_HEAL_COOLDOWN", "60"))
+NET_IP_POLL_S = float(os.environ.get("TAPBOX_NET_IP_POLL", "15"))
+
+
+def _wlan_ip():
+    """The current IPv4 source address for internet traffic — a pure
+    kernel route lookup (UDP connect sends NO packet), so polling this
+    is radio-free. None = no default route (offline)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: never routable
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return None
+
+
+def _ip_watchdog():
+    """Catch the network changes our /wifi/connect hook can't see:
+    NM-initiated failover, a DHCP lease on a new net, iface bounce.
+    Field 2026-07-18 23:21: the iPhone hotspot died, NM auto-fell back
+    to the home AP, and go-librespot kept zombie TCPs bound to the OLD
+    address for minutes ('did not receive last pong', put-state
+    timeouts) — every API call wedged, the whole box degraded. Rules:
+    heal only on a REAL address change (A->B, or A->gone->B); A->gone->A
+    is a blip (same lease came back, sockets still valid); offline is
+    the supervisor's business, not ours."""
+    last = _wlan_ip()  # seed: boot is not a change
+    while True:
+        _tick(NET_IP_POLL_S)
+        try:
+            cur = _wlan_ip()
+            if cur is None:
+                continue  # offline — keep the baseline (blip tolerance)
+            if last is None:
+                last = cur  # booted offline: first address = baseline
+                continue
+            if cur != last:
+                _net_changed()
+                last = cur
+        except Exception as e:
+            log(f"ip watchdog error: {e!r}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1935,7 +2010,7 @@ def _go_output_rebuild():
                 break
         except OSError:
             pass
-        time.sleep(1)
+        _tick(1)
 
 
 def _speaker_back(now, elapsed, spot):
@@ -2007,7 +2082,7 @@ def _bt_wait_watcher():
     so a sleeping screen still gets the auto-resume the moment the
     speaker comes back."""
     while True:
-        time.sleep(BT_WAIT_TICK_S)
+        _tick(BT_WAIT_TICK_S)
         try:
             if _BT_WAIT["lost"] or _BT_WAIT["since"]:
                 _bt_wait_advance()
@@ -2101,7 +2176,7 @@ def _spotify_supervisor():
     # wait 2 minutes (the play paths surface errors on their own).
     idle_tick_s = float(os.environ.get("TAPBOX_SPOT_PROBE_IDLE", "120"))
     while True:
-        time.sleep(20 if (parked or _SPOT_OFFLINE[0]) else idle_tick_s)
+        _tick(20 if (parked or _SPOT_OFFLINE[0]) else idle_tick_s)
         try:
             if _radio.paging():
                 # a BT page owns the radio right now — a probe result is
@@ -2115,6 +2190,7 @@ def _spotify_supervisor():
                     subprocess.run(["systemctl", "start", "go-librespot"],
                                    timeout=30)
                     log("spotify: internet is back — go-librespot started")
+                    _note_go_restart()  # the ip watchdog must not re-restart it
                     parked = False
                 # Once an account is on, close the open Connect door so a
                 # passing phone can't overwrite our login. No-op when
@@ -2438,7 +2514,7 @@ def _wifi_ps_governor():
         except (OSError, subprocess.TimeoutExpired):
             pass  # no iw / wlan0 not up yet — keep waiting
         if i + 1 < tries:
-            time.sleep(10)
+            _tick(10)
     if not managed:
         log("wifi ps governor: power save never seen on — not managing")
         return
@@ -2518,6 +2594,7 @@ def main():
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
     threading.Thread(target=_battery_runtime_tracker, daemon=True).start()
     threading.Thread(target=_spotify_supervisor, daemon=True).start()
+    threading.Thread(target=_ip_watchdog, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")

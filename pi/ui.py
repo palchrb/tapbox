@@ -601,7 +601,7 @@ class App:
                 and now - self.last_status > 2.0):
             self.last_status = now
             try:
-                self._set("status", api_get("/status"))
+                self._set("status", api_get("/status", timeout=2))
             except (OSError, ValueError):
                 self._set("status", {})
             if self.status.get("playing"):
@@ -612,7 +612,7 @@ class App:
                 and now - self.last_status > STATUS_POLL_S:
             self.last_status = now
             try:
-                self._set("status", api_get("/status"))
+                self._set("status", api_get("/status", timeout=2))
             except OSError:
                 self._set("status", {})
 
@@ -876,14 +876,12 @@ class App:
         in_vol = time.monotonic() < self.vol_mode_until
         try:
             if ev == "a":
-                api_post("/playpause", timeout=CONTROL_TIMEOUT)
-                self.last_status = 0  # poll immediately
+                self._control_async("/playpause")
             elif ev == "b":
                 if in_vol:  # volume card open: B/Y are - / +
                     self._volume_mode(delta=-5)
                 else:
-                    api_post("/prev", timeout=CONTROL_TIMEOUT)
-                    self.last_status = 0
+                    self._control_async("/prev")
             elif ev == "b_long":
                 self._back_to_episodes()
             elif ev == "x":
@@ -894,12 +892,23 @@ class App:
                 if in_vol:
                     self._volume_mode(delta=5)
                 else:
-                    api_post("/next", timeout=CONTROL_TIMEOUT)
-                    self.last_status = 0
+                    self._control_async("/next")
             elif ev == "y_long":
                 self._open_episodes()
         except OSError as e:
             log(f"control failed: {e}")
+
+    def _control_async(self, path):
+        """POST a transport control off the UI thread. A slow control
+        (wedged go-librespot api) must never freeze rendering or eat
+        the next button press — hold-B to the carousel always works."""
+        def go():
+            try:
+                api_post(path, timeout=CONTROL_TIMEOUT)
+            except OSError as e:
+                log(f"control failed: {e}")
+            self.last_status = 0.0
+        threading.Thread(target=go, daemon=True).start()
 
     def _open_episodes(self):
         """Hold-Y in now-playing: the episode picker for whatever is
