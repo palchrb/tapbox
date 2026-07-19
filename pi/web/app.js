@@ -1028,7 +1028,15 @@ function startPolling() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) startPolling();  // fresh data the moment we're back
+  if (document.hidden) return;
+  startPolling();  // fresh data the moment we're back
+  // Re-load the library too: saves PUT the WHOLE document from this
+  // tab's memory, so a tab left open on the Library tab and resumed
+  // later would overwrite every edit made since it loaded its copy —
+  // field 2026-07-19 21:27: adding one entry from a stale tab wiped
+  // the pre-cache flags toggled 20 minutes earlier from another view.
+  const active = document.querySelector("nav button.active");
+  if (active && active.dataset.tab === "library") loadLibrary();
 });
 
 startPolling();
