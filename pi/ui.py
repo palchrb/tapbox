@@ -50,6 +50,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
             sys.path.insert(0, _p)
         break
 from tapbox import boxapi  # noqa: E402
+from tapbox import paths as _paths  # noqa: E402 — idle activity marker
 from tapbox import radio as _radio  # noqa: E402 — artwork yields to audio
 
 api_get = boxapi.get
@@ -1772,6 +1773,7 @@ class App:
             if events:
                 woke = not self.display.on
                 self.last_input = time.monotonic()
+                _paths.touch_activity()  # tapbox-idle: hands-on counts
                 if woke:
                     self.display.set_backlight(True)
                     self.last_system = 0.0   # refetch battery/system now
