@@ -426,7 +426,11 @@ function entryRow(e, sectionName, locked) {
       o.textContent = spot ? (n === 0 ? "no pre-cache" : "pre-cache")
                     : n === 0 ? "no offline" : n < 0 ? "keep all"
                     : `keep ${n}`;
-      if ((e.cache || 0) === n) o.selected = true;
+      // spotify: ANY non-zero value means pre-cache is on (the sweep
+      // treats n !== 0 as enabled) — an entry holding e.g. 50 must show
+      // as 'pre-cache', not fall back to the first option
+      if (spot ? ((e.cache || 0) !== 0) === (n !== 0)
+               : (e.cache || 0) === n) o.selected = true;
       cache.appendChild(o);
     }
     cache.addEventListener("change", async () => {
