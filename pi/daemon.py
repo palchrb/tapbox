@@ -1052,8 +1052,19 @@ class Orchestrator:
             self._go_st_cache = (time.monotonic(), st)
         elif not st:
             at, cached = getattr(self, "_go_st_cache", (0.0, None))
-            if cached and time.monotonic() - at < GO_ST_HOLD_S:
-                st = cached  # transient timeout — hold the good card
+            # 5s covers a transient timeout — but a COLD track load
+            # (first-listen playlist, api blocked 8-15s) outlived it and
+            # the card fell to 'Nothing playing' mid-skip (field
+            # 2026-07-19). A fresh BUSY marker or a recent timed-out
+            # control proves a load is in flight: keep the card for the
+            # full load-hold window. Cached kid albums never hit this —
+            # their loads come off the disk cache in <1s.
+            hold = GO_ST_HOLD_S
+            if _radio.busy() or (time.monotonic() - self._spot_cmd_timeout_at
+                                 < SPOT_TIMEOUT_HOLD_S):
+                hold = SPOT_TIMEOUT_HOLD_S
+            if cached and time.monotonic() - at < hold:
+                st = cached  # a load is in flight — hold the good card
         track = st.get("track") or {}
         sp_playing = spotify_playing(st)
         out["spotify"] = {"playing": sp_playing,
