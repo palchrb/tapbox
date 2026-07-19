@@ -410,23 +410,31 @@ function entryRow(e, sectionName, locked) {
     toast(`${e.name}: ${ORDER_LABEL[e.order]}`);
   });
 
-  // Per-entry offline cache — not for Spotify (global setting, DRM) or
-  // local folders (already offline)
+  // Per-entry cache — podcasts: keep newest N episodes offline;
+  // Spotify (since fork v0.0.3): pre-download the whole playlist/album
+  // into go-librespot's disk cache so every skip is instant (on/off —
+  // the N has no meaning there). Local folders: already offline.
   let cache = null;
-  if (!isSpotify(e.target) && !isLocal(e.target)) {
+  const spot = isSpotify(e.target);
+  if (!isLocal(e.target)) {
     cache = document.createElement("select");
-    cache.title = "Episodes kept offline";
-    for (const n of CACHE_OPTIONS) {
+    cache.title = spot ? "Pre-download tracks for instant playback"
+                       : "Episodes kept offline";
+    for (const n of (spot ? [0, -1] : CACHE_OPTIONS)) {
       const o = document.createElement("option");
       o.value = String(n);
-      o.textContent = n === 0 ? "no offline" : n < 0 ? "keep all" : `keep ${n}`;
+      o.textContent = spot ? (n === 0 ? "no pre-cache" : "pre-cache")
+                    : n === 0 ? "no offline" : n < 0 ? "keep all"
+                    : `keep ${n}`;
       if ((e.cache || 0) === n) o.selected = true;
       cache.appendChild(o);
     }
     cache.addEventListener("change", async () => {
       e.cache = Number(cache.value);
       await saveLibrary();
-      toast(e.cache < 0 ? `${e.name}: keeps every episode offline`
+      toast(spot ? (e.cache ? `${e.name}: pre-caching for instant playback`
+                            : `${e.name}: no pre-cache`)
+            : e.cache < 0 ? `${e.name}: keeps every episode offline`
             : e.cache ? `${e.name}: keeps the newest ${e.cache} offline`
                       : `${e.name}: no offline copies`);
     });
