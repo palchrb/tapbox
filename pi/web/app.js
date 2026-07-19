@@ -277,8 +277,9 @@ async function loadLibrary() {
       un.addEventListener("click", async () => {
         if (!confirm(`Stop following @${s.spotify_user}? ` +
                      `The section and its playlists leave the box.`)) return;
-        LIB.sections = LIB.sections.filter((x) => x.id !== s.id);
-        await saveLibrary();
+        await saveLibrary((lib) => {
+          lib.sections = lib.sections.filter((x) => x.id !== s.id);
+        });
         loadLibrary();
       });
       h.appendChild(un);
@@ -358,16 +359,6 @@ function pickSectionLogo(s) {
 
 const NEW_SECTION = " new";  // sentinel: "move to a new category…"
 
-function moveEntry(e, dest) {
-  for (const s of LIB.sections) {
-    s.entries = s.entries.filter((x) => x.id !== e.id);
-  }
-  let sec = LIB.sections.find((s) => s.name === dest);
-  if (!sec) { sec = { name: dest, entries: [] }; LIB.sections.push(sec); }
-  sec.entries.push(e);
-  LIB.sections = LIB.sections.filter((s) => s.entries.length || s.spotify_user);
-}
-
 function entryRow(e, sectionName, locked) {
   const row = document.createElement("div");
   row.className = "entry";
@@ -406,7 +397,9 @@ function entryRow(e, sectionName, locked) {
   }
   order.addEventListener("change", async () => {
     e.order = order.value;
-    await saveLibrary();
+    await saveLibrary((lib) => {
+      const t = libEntry(lib, e.id); if (t) t.order = e.order;
+    });
     toast(`${e.name}: ${ORDER_LABEL[e.order]}`);
   });
 
@@ -435,7 +428,9 @@ function entryRow(e, sectionName, locked) {
     }
     cache.addEventListener("change", async () => {
       e.cache = Number(cache.value);
-      await saveLibrary();
+      await saveLibrary((lib) => {
+        const t = libEntry(lib, e.id); if (t) t.cache = e.cache;
+      });
       toast(spot ? (e.cache ? `${e.name}: pre-caching for instant playback`
                             : `${e.name}: no pre-cache`)
             : e.cache < 0 ? `${e.name}: keeps every episode offline`
@@ -458,7 +453,9 @@ function entryRow(e, sectionName, locked) {
     }
     resume.addEventListener("change", async () => {
       e.resume = resume.value === "1";
-      await saveLibrary();
+      await saveLibrary((lib) => {
+        const t = libEntry(lib, e.id); if (t) t.resume = e.resume;
+      });
       toast(e.resume ? `${e.name}: resumes where you left off`
                      : `${e.name}: always starts from the beginning`);
     });
@@ -484,8 +481,21 @@ function entryRow(e, sectionName, locked) {
       if (!dest) { move.value = sectionName; return; }
     }
     if (dest === sectionName) return;
-    moveEntry(e, dest);
-    await saveLibrary();
+    await saveLibrary((lib) => {
+      let moved = null;
+      for (const s of lib.sections) {
+        const i = s.entries.findIndex((x) => x.id === e.id);
+        if (i >= 0) moved = s.entries.splice(i, 1)[0];
+      }
+      if (!moved) return;
+      let d = lib.sections.find(
+        (s) => s.name.toLowerCase() === dest.toLowerCase());
+      if (d && d.spotify_user) return;  // box-managed — refuse quietly
+      if (!d) { d = { name: dest, entries: [] }; lib.sections.push(d); }
+      d.entries.push(moved);
+      lib.sections = lib.sections.filter(
+        (s) => s.entries.length || s.spotify_user);
+    });
     loadLibrary();
     toast(`Moved “${e.name}” to ${dest}`);
   });
@@ -506,11 +516,13 @@ function entryRow(e, sectionName, locked) {
   del.className = "danger";
   del.addEventListener("click", async () => {
     if (!confirm(`Remove “${e.name}” from the library?`)) return;
-    for (const s of LIB.sections) {
-      s.entries = s.entries.filter((x) => x.id !== e.id);
-    }
-    LIB.sections = LIB.sections.filter((s) => s.entries.length || s.spotify_user);
-    await saveLibrary();
+    await saveLibrary((lib) => {
+      for (const s of lib.sections) {
+        s.entries = s.entries.filter((x) => x.id !== e.id);
+      }
+      lib.sections = lib.sections.filter(
+        (s) => s.entries.length || s.spotify_user);
+    });
     loadLibrary();
   });
 
@@ -524,8 +536,23 @@ function entryRow(e, sectionName, locked) {
   return row;
 }
 
-async function saveLibrary() {
-  LIB = await api("/library", { method: "PUT", body: LIB });
+async function saveLibrary(mutate) {
+  // Read-modify-write: EVERY save re-fetches the server's current
+  // document and applies only THIS change (keyed by stable ids),
+  // instead of PUTting this tab's whole in-memory copy. A client with
+  // a stale copy (old cached app.js, a second device, a suspended
+  // phone PWA) otherwise wiped every edit made elsewhere since it
+  // loaded — the field case was a pre-cache flag that never stuck no
+  // matter how many times it was toggled (2026-07-19).
+  const fresh = await api("/library");
+  if (mutate) mutate(fresh);
+  LIB = await api("/library", { method: "PUT", body: fresh });
+}
+
+function libEntry(lib, id) {
+  for (const s of lib.sections) for (const en of s.entries)
+    if (en.id === id) return en;
+  return null;
 }
 
 $("#add-form").addEventListener("submit", async (ev) => {
@@ -545,13 +572,14 @@ $("#add-form").addEventListener("submit", async (ev) => {
           "its contents. Pick another section.");
     return;
   }
-  if (!sec) {
-    sec = { name: sectionName, entries: [] };
-    LIB.sections.push(sec);
-  }
-  sec.entries.push(entry);
   try {
-    await saveLibrary();
+    await saveLibrary((lib) => {
+      let s2 = lib.sections.find(
+        (s) => s.name.toLowerCase() === sectionName.toLowerCase());
+      if (s2 && s2.spotify_user) return;  // warned above
+      if (!s2) { s2 = { name: sectionName, entries: [] }; lib.sections.push(s2); }
+      s2.entries.push(entry);
+    });
     $("#add-name").value = $("#add-target").value = "";
     toast(`Added “${entry.name}”`);
     loadLibrary();
@@ -587,10 +615,14 @@ $("#follow-form").addEventListener("submit", async (ev) => {
     sec = { name: sectionName, entries: [] };
     LIB.sections.push(sec);
   }
-  sec.spotify_user = preview.user;
-  sec.entries = [];  // the box's sweeper fills these in seconds
   try {
-    await saveLibrary();
+    await saveLibrary((lib) => {
+      let s2 = lib.sections.find(
+        (s) => s.name.toLowerCase() === sec.name.toLowerCase());
+      if (!s2) { s2 = { name: sec.name, entries: [] }; lib.sections.push(s2); }
+      s2.spotify_user = preview.user;
+      s2.entries = [];  // the box's sweeper fills these in seconds
+    });
     $("#follow-user").value = "";
     toast(`Following @${preview.user} — ${preview.playlists.length} public ` +
           "playlist(s) on the way to the box");
@@ -1034,11 +1066,10 @@ function startPolling() {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   startPolling();  // fresh data the moment we're back
-  // Re-load the library too: saves PUT the WHOLE document from this
-  // tab's memory, so a tab left open on the Library tab and resumed
-  // later would overwrite every edit made since it loaded its copy —
-  // field 2026-07-19 21:27: adding one entry from a stale tab wiped
-  // the pre-cache flags toggled 20 minutes earlier from another view.
+  // Re-load the library too, so a resumed tab shows edits made from
+  // other devices while it slept. (Saves are safe regardless — each
+  // one re-fetches the document and applies only its own keyed change
+  // in saveLibrary — but the view would still LOOK stale.)
   const active = document.querySelector("nav button.active");
   if (active && active.dataset.tab === "library") loadLibrary();
 });
