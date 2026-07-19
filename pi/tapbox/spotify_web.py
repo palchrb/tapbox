@@ -101,6 +101,15 @@ def _pick_image(images):
     return best[1] if best else None
 
 
+def playlist_snapshot(playlist_id):
+    """The playlist's snapshot_id — Spotify stamps a new one on ANY edit,
+    so an unchanged id means the pre-cache can skip the whole context.
+    Raises like _get (offline/no credentials) — callers fail open."""
+    quoted = urllib.parse.quote(str(playlist_id), safe="")
+    d = _get(f"/playlists/{quoted}?fields=snapshot_id")
+    return str(d.get("snapshot_id") or "")
+
+
 def user_playlists(user, limit=100):
     """The PUBLIC playlists on a profile -> [{name, target, image}], the
     order the profile shows them in. Raises urllib.error.HTTPError (404 =

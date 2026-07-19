@@ -693,9 +693,24 @@ class App:
                             pass
                     img = None
                 if img is None:
-                    with urllib.request.urlopen(ref, timeout=10) as r:
-                        raw = r.read()
+                    # 4s, not 10: a stalled fetch showed the placeholder
+                    # for 10s before the (fast, escalating) retry could
+                    # even start — field 2026-07-19 "art tar 5+ sek".
+                    # And ask the CDN for the 300px variant of Spotify's
+                    # 640px album art first (standard id-prefix swap):
+                    # a third of the bytes over the shared radio and half
+                    # the decode at 600MHz; the screen renders <=176px.
                     import io
+                    small = ref.replace("ab67616d0000b273",
+                                        "ab67616d00001e02")
+                    try:
+                        with urllib.request.urlopen(small, timeout=4) as r:
+                            raw = r.read()
+                    except OSError:
+                        if small == ref:
+                            raise
+                        with urllib.request.urlopen(ref, timeout=4) as r:
+                            raw = r.read()
                     img = Image.open(io.BytesIO(raw))
                     fetched = True
             else:

@@ -330,6 +330,71 @@ def _sync_one(args):
 _TASKSET = shutil.which("taskset")
 
 
+# --- spotify pre-cache politeness (snapshot gating) --------------------------
+# Re-POSTing /cache/download every 6h sweep is cheap for go-librespot
+# (cached tracks are skipped) but still re-enumerates every context
+# against Spotify's API four times a day. Gate it: playlists re-queue
+# only when their snapshot_id changed (Spotify stamps a new one on ANY
+# edit — one light Web API call decides), albums/tracks/episodes are
+# immutable and queue exactly ONCE. Everything fails open — no Web API
+# credentials, offline, malformed state: behave like before the gate.
+
+PRECACHE_STATE = os.path.join(STATE_DIR, "spotify-precache.json")
+_PENDING_SNAP = {}  # uri -> snapshot observed by the due-check
+
+
+def _precache_state():
+    try:
+        with open(PRECACHE_STATE) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _precache_save(state):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(PRECACHE_STATE + ".tmp", "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(PRECACHE_STATE + ".tmp", PRECACHE_STATE)
+    except OSError:
+        pass  # advisory politeness state — never break the sweep
+
+
+def _precache_due(uri):
+    state = _precache_state()
+    prev = state.get(uri)
+    kind = uri.split(":")[1] if uri.count(":") >= 2 else ""
+    if kind in ("album", "track", "episode", "show"):
+        return prev is None  # immutable content: queue once EVER
+    if kind == "playlist":
+        try:
+            snap = spotify_web.playlist_snapshot(uri.rsplit(":", 1)[1])
+        except Exception:
+            return True  # fail open — behave like before the gate
+        if snap and prev == snap:
+            return False
+        _PENDING_SNAP[uri] = snap
+        return True
+    return True  # artist/unknown: always (they change invisibly)
+
+
+def _precache_done(uri):
+    state = _precache_state()
+    state[uri] = _PENDING_SNAP.pop(uri, None) or "queued"
+    _precache_save(state)
+
+
+def _precache_prune(active_uris):
+    """Forget targets whose cache setting was turned OFF — so turning it
+    back on re-queues once (the parent's 'download again' lever)."""
+    state = _precache_state()
+    kept = {u: s for u, s in state.items() if u in active_uris}
+    if kept != state:
+        _precache_save(kept)
+
+
 def _cache_sweeper():
     # Sweeps run on battery too: a box that mostly lives off the charger
     # otherwise never syncs at all — no fresh episodes, no covers. The
@@ -368,6 +433,9 @@ def _cache_sweeper():
                 n = e.get("cache") or 0
                 # n>0 keep newest N, n==-1 keep all, n==0 no offline copies
                 if n != 0 and is_spotify(e["target"]):
+                    uri = spotify.to_uri(e["target"])
+                    if not uri or not _precache_due(uri):
+                        continue  # unchanged playlist / done album: free
                     # Spotify pre-cache (fork v0.0.3): POST /cache/download
                     # pulls the whole context into go-librespot's disk
                     # cache without playing — every later skip is a cache
@@ -380,12 +448,11 @@ def _cache_sweeper():
                         _sync_wake.wait(SYNC_BUSY_RECHECK_S)
                         _sync_wake.clear()
                     try:
-                        uri = spotify.to_uri(e["target"])
-                        if uri:
-                            spotify.go("/cache/download", timeout=10,
-                                       body={"uri": uri})
-                            log(f"cache sweep: {e['name']} (spotify "
-                                "pre-cache queued)")
+                        spotify.go("/cache/download", timeout=10,
+                                   body={"uri": uri})
+                        log(f"cache sweep: {e['name']} (spotify "
+                            "pre-cache queued)")
+                        _precache_done(uri)
                     except OSError as exc:
                         log(f"spotify pre-cache {e['name']}: {exc!r}")
                     continue
@@ -406,6 +473,12 @@ def _cache_sweeper():
                 _sync_wake.wait(SYNC_STAGGER_S)  # breathe between entries
                 _sync_wake.clear()
         _stamp_sweep()
+        try:
+            _precache_prune({spotify.to_uri(e["target"])
+                             for s in lib["sections"] for e in s["entries"]
+                             if e.get("cache") and is_spotify(e["target"])})
+        except Exception:
+            pass
         _sync_wake.wait(SYNC_INTERVAL_S)  # a library save wakes us early
         _sync_wake.clear()
 

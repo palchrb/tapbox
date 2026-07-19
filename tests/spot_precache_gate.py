@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Gate the spotify pre-cache politeness (snapshot gating): playlists
+re-queue only when Spotify's snapshot_id changed (one light Web API
+call decides), immutable content (albums/tracks/episodes) queues
+exactly ONCE, artists always re-queue (they change invisibly), and
+everything fails open — no credentials/offline behaves like before the
+gate existed. Turning an entry's cache OFF prunes its state so turning
+it back ON re-downloads once (the parent's 'download again' lever)."""
+import os
+import sys
+import tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATE = tempfile.mkdtemp()
+os.environ["TAPBOX_STATE"] = STATE
+os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
+os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
+sys.path.insert(0, os.path.join(REPO, "pi"))
+
+from tapbox import library as lib  # noqa: E402
+
+SNAP = ["snap-1"]
+
+
+def fake_snapshot(pid):
+    if isinstance(SNAP[0], Exception):
+        raise SNAP[0]
+    return SNAP[0]
+
+
+lib.spotify_web.playlist_snapshot = fake_snapshot
+PL = "spotify:playlist:AAA"
+AL = "spotify:album:BBB"
+AR = "spotify:artist:CCC"
+
+# 1. fresh playlist: due; after done, the SAME snapshot is not due
+assert lib._precache_due(PL) is True
+lib._precache_done(PL)
+assert lib._precache_due(PL) is False
+print("1. unchanged playlist snapshot skips the re-queue OK")
+
+# 2. the playlist changes (new snapshot) -> due again, then quiet again
+SNAP[0] = "snap-2"
+assert lib._precache_due(PL) is True
+lib._precache_done(PL)
+assert lib._precache_due(PL) is False
+print("2. edited playlist (new snapshot) re-queues once OK")
+
+# 3. album: due exactly once, never re-checked (no Web API call at all)
+CALLS = []
+lib.spotify_web.playlist_snapshot = lambda pid: CALLS.append(pid)
+assert lib._precache_due(AL) is True
+lib._precache_done(AL)
+assert lib._precache_due(AL) is False
+assert CALLS == [], "immutable content must never hit the Web API"
+lib.spotify_web.playlist_snapshot = fake_snapshot
+print("3. album queues once, zero API calls OK")
+
+# 4. artist contexts always re-queue (their tracklist changes invisibly)
+assert lib._precache_due(AR) is True
+lib._precache_done(AR)
+assert lib._precache_due(AR) is True
+print("4. artist context always re-queues OK")
+
+# 5. fail open: snapshot fetch raises (no credentials / offline) -> due,
+# exactly the pre-gate behavior; go-librespot's cached-track skip makes
+# the extra POST nearly free
+SNAP[0] = RuntimeError("not configured")
+assert lib._precache_due(PL) is True
+SNAP[0] = "snap-2"
+print("5. no credentials/offline fails open (still queues) OK")
+
+# 6. prune: cache toggled OFF forgets the state -> back ON re-queues
+lib._precache_prune({PL})  # album no longer cache-enabled
+assert lib._precache_due(AL) is True, "off->on must re-download once"
+assert lib._precache_due(PL) is False, "still-enabled playlist unaffected"
+print("6. prune on cache-off re-arms the entry OK")
+
+# 7. corrupt state file fails open
+with open(lib.PRECACHE_STATE, "w") as f:
+    f.write("{broken")
+assert lib._precache_due(PL) is True
+print("7. corrupt state file fails open OK")
+
+print("SPOT PRECACHE GATE OK — polite to Spotify, immutable queues once, "
+      "and the gate can only ever fail open.")
