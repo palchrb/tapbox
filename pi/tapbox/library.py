@@ -261,6 +261,7 @@ SYNC_STAGGER_S = int(os.environ.get("TAPBOX_SYNC_STAGGER", 4))
 # ABANDONED (terminated, retried next sweep — syncs are incremental so
 # little is lost) the moment playback starts.
 BUSY_CHECK = None  # set by the daemon; None = never busy (CLI use)
+SYNC_SETTLE_S = float(os.environ.get("TAPBOX_SYNC_SETTLE", "15"))
 SYNC_BUSY_RECHECK_S = int(os.environ.get("TAPBOX_SYNC_BUSY_RECHECK", 30))
 
 
@@ -481,6 +482,12 @@ def _cache_sweeper():
             pass
         _sync_wake.wait(SYNC_INTERVAL_S)  # a library save wakes us early
         _sync_wake.clear()
+        # Coalesce edit bursts: EVERY save wakes us, and a parent
+        # toggling eight settings in the PWA fired eight full sweep
+        # passes back to back (field 2026-07-19 22:44). Wait until the
+        # edits have been quiet for SYNC_SETTLE_S before starting.
+        while _sync_wake.wait(SYNC_SETTLE_S):
+            _sync_wake.clear()
 
 
 # --- expansion (entry -> playable, titled episode list) -------------------------
