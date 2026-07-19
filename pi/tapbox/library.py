@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-from tapbox import content, spotify_web
+from tapbox import content, spotify, spotify_web
 from tapbox.paths import ART_DIR, CACHE_DIR, STATE_DIR
 from tapbox.spotify import is_spotify
 
@@ -358,6 +358,28 @@ def _cache_sweeper():
             for e in s["entries"]:
                 n = e.get("cache") or 0
                 # n>0 keep newest N, n==-1 keep all, n==0 no offline copies
+                if n != 0 and is_spotify(e["target"]):
+                    # Spotify pre-cache (fork v0.0.3): POST /cache/download
+                    # pulls the whole context into go-librespot's disk
+                    # cache without playing — every later skip is a cache
+                    # hit instead of a cold CDN load. Async + internally
+                    # rate-limited (concurrency/delay/jitter + circuit
+                    # breaker), skips already-cached tracks, so a repeat
+                    # request per sweep is cheap. Same discipline as the
+                    # podcast syncs: only fires when nothing is audible.
+                    while _busy():
+                        _sync_wake.wait(SYNC_BUSY_RECHECK_S)
+                        _sync_wake.clear()
+                    try:
+                        uri = spotify.to_uri(e["target"])
+                        if uri:
+                            spotify.go("/cache/download", timeout=10,
+                                       body={"uri": uri})
+                            log(f"cache sweep: {e['name']} (spotify "
+                                "pre-cache queued)")
+                    except OSError as exc:
+                        log(f"spotify pre-cache {e['name']}: {exc!r}")
+                    continue
                 args = _sync_args_for(e["target"], n) if n != 0 else None
                 if not args:
                     continue
