@@ -7,6 +7,7 @@ import os
 import subprocess
 import re
 import time
+import urllib.parse
 import urllib.request
 
 from tapbox.paths import STATE_DIR
@@ -42,6 +43,18 @@ def to_uri(target):
                 _SHORTLINKS[target] = target = r.url
     m = LINK_RE.search(target)
     return f"spotify:{m.group(1)}:{m.group(2)}" if m else None
+
+
+def snapshot(uri):
+    """A playlist's revision, asked of go-librespot's OWN session (fork
+    v0.0.4: GET /cache/snapshot). Hex snapshot_id, or None for
+    non-playlists. Raises when unreachable/never-logged-in — callers
+    treat that as unknown and fail open. No Spotify Web API credentials
+    involved, so this works on a box with no client-id configured."""
+    q = urllib.parse.urlencode({"uri": uri})
+    with urllib.request.urlopen(API + "/cache/snapshot?" + q,
+                                timeout=5) as r:
+        return (json.loads(r.read()) or {}).get("snapshot_id")
 
 
 def go(path, timeout=5, body=None):

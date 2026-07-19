@@ -336,9 +336,11 @@ _TASKSET = shutil.which("taskset")
 # (cached tracks are skipped) but still re-enumerates every context
 # against Spotify's API four times a day. Gate it: playlists re-queue
 # only when their snapshot_id changed (Spotify stamps a new one on ANY
-# edit — one light Web API call decides), albums/tracks/episodes are
-# immutable and queue exactly ONCE. Everything fails open — no Web API
-# credentials, offline, malformed state: behave like before the gate.
+# edit — one light GET /cache/snapshot against go-librespot's own
+# session decides, fork v0.0.4, no Web API credentials needed),
+# albums/tracks/episodes are immutable and queue exactly ONCE.
+# Everything fails open — go-librespot down, offline, malformed state:
+# behave like before the gate.
 
 PRECACHE_STATE = os.path.join(STATE_DIR, "spotify-precache.json")
 _PENDING_SNAP = {}  # uri -> snapshot observed by the due-check
@@ -371,7 +373,7 @@ def _precache_due(uri):
         return prev is None  # immutable content: queue once EVER
     if kind == "playlist":
         try:
-            snap = spotify_web.playlist_snapshot(uri.rsplit(":", 1)[1])
+            snap = spotify.snapshot(uri)
         except Exception:
             return True  # fail open — behave like before the gate
         if snap and prev == snap:

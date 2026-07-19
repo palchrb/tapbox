@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Gate the spotify pre-cache politeness (snapshot gating): playlists
 re-queue only when Spotify's snapshot_id changed (one light Web API
-call decides), immutable content (albums/tracks/episodes) queues
+call — against go-librespot's own session since fork v0.0.4, so no
+Web API credentials are needed), immutable content queues
 exactly ONCE, artists always re-queue (they change invisibly), and
 everything fails open — no credentials/offline behaves like before the
 gate existed. Turning an entry's cache OFF prunes its state so turning
@@ -22,13 +23,13 @@ from tapbox import library as lib  # noqa: E402
 SNAP = ["snap-1"]
 
 
-def fake_snapshot(pid):
+def fake_snapshot(uri):
     if isinstance(SNAP[0], Exception):
         raise SNAP[0]
     return SNAP[0]
 
 
-lib.spotify_web.playlist_snapshot = fake_snapshot
+lib.spotify.snapshot = fake_snapshot
 PL = "spotify:playlist:AAA"
 AL = "spotify:album:BBB"
 AR = "spotify:artist:CCC"
@@ -48,12 +49,12 @@ print("2. edited playlist (new snapshot) re-queues once OK")
 
 # 3. album: due exactly once, never re-checked (no Web API call at all)
 CALLS = []
-lib.spotify_web.playlist_snapshot = lambda pid: CALLS.append(pid)
+lib.spotify.snapshot = lambda uri: CALLS.append(uri)
 assert lib._precache_due(AL) is True
 lib._precache_done(AL)
 assert lib._precache_due(AL) is False
-assert CALLS == [], "immutable content must never hit the Web API"
-lib.spotify_web.playlist_snapshot = fake_snapshot
+assert CALLS == [], "immutable content must never hit the snapshot API"
+lib.spotify.snapshot = fake_snapshot
 print("3. album queues once, zero API calls OK")
 
 # 4. artist contexts always re-queue (their tracklist changes invisibly)
@@ -62,13 +63,13 @@ lib._precache_done(AR)
 assert lib._precache_due(AR) is True
 print("4. artist context always re-queues OK")
 
-# 5. fail open: snapshot fetch raises (no credentials / offline) -> due,
+# 5. fail open: snapshot fetch raises (go-librespot down / offline) -> due,
 # exactly the pre-gate behavior; go-librespot's cached-track skip makes
 # the extra POST nearly free
-SNAP[0] = RuntimeError("not configured")
+SNAP[0] = OSError("go-librespot unreachable")
 assert lib._precache_due(PL) is True
 SNAP[0] = "snap-2"
-print("5. no credentials/offline fails open (still queues) OK")
+print("5. go-librespot down/offline fails open (still queues) OK")
 
 # 6. prune: cache toggled OFF forgets the state -> back ON re-queues
 lib._precache_prune({PL})  # album no longer cache-enabled
