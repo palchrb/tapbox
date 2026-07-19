@@ -265,15 +265,20 @@ fi
 # and can stutter A2DP mid-stream. The box lives on ONE home AP:
 # roaming scans buy nothing. Guarded: the bgscan property needs a
 # recent NM; older ones just skip with a note.
-for c in $(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
-             | awk -F: '$2=="802-11-wireless"{print $1}'); do
+BGSCAN_MISSING=0
+while IFS= read -r c; do
+  [[ -n $c ]] || continue
   if nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null; then
     echo "    wifi '$c': background scanning off (no mid-stream channel sweeps)"
   else
-    echo "    NOTE: this NetworkManager lacks 802-11-wireless.bgscan —"
-    echo "          verify bgscan on the box: wpa_cli -i wlan0 status"
+    BGSCAN_MISSING=1
   fi
-done
+done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+           | awk -F: '$2=="802-11-wireless"{print $1}')
+if [[ $BGSCAN_MISSING = 1 ]]; then
+  echo "    NOTE: this NetworkManager lacks 802-11-wireless.bgscan —"
+  echo "          verify on the box: wpa_cli -i wlan0 status (rig task)"
+fi
 
 # avahi: keep tapbox.local, drop the extra advertisement chatter — every
 # multicast answer wakes the radio after each DTIM regardless of power

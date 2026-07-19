@@ -748,15 +748,13 @@ class App:
 
             def fetch():
                 try:
-                    # A remote cover request fires at the exact track-
-                    # change instant — when the CDN load and AVDTP are
-                    # busiest on the shared radio. Let the audio win: wait
-                    # out a fresh BUSY marker (bounded) before fetching
-                    # (review P6). Once cached the cover never refetches.
-                    for _ in range(10):
-                        if not _radio.busy():
-                            break
-                        time.sleep(2)
+                    # REVERTED (field 2026-07-18 23:xx): a busy-marker
+                    # wait here deferred every new cover ~20s during
+                    # skip sessions — each next/prev refreshes BUSY, so
+                    # the wait always ran its full course and the screen
+                    # sat on the previous cover / the mosaic. The cover
+                    # is ONE ~50KB fetch ever (disk-cached after), which
+                    # the radio absorbs fine even mid-load.
                     self.artwork(ref, size)
                 finally:
                     self._art_pending.discard(key)
