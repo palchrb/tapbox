@@ -198,8 +198,17 @@ def sync_profile_sections():
             if user not in fetched:  # fetch failed — keep last sweep's list
                 seen.update(e["target"] for e in sec["entries"])
                 continue
+            # Rebuild the list but PRESERVE per-entry settings the parent
+            # set (cache/order/resume) for playlists that persist — the
+            # old wholesale rebuild reset cache to 0 on every sync, which
+            # silently disarmed spotify pre-caching on followed playlists.
+            prev = {e["target"]: e for e in sec["entries"]}
             entries = [{"name": p["name"], "target": p["target"],
-                        "order": "auto", "cache": 0, "resume": True}
+                        "order": prev.get(p["target"], {}).get("order",
+                                                               "auto"),
+                        "cache": prev.get(p["target"], {}).get("cache", 0),
+                        "resume": prev.get(p["target"], {}).get("resume",
+                                                                True)}
                        for p in fetched[user] if p["target"] not in seen]
             seen.update(e["target"] for e in entries)
             if [(e["name"], e["target"]) for e in entries] != \
