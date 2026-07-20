@@ -38,9 +38,10 @@ def make_app(status):
     app.volume_shown = None
     app.vol_mode_until = 0.0
     thumb = Image.new("RGB", (128, 128), (10, 10, 10))
-    app.artwork = lambda ref, size=110: (SYNC.append(ref), thumb)[1] if ref \
-        else None
-    app.artwork_async = lambda ref, size=110: (ASYNC.append(ref), None)[1]
+    app.artwork = lambda ref, size=110, square=False: \
+        (SYNC.append(ref), thumb)[1] if ref else None
+    app.artwork_async = lambda ref, size=110, square=False: \
+        (ASYNC.append(ref), None)[1]
     return app
 
 
@@ -89,8 +90,8 @@ app = make_app({"source": "spotify", "title": "A",
                 "artwork": "http://i.scdn.co/a.jpg",
                 "artwork_local": "/cache/mosaic.jpg"})
 thumb = Image.new("RGB", (128, 128), (10, 10, 10))
-app.artwork = lambda ref, size=110: (SYNC.append(ref), thumb)[1]
-app.artwork_async = lambda ref, size=110: (ASYNC.append(ref), None)[1]
+app.artwork = lambda ref, size=110, square=False: (SYNC.append(ref), thumb)[1]
+app.artwork_async = lambda ref, size=110, square=False: (ASYNC.append(ref), None)[1]
 img = Image.new("RGB", (ui.W, ui.H), (0, 0, 0))
 SYNC.clear(); ASYNC.clear()
 app.render_now(ImageDraw.Draw(img), img)   # first paint: mosaic fallback
@@ -130,7 +131,7 @@ app = object.__new__(ui.App)
 app.artwork_cache = {}
 app._art_pending = set()
 app._art_fails = {}
-app._art_key = lambda ref, size: (ref, size)
+app._art_key = lambda ref, size, square=False: (ref, size)
 URL = "http://i.scdn.co/never-resolves.jpg"
 
 
@@ -187,7 +188,7 @@ def fresh_app():
     a.artwork_cache = {}
     a._art_pending = set()
     a._art_fails = {}
-    a._art_key = lambda ref, size: (ref, size)
+    a._art_key = lambda ref, size, square=False: (ref, size)
     return a
 
 

@@ -41,7 +41,7 @@ import threading
 import time
 import urllib.request
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for _p in (_HERE, "/usr/local/lib/tapbox-py"):
@@ -68,9 +68,10 @@ UI_ART_DIR = os.path.join(
 UI_ART_MAX_FILES = int(os.environ.get("TAPBOX_UI_ART_MAX", "400"))
 
 
-def _art_disk(ref, size):
+def _art_disk(ref, size, square=False):
     import hashlib
-    h = hashlib.sha1(f"{ref}|{size}".encode()).hexdigest()[:16]
+    tag = f"{ref}|{size}|{'sq' if square else 'fit'}"
+    h = hashlib.sha1(tag.encode()).hexdigest()[:16]
     return os.path.join(UI_ART_DIR, f"{h}.jpg")
 
 
@@ -720,21 +721,22 @@ class App:
         return [e for s in (self.library or {}).get("sections", [])
                 for e in s.get("entries", [])]
 
-    def _art_key(self, ref, size):
+    def _art_key(self, ref, size, square=False):
         """Cache key for one artwork. Local files carry their mtime, so a
         re-uploaded category logo (same path, new content) refreshes on
-        the next render instead of showing the old picture forever."""
+        the next render instead of showing the old picture forever. The
+        square flag namespaces cover crops from letterbox-fit logos."""
         if not ref.startswith("http"):
             try:
-                return (ref, size, int(os.path.getmtime(ref)))
+                return (ref, size, square, int(os.path.getmtime(ref)))
             except OSError:
                 pass
-        return (ref, size)
+        return (ref, size, square)
 
-    def artwork(self, ref, size=110):
+    def artwork(self, ref, size=110, square=False):
         if not ref:
             return None
-        key = self._art_key(ref, size)
+        key = self._art_key(ref, size, square)
         cached = self.artwork_cache.get(key)
         if isinstance(cached, float):  # failed earlier — when to retry
             if time.monotonic() < cached:
@@ -750,7 +752,7 @@ class App:
                 # the audio stream for the radio (field 2026-07-18). One
                 # fetch per cover EVER; thumbnails persist under
                 # CACHE_DIR/ui-art (prune_cache leaves it alone).
-                disk = _art_disk(ref, size)
+                disk = _art_disk(ref, size, square)
                 img = None
                 try:
                     img = Image.open(disk)
@@ -786,12 +788,22 @@ class App:
             else:
                 img = Image.open(ref)
             img = img.convert("RGB")
-            img.thumbnail((size, size))
+            if square:
+                # Fill the tile: scale to cover, then centre-crop to a
+                # square. Non-square source art (NRK series/episodes with
+                # no squareImage fall back to a 16:9 banner) otherwise
+                # thumbnailed to ~half height and floated in the slot —
+                # field 2026-07-20 'album art halvparten så høy'.
+                img = ImageOps.fit(img, (size, size), Image.LANCZOS)
+            else:
+                img.thumbnail((size, size))
             if fetched:
-                _art_disk_save(img, _art_disk(ref, size))
-            # drop stale versions of the same file (older mtime keys)
+                _art_disk_save(img, _art_disk(ref, size, square))
+            # drop stale versions of the same file (older mtime keys) —
+            # keyed on (ref, size, square) so a cover crop and a logo fit
+            # of the same source never evict each other
             for k in [k for k in self.artwork_cache
-                      if k[:2] == (ref, size) and k != key]:
+                      if k[:3] == (ref, size, square) and k != key]:
                 del self.artwork_cache[k]
             self.artwork_cache[key] = img
             self._art_fails.pop(key, None)
@@ -813,15 +825,15 @@ class App:
             self.artwork_cache[key] = time.monotonic() + backoff
             return None
 
-    def artwork_async(self, ref, size=110):
+    def artwork_async(self, ref, size=110, square=False):
         """artwork() that never touches the network on the render thread:
         a remote cover is fetched in the background and the view repaints
         when it lands. Local files still decode inline."""
         if not ref:
             return None
         if not ref.startswith("http"):
-            return self.artwork(ref, size)
-        key = self._art_key(ref, size)
+            return self.artwork(ref, size, square)
+        key = self._art_key(ref, size, square)
         cached = self.artwork_cache.get(key)
         if isinstance(cached, float):  # failed recently — retry when due
             if time.monotonic() < cached:
@@ -840,7 +852,7 @@ class App:
                     # sat on the previous cover / the mosaic. The cover
                     # is ONE ~50KB fetch ever (disk-cached after), which
                     # the radio absorbs fine even mid-load.
-                    self.artwork(ref, size)
+                    self.artwork(ref, size, square)
                 finally:
                     self._art_pending.discard(key)
                     self.dirty = True
@@ -1452,9 +1464,9 @@ class App:
         local = st.get("artwork_local")
         art = None
         if ep_art and not str(ep_art).startswith("http"):
-            art = self.artwork(ep_art, 128)
+            art = self.artwork(ep_art, 128, square=True)
         if art is None and ep_art and str(ep_art).startswith("http"):
-            art = self.artwork_async(ep_art, 128)  # non-blocking; may be None
+            art = self.artwork_async(ep_art, 128, square=True)  # bg; may be None
         if art is None:
             # New remote cover still loading (track change): keep showing
             # the PREVIOUS cover for this target instead of flashing the
@@ -1465,7 +1477,7 @@ class App:
             if prev_art is not None and prev_target == st.get("target"):
                 art = prev_art
         if art is None and local:
-            art = self.artwork(local, 128)  # offline-proof fallback
+            art = self.artwork(local, 128, square=True)  # offline fallback
         if art is not None:
             self._now_art_prev = (st.get("target"), art)
         if art:
@@ -1731,7 +1743,7 @@ class App:
                 and (self.status or {}).get("spotify_offline"):
             # warn BEFORE the kid presses play on a tile that can't work
             d.text((10, 4), "No internet", font=F_SMALL, fill=WARN)
-        art = self.artwork_async(e.get("image"), 176)
+        art = self.artwork_async(e.get("image"), 176, square=True)
         ax, ay = (W - 176) // 2, 24
         if art:
             img.paste(art, ((W - art.width) // 2, ay))

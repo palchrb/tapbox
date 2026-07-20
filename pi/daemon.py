@@ -942,12 +942,36 @@ class Orchestrator:
                                    count - 1]
                         else:
                             cmd = ["playlist-prev"]
+                elif action == "next":
+                    # Symmetric with prev's wrap above: at the LAST slot
+                    # playlist-next is a no-op, so 'next' got stuck and
+                    # fell through to 'nothing to control' — with the
+                    # queue rotated so slot 0 holds the resumed episode,
+                    # the kid could never reach it by pressing next (only
+                    # prev or a natural playout wrapped around). Field
+                    # 2026-07-20, the 3-episode NRK series 'ninas-
+                    # hemmelige-reise': next stuck on ep 2, only prev
+                    # reached ep 3. Wrap to the first slot instead.
+                    ppos = mpv_get("playlist-pos")
+                    count = mpv_get("playlist-count")
+                    if isinstance(ppos, int) and isinstance(count, int) \
+                            and count > 1 and ppos >= count - 1:
+                        cmd = ["set_property", "playlist-pos", 0]
+                    else:
+                        cmd = ["playlist-next"]
                 else:
-                    cmd = {"playpause": ["cycle", "pause"],
-                           "next": ["playlist-next"]}[action]
-                if mpv_ipc(cmd).get("error") == "success":
+                    cmd = ["cycle", "pause"]  # playpause
+                # A live mpv session OWNS the transport: a non-success
+                # (end of queue, a transient refusal) must NOT fall
+                # through to the spotify-replay path and log the
+                # misleading 'nothing to control' (which also risked
+                # respawning the wrong source).
+                res = mpv_ipc(cmd)
+                if res.get("error") == "success":
                     log(f"{action} -> mpv")
-                    return {"routed": "mpv"}
+                else:
+                    log(f"{action} -> mpv (no-op: {res.get('error')})")
+                return {"routed": "mpv"}
             except OSError:
                 pass  # child starting up; fall through but don't respawn
         # ONE short status probe feeds rules 2+3. The old shape called
