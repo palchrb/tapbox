@@ -275,20 +275,36 @@ class Orchestrator:
         """The box stays Spotify Connect-discoverable while mpv plays; if the
         user picks it from the phone mid-podcast, both would fight over the
         BT output. Watch for that takeover and yield mpv gracefully (its
-        bookmark is saved, so the card resumes later)."""
+        bookmark is saved, so the card resumes later).
+
+        Two guards keep this from firing on the box's OWN Spotify (self.child
+        is player.py for spotify targets too, so 'child alive + spotify
+        playing' is NOT proof of a phone): only when the current source is
+        mpv (a podcast is what's playing, so a Spotify session appearing IS
+        an intrusion), AND the session carries a non-box play_origin. Without
+        them the box's boot-resume into a Spotify playlist logged a phantom
+        'spotify took over (phone)' and killed its own player (field
+        2026-07-20 08:18:39)."""
         while True:
             _tick(4)
             try:
                 with self.lock:
                     alive = self._mpv_alive()
+                    source = self.source
                     age = time.monotonic() - self.child_started
-                # grace period: player.py pauses spotify right after starting,
-                # don't mistake that brief overlap for a takeover
-                if not alive or age < 10:
+                # only a podcast/local session can BE taken over; the box's
+                # own Spotify child is not a takeover of anything
+                if not alive or source != "mpv" or age < 10:
                     continue
-                if spotify_playing():
+                # grace period covered by age>=10s: player.py pauses spotify
+                # right after starting; don't mistake that brief overlap
+                st = go_status()
+                origin = st.get("play_origin")
+                phone = spotify_playing(st) and origin not in (
+                    "go-librespot", "", None)
+                if phone:
                     with self.lock:
-                        if self._mpv_alive():
+                        if self._mpv_alive() and self.source == "mpv":
                             log("spotify took over (phone) — yielding mpv")
                             self._stop_child()
                             self.source = "spotify"
