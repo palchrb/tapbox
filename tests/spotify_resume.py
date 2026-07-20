@@ -179,7 +179,20 @@ daemon.subprocess.run = _sp.run
 calls2, stati = [], []
 s.go = lambda path, timeout=5, body=None: calls2.append((path, body))
 s.status = lambda timeout=5: stati.pop(0)
-s.time.sleep = lambda n: None
+
+
+class TimeShim:
+    """No-op sleep scoped to the spotify module's `time` attribute —
+    never the shared time module: daemon's live background threads use
+    it too and would spin (QA review Q2, a real flake)."""
+    sleep = staticmethod(lambda n: None)
+
+    def __getattr__(self, name):
+        import time as _time
+        return getattr(_time, name)
+
+
+s.time = TimeShim()
 
 stati[:] = [{"track": {"uri": "spotify:track:a", "position": 90000}}]
 s.command("prev")

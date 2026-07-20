@@ -8,6 +8,7 @@ exceeded, /next timeouts). Respects an operator's PS-off boot state."""
 import os
 import sys
 import tempfile
+import threading
 import time as _time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -138,24 +139,21 @@ def run_governor(get_seq, streaming_seq, hyst="0", fresh=True):
         def clear(self):
             pass
 
-    def fake_sleep(_s):
-        if _s == 10:  # the baseline poll's pacing — free in tests
-            return
-
     daemon.subprocess.run = fake_run
     daemon._streaming_now = lambda: seq.pop(0)
     real_kick = daemon._PS_KICK
     daemon._PS_KICK = FakeKick()
     real_tick = daemon._tick
     daemon._tick = lambda s: None  # the baseline poll's 10s pacing
-    real_sleep = _time.sleep
-    _time.sleep = fake_sleep
+    # NOTE: every wait in the governor goes through daemon._tick or
+    # _PS_KICK.wait — never patch the global time module's sleep here:
+    # daemon's live arbiter/stall threads share it and spin, stealing
+    # scripted ticks (QA review Q2, a real flake).
     try:
         daemon._wifi_ps_governor()
     except StopLoop:
         pass
     finally:
-        _time.sleep = real_sleep
         daemon._PS_KICK = real_kick
         daemon._tick = real_tick
     return calls
@@ -202,21 +200,35 @@ print("10. hysteresis: short idle keeps PS off (AP link survives) OK")
 
 # 10b. a LONG idle (clock past the window) does flip back to 'on'.
 # Clock calls in the loop: idle-start stamp, then one compare per idle
-# tick — script it so the second idle tick lands past the window.
-real_mono = daemon.time.monotonic
+# tick — script it so the second idle tick lands past the window. The
+# fake is scoped to daemon.time (a shim module attribute, never the
+# shared time module: Q2) and gated to THIS thread, so the daemon's
+# own live threads keep the real clock and can't steal scripted values.
 clock = iter([1000.0, 1000.0, 5000.0])
 last = [1000.0]
+_ME = threading.current_thread()
+
 
 def fake_mono():
+    if threading.current_thread() is not _ME:
+        return _time.monotonic()
     last[0] = next(clock, last[0])
     return last[0]
 
-daemon.time.monotonic = fake_mono
+
+class TimeShim:
+    monotonic = staticmethod(fake_mono)
+
+    def __getattr__(self, name):
+        return getattr(_time, name)
+
+
+daemon.time = TimeShim()
 try:
     calls = run_governor(["Power save: on\n"], [True, False, False],
                          hyst="3600")
 finally:
-    daemon.time.monotonic = real_mono
+    daemon.time = _time
 sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], f"long idle must flip PS on: {sets}"
 print("10b. long idle past the window flips PS back on OK")

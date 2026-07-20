@@ -71,7 +71,20 @@ bt_mod.btbus.disconnect_device = (
     lambda mac: (CALLS.append(("disconnect", mac)), (True, ""))[1])
 bt_mod.connect = lambda mac: CALLS.append(("connect", mac)) or True
 bt_mod.ensure = lambda: CALLS.append(("ensure", None)) or True
-bt_mod.time.sleep = lambda s: None  # skip the teardown settle delay
+
+
+class TimeShim:
+    """Skip bt.py's teardown settle delay — scoped to the bt module's
+    own `time` attribute. Mutating the shared time module's sleep while
+    daemon's arbiter/stall threads are live made them spin and steal
+    this file's scripted watchdog ticks (QA review Q2, a real flake)."""
+    sleep = staticmethod(lambda s: None)
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+bt_mod.time = TimeShim()
 
 with open(bt_mod.MAC_FILE, "w") as f:
     f.write(MAC + "\n")
@@ -84,7 +97,7 @@ os.remove(bt_mod.MAC_FILE)
 assert bt_mod.reconnect() is True
 assert CALLS == [("ensure", None)], CALLS
 print("3. reconnect without a configured device falls back to ensure OK")
-bt_mod.time.sleep = time.sleep
+bt_mod.time = time
 
 
 # --- the watchdog thread against fakes -------------------------------------

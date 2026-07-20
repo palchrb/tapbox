@@ -10,6 +10,7 @@ at weak signal — A2DP stutter + battery on the shared radio)."""
 import os
 import sys
 import tempfile
+import time as _time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
@@ -63,6 +64,18 @@ netmgmt.hotspot_active = lambda: True
 netmgmt.WATCHDOG_DELAY_S = 0
 
 
+class TimeShim:
+    """Scripted sleep scoped to netmgmt's `time` attribute — never the
+    shared time module (mutating that while other threads live is the
+    Q2 flake mechanism); monotonic etc. stay real."""
+
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        return getattr(_time, name)
+
+
 def run_watchdog(ticks):
     left = [ticks]
 
@@ -71,14 +84,13 @@ def run_watchdog(ticks):
         if left[0] < 0:
             raise StopLoop
 
-    real = netmgmt.time.sleep
-    netmgmt.time.sleep = fake_sleep
+    netmgmt.time = TimeShim(fake_sleep)
     try:
         netmgmt._wifi_watchdog()
     except StopLoop:
         pass
     finally:
-        netmgmt.time.sleep = real
+        netmgmt.time = _time
 
 
 real_stations = netmgmt._hotspot_stations  # keep the real parser for #7
