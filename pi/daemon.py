@@ -518,6 +518,14 @@ class Orchestrator:
 
     def play(self, target, fresh=False, episode=None, reverse=False,
              cache=None, resume=True, boot=False):
+        # The backend probe/start (systemctl is-active, and up to 30s of
+        # systemctl start against a parked unit) must never run under
+        # ORCH.lock: every /status reader — the screen's 1/s poll —
+        # queued behind it (review 2026-07-18 R2). Probing BEFORE the
+        # lock is equivalent: a parked unit can't satisfy the
+        # resume-in-place shortcut anyway (its API is down), and when
+        # the shortcut does hit, the extra is-active probe is a no-op.
+        backend_ok = not is_spotify(target) or self._ensure_spotify_backend()
         with self.lock:
             if boot:
                 # The boot-resume thread is the LAST of three possible
@@ -569,7 +577,7 @@ class Orchestrator:
                                 "resumed": True}
                 except OSError:
                     pass  # session gone — fall through to respawn (bookmark)
-            if is_spotify(target) and not self._ensure_spotify_backend():
+            if is_spotify(target) and not backend_ok:
                 # parked and genuinely offline: say so NOW — spawning a
                 # player that waits 30s for a session that cannot come
                 # just looks like a dead box (field report)
@@ -669,8 +677,8 @@ class Orchestrator:
         if fallback and current_output()["output"] == device:
             # converge anyway: a deferred mpv switch (transport wasn't up
             # when the user flipped the output) applies on this announce
-            with self.lock:
-                if device == "bt" and _bt_transport_ready():
+            if device == "bt" and _bt_transport_ready():
+                with self.lock:
                     if self._mpv_alive():
                         try:
                             mpv_ipc(["set_property", "audio-device",
@@ -678,12 +686,14 @@ class Orchestrator:
                             log("output bt: deferred mpv switch applied")
                         except OSError:
                             pass
-                    # idempotent: rewrites + restarts only when the config
-                    # still points elsewhere (a deferred switch)
-                    if _retarget_go_librespot(pcm):
-                        _note_go_restart()
-                        log("output bt: deferred go-librespot retarget "
-                            "applied")
+                # idempotent: rewrites + restarts only when the config
+                # still points elsewhere (a deferred switch). Runs
+                # OUTSIDE the lock — it's a systemctl restart, and every
+                # /status reader queued behind it (review 2026-07-18 R2)
+                if _retarget_go_librespot(pcm):
+                    _note_go_restart()
+                    log("output bt: deferred go-librespot retarget "
+                        "applied")
             return {"unchanged": True, "output": device}
         with self.lock:
             os.makedirs(STATE_DIR, exist_ok=True)
@@ -711,60 +721,72 @@ class Orchestrator:
                         ).get("error") == "success"
                     except OSError:
                         pass
-            if device == "bt" and not _bt_transport_ready():
-                # same rule as mpv above: don't bounce go-librespot into a
-                # device with no transport — the restart's wifi burst lands
-                # exactly during AVDTP setup on the SHARED radio (the
-                # coexistence load that crashes the Zero's BT firmware)
-                restarted = False
-            else:
-                try:
-                    st = go_status(timeout=2)
-                except OSError:
-                    st = {}  # api busy/flapping — the checks below cope
-                # box-initiated playback only: a phone streaming its own
-                # music through the box must not get hijacked into the
-                # box's old target after the restart
-                spot_was_playing = (spotify_playing(st)
-                                    and st.get("play_origin")
-                                    in ("go-librespot", "", None))
-                # A resume IN FLIGHT loads its track PAUSED (play_spotify
-                # loads, seeks, then unpauses) — so 'was playing' misses
-                # it, the restart killed the loading session, and nobody
-                # picked the baton back up: the player child waited 20s on
-                # a dead session, resumed into an EMPTY new one (silent
-                # no-op) and exited (field 2026-07-18 18:01:36 — box came
-                # up mute). A live spotify player child IS playback intent.
-                spot_resuming = (self.child is not None
-                                 and self.child.poll() is None
-                                 and self.source == "spotify")
-                restarted = _retarget_go_librespot(pcm)
-                if restarted:
-                    _note_go_restart()
-                if restarted and (spot_was_playing or spot_resuming) \
-                        and self.target and is_spotify(self.target):
-                    # unlike mpv (live IPC retarget), the restart killed
-                    # the session mid-song — bring the music back where
-                    # it was (player.py waits for the session, then
-                    # resumes from the bookmark). --exact: this is an
-                    # interruption, not a re-tap — even 0:08 into a song
-                    # must come back at 0:08, or it reads as a restart.
-                    # Stop a still-waiting old player first: left alive it
-                    # would fire ITS resume into the fresh session later.
-                    self._stop_child()
-                    self._spawn(self.target, resume=self.resume, exact=True)
-                    log("output switch: resuming spotify from the bookmark")
-            log(f"output -> {device} (pcm {pcm}, "
-                f"mpv {'switched' if mpv_switched else 'n/a'}, "
-                f"go-librespot {'restarted' if restarted else 'unchanged'})")
-            out = {"output": device, "pcm": pcm,
-                   "mpv_switched": mpv_switched,
-                   "spotify_restarted": restarted}
-            if device == "local" and not _i2s_card_present():
-                out["warning"] = ("no I2S sound card found — is the HAT "
-                                  "mounted and hat-audio-on + reboot done? "
-                                  "Playback will be silent until then.")
-            return out
+            # A resume IN FLIGHT loads its track PAUSED (play_spotify
+            # loads, seeks, then unpauses) — so 'was playing' misses
+            # it, the restart killed the loading session, and nobody
+            # picked the baton back up: the player child waited 20s on
+            # a dead session, resumed into an EMPTY new one (silent
+            # no-op) and exited (field 2026-07-18 18:01:36 — box came
+            # up mute). A live spotify player child IS playback intent.
+            # Snapshot it (and the replay coordinates) under the lock;
+            # the slow go-librespot surgery below runs WITHOUT it.
+            spot_resuming = (self.child is not None
+                             and self.child.poll() is None
+                             and self.source == "spotify")
+            resume_target, resume_flag = self.target, self.resume
+        # From here on: status probe + systemctl restart, seconds of I/O
+        # that used to hold ORCH.lock and froze every /status reader —
+        # the screen's 1/s poll — for the whole switch (review R2).
+        if device == "bt" and not _bt_transport_ready():
+            # same rule as mpv above: don't bounce go-librespot into a
+            # device with no transport — the restart's wifi burst lands
+            # exactly during AVDTP setup on the SHARED radio (the
+            # coexistence load that crashes the Zero's BT firmware)
+            restarted = False
+        else:
+            try:
+                st = go_status(timeout=2)
+            except OSError:
+                st = {}  # api busy/flapping — the checks below cope
+            # box-initiated playback only: a phone streaming its own
+            # music through the box must not get hijacked into the
+            # box's old target after the restart
+            spot_was_playing = (spotify_playing(st)
+                                and st.get("play_origin")
+                                in ("go-librespot", "", None))
+            restarted = _retarget_go_librespot(pcm)
+            if restarted:
+                _note_go_restart()
+            if restarted and (spot_was_playing or spot_resuming) \
+                    and resume_target and is_spotify(resume_target):
+                # unlike mpv (live IPC retarget), the restart killed
+                # the session mid-song — bring the music back where
+                # it was (player.py waits for the session, then
+                # resumes from the bookmark). --exact: this is an
+                # interruption, not a re-tap — even 0:08 into a song
+                # must come back at 0:08, or it reads as a restart.
+                # Stop a still-waiting old player first: left alive it
+                # would fire ITS resume into the fresh session later.
+                with self.lock:
+                    if self.target == resume_target:
+                        # (unless a fresh tap changed the target while
+                        # the lock was down — that play owns the child)
+                        self._stop_child()
+                        self._spawn(resume_target, resume=resume_flag,
+                                    exact=True)
+                        log("output switch: resuming spotify from the "
+                            "bookmark")
+        log(f"output -> {device} (pcm {pcm}, "
+            f"mpv {'switched' if mpv_switched else 'n/a'}, "
+            f"go-librespot {'restarted' if restarted else 'unchanged'})")
+        out = {"output": device, "pcm": pcm,
+               "mpv_switched": mpv_switched,
+               "spotify_restarted": restarted}
+        if device == "local" and not _i2s_card_present():
+            out["warning"] = ("no I2S sound card found — is the HAT "
+                              "mounted and hat-audio-on + reboot done? "
+                              "Playback will be silent until then.")
+        return out
 
     def shuffle(self, enabled):
         """mpv: reshuffle/restore the playlist order (current track keeps
