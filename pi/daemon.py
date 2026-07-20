@@ -2727,7 +2727,11 @@ def main():
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
-    _wifi_boot_reenable()
+    # off the bind path (review 2026-07-18 B1): the re-enable forks
+    # rfkill/iw/nmcli probes with up-to-5s timeouts, and running it
+    # synchronously here delayed "listening" — the screen sits on its
+    # splash waiting for /system until the server is up
+    threading.Thread(target=_wifi_boot_reenable, daemon=True).start()
     threading.Thread(target=_wifi_watchdog, daemon=True).start()
     threading.Thread(target=_battery_runtime_tracker, daemon=True).start()
     threading.Thread(target=_spotify_supervisor, daemon=True).start()
