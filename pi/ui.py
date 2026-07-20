@@ -434,10 +434,60 @@ def _batt_color(pct, plugged):
     return color
 
 
+def _wifi_glyph(draw, cx, cy, color):
+    """A wifi fan — dot + two arcs rising up-left/up-right — anchored at
+    its base dot (cx, cy). ~13px wide, ~9px tall."""
+    draw.ellipse([cx - 1, cy - 1, cx + 1, cy + 1], fill=color)
+    draw.arc([cx - 3, cy - 4, cx + 3, cy + 2], 200, 340, fill=color)
+    draw.arc([cx - 6, cy - 7, cx + 6, cy + 5], 205, 335, fill=color)
+
+
+def _bt_glyph(draw, cx, top, bot, color):
+    """The Bluetooth rune around the spine x=cx. dx sets the width."""
+    dx = 4
+    q, tq = top + (bot - top) // 4, bot - (bot - top) // 4
+    tp, bp, mid = (cx, top), (cx, bot), (cx, (top + bot) // 2)
+    ur, lr = (cx + dx, q), (cx + dx, tq)
+    ul, ll = (cx - dx, q), (cx - dx, tq)
+    # spine + right zigzag (the two triangles) + the left crossing stubs
+    for a, b in ((tp, bp), (tp, ur), (ur, mid), (mid, lr), (lr, bp),
+                 (ul, mid), (mid, ll)):
+        draw.line([a, b], fill=color)
+
+
+def _conn_icons(draw, system, right_x, y, h):
+    """Wi-Fi + Bluetooth status, just left of the battery. Always shown:
+    GOOD when connected, DIM + a slash when not — so 'why won't it play'
+    (speaker off, or wifi down) is legible at a glance instead of only
+    surfacing in a popup. State comes from the /system snapshot the UI
+    already polls; no extra probes. Returns the x it consumed leftward."""
+    wifi = (system or {}).get("wifi") or {}
+    wifi_on = bool(wifi.get("ip")) and not wifi.get("hotspot")
+    # bt_ready is the configured speaker's live A2DP transport (daemon
+    # computes it cheaply); absent key (older daemon) -> treat as no icon
+    bt_key = "bt_ready" in (system or {})
+    bt_on = bool((system or {}).get("bt_ready"))
+
+    cy = y + h - 2
+    x = right_x
+    if bt_key:
+        x -= 9
+        _bt_glyph(draw, x, y + 1, y + h - 1, GOOD if bt_on else DIM)
+        if not bt_on:
+            draw.line([x - 5, y + h + 1, x + 5, y - 1], fill=DIM)
+        x -= 12
+    x -= 4
+    _wifi_glyph(draw, x, cy, GOOD if wifi_on else DIM)
+    if not wifi_on:
+        draw.line([x - 7, y + h + 1, x + 7, y - 1], fill=DIM)
+    return x - 8
+
+
 def battery_corner(draw, system):
     """Battery gauge top-right — on every view. Just the bar (color
     carries the message: green ok/charging, orange <=20, red <=10);
-    the exact percent lives in the PWA."""
+    the exact percent lives in the PWA. Wi-Fi + BT status sit to its
+    left."""
     pct = (system or {}).get("battery")
     plugged = (system or {}).get("plugged")
     x, y, w, h = W - 32, 8, 24, 11
@@ -447,6 +497,7 @@ def battery_corner(draw, system):
     if pct is not None:
         fill = max(2, int((w - 4) * min(pct, 100) / 100))
         draw.rectangle([x + 2, y + 2, x + 2 + fill, y + h - 2], fill=color)
+    _conn_icons(draw, system, x - 6, y, h)
 
 
 MARQUEE_STEP_S = 0.35  # how fast a too-long selected label slides

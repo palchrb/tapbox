@@ -1455,6 +1455,18 @@ class Handler(BaseHTTPRequestHandler):
                 st["spotify_user"] = _spotify.logged_in_user()  # reconnects
             st["spotify_open"] = _spotify.zeroconf_open()
             st["spotify_api"] = _spotify_web.configured()
+            # bt_ready feeds the screen's connection icon — present ONLY
+            # when a speaker is configured (no key -> no icon), True when
+            # its A2DP transport is live. The 40s post-boot confusion
+            # (log 2026-07-20: wifi up, speaker off, nothing playing)
+            # reads at a glance instead of only via the popup.
+            try:
+                with open(_bt.MAC_FILE) as f:
+                    _mac = f.read().strip()
+            except OSError:
+                _mac = ""
+            if _mac:
+                st["bt_ready"] = _bt_transport_ready()
             self._send(200, st)
         elif url.path == "/bt":
             self._send(200, bt_status())
