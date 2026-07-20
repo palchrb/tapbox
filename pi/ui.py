@@ -96,6 +96,22 @@ SYSTEM_POLL_S = 30.0
 CONTROL_TIMEOUT = 5   # play/pause/next/prev hit the LOCAL daemon — if it
                       # can't answer in 5s the backend is wedged; fail fast
                       # so buttons keep working instead of freezing the UI
+# The render loop is single-threaded: any daemon poll it makes blocks
+# every button until it returns. /system + /settings + /library used the
+# 10s default, so a daemon slowed by go-librespot's blocking API (a track
+# load stalls the whole HTTP layer — field 2026-07-20 12:54: control
+# TimeoutError while spamming prev/playpause) froze the screen ~30s per
+# refresh. Cap them at 2s like /status: a slow daemon shows one stale
+# frame, never a dead screen.
+RENDER_HTTP_TIMEOUT = 2.0
+# Belt-and-suspenders: if the render loop ever wedges for real (a stuck
+# SPI push, a runaway decode), nothing restarts tapbox-ui until the
+# 60-min idle shutdown — every OTHER TapBox component self-heals. A
+# heartbeat the loop stamps each pass; if it goes stale past this, exit
+# so systemd (Restart=always) brings the screen back in seconds. Set
+# above the longest legit inline block (a 130s BT pair) so it never
+# false-fires; 0 disables.
+UI_WATCHDOG_S = float(os.environ.get("TAPBOX_UI_WATCHDOG", "180"))
 NOW_RETURN_S = 10     # idle this long in a browse menu while music plays ->
                       # snap back to now-playing (once you left it, the only
                       # way back was re-tapping the same episode)
@@ -641,8 +657,10 @@ class App:
         if now - self.last_system > SYSTEM_POLL_S:
             self.last_system = now
             try:
-                self._set("system", api_get("/system"))
-                self._set("settings", api_get("/settings"))
+                self._set("system", api_get("/system",
+                                            timeout=RENDER_HTTP_TIMEOUT))
+                self._set("settings", api_get("/settings",
+                                              timeout=RENDER_HTTP_TIMEOUT))
                 # brightness may have changed from the PWA — apply live
                 self.display.set_brightness(
                     self.settings.get("screen_brightness", 100))
@@ -692,7 +710,7 @@ class App:
             return
         self._lib_at = now
         try:
-            self.library = api_get("/library")
+            self.library = api_get("/library", timeout=RENDER_HTTP_TIMEOUT)
         except OSError:
             self.library = {"sections": []}
 
@@ -1771,6 +1789,22 @@ class App:
             return False
         return time.monotonic() - self.last_input > t
 
+    def _render_watchdog(self):
+        """Restart tapbox-ui if the single render loop wedges. The loop
+        stamps _loop_beat every pass; if it goes stale past UI_WATCHDOG_S
+        the loop is stuck (a hung SPI push, a runaway decode) and no
+        button will ever register again — so exit and let systemd
+        (Restart=always) bring the screen back in seconds instead of the
+        kid staring at a frozen frame until the idle shutdown. The
+        threshold sits above the longest legitimate inline block (a BT
+        pair, ~130s), so a parent mid-pairing is never killed."""
+        while True:
+            time.sleep(5)
+            stale = time.monotonic() - self._loop_beat
+            if stale > UI_WATCHDOG_S:
+                log(f"render loop stalled {stale:.0f}s — restarting UI")
+                os._exit(1)
+
     def run(self):
         # Show the splash immediately, then wait for tapboxd — during boot
         # it is usually a few seconds behind us.
@@ -1815,7 +1849,12 @@ class App:
             self.stack = [("home", 0)]
             self.view = "now"
         log("ready")
+        self._loop_beat = time.monotonic()
+        if UI_WATCHDOG_S:
+            threading.Thread(target=self._render_watchdog,
+                             daemon=True).start()
         while True:
+            self._loop_beat = time.monotonic()
             self.inputs.gesture_mode = (self.view == "now")
             # Screen off = deep idle: long ticks, and a button press sets
             # the wake event so poll() returns INSTANTLY — no latency, and
