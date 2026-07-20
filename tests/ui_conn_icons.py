@@ -81,5 +81,21 @@ cols = pixels({"wifi": {"ip": "192.168.0.151"}, "bt_ready": False})
 assert ui.GOOD in cols and ui.DIM in cols
 print("6. wifi-up + speaker-off shows green wifi and dim BT together OK")
 
+# 7. FAST PATH: a /status update (polled every 1-2s) folds its live
+# bt_connected into self.system (which the icon reads) so the BT icon
+# tracks connect/drop as fast as the popup, not the 30s /system poll.
+stub = type("S", (), {"status": {}, "system": {}, "dirty": False})()
+ui.App._set(stub, "status", {"bt_connected": True, "playing": False})
+assert stub.system.get("bt_ready") is True, stub.system
+ui.App._set(stub, "status", {"bt_connected": False, "playing": False})
+assert stub.system.get("bt_ready") is False, stub.system
+# a /status with no bt_connected key (no speaker configured) must not
+# invent one — else a built-in-only box would sprout a BT icon
+stub2 = type("S", (), {"status": {}, "system": {}, "dirty": False})()
+ui.App._set(stub2, "status", {"playing": True})
+assert "bt_ready" not in stub2.system, stub2.system
+print("7. /status folds live bt_connected into the icon (fast, gated) OK")
+
 print("UI CONN ICONS OK — connection state is legible on every view, "
-      "and BT only shows when a speaker is actually configured.")
+      "BT only shows when a speaker is configured, and it updates as "
+      "fast as the popup.")

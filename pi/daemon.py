@@ -1318,6 +1318,19 @@ class Orchestrator:
                 out["artwork_local"] = None
         out["bt_waiting"], out["bt_ready"], out["bt_lost"] = \
             _bt_wait_state(out["playing"])
+        # Steady 'is the configured speaker connected' for the screen's
+        # status icon. /status polls at 1-2s, so the icon tracks a
+        # connect/drop as fast as the popup does — the /system field
+        # (same value) refreshes only every 30s and lagged visibly
+        # (field 2026-07-20). Present only when a speaker is configured,
+        # so a built-in-only box shows no BT icon.
+        try:
+            with open(_bt.MAC_FILE) as f:
+                _spk = f.read().strip()
+        except OSError:
+            _spk = ""
+        if _spk:
+            out["bt_connected"] = _bt_transport_ready()
         if out["bt_lost"] or out["bt_waiting"]:
             # both speaker popups offer the same escape — A plays on the
             # built-in speaker instead — but only where one exists

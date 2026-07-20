@@ -652,6 +652,16 @@ class App:
         if getattr(self, attr) != value:
             setattr(self, attr, value)
             self.dirty = True
+            # Fast-path the BT status icon: /status (1-2s) carries the
+            # live connected state, so fold it into self.system (which
+            # the icon reads, but the /system poll refreshes only every
+            # 30s) — the icon then tracks connect/drop as fast as the
+            # popup instead of lagging (field 2026-07-20).
+            if attr == "status" and isinstance(value, dict) \
+                    and "bt_connected" in value:
+                if not isinstance(self.system, dict):
+                    self.system = {}
+                self.system["bt_ready"] = value["bt_connected"]
 
     def refresh(self):
         now = time.monotonic()
