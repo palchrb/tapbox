@@ -319,6 +319,22 @@ then
   systemctl daemon-reload
   echo "    bluetooth: rfkill unblock runs before bluetoothd (radio listens from boot)"
 fi
+# bluetoothd dying WITHOUT the firmware-crash kernel signature has no
+# healer: btwatchd goes passive on adapter loss by design (PLAN-bt-dbus.md
+# §1) and the daemon-side recovery only fires on the crash signature — a
+# plain bluetoothd segfault left the box speakerless until reboot (review
+# 2026-07-18 R6). Debian ships bluetooth.service with no Restart= at all;
+# on-failure covers exactly the uncovered case, while clean stops (the
+# recovery's own systemctl stop, an operator's) stay stopped.
+if write_if_changed /etc/systemd/system/bluetooth.service.d/tapbox-restart.conf <<'EOF'
+[Service]
+Restart=on-failure
+RestartSec=5
+EOF
+then
+  systemctl daemon-reload
+  echo "    bluetooth: bluetoothd restarts itself after a crash (on-failure)"
+fi
 systemctl enable --now bluetooth.service
 # Debian bookworm ships the daemon as bluealsa.service; newer releases as bluealsad.service
 systemctl enable --now bluealsa.service 2>/dev/null \

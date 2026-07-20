@@ -210,9 +210,14 @@ def recover():
         # via rfkill around a second firmware re-attach
         log("==> Still down — radio power-cycle + second re-attach...")
         _run(["rfkill", "block", "bluetooth"], timeout=10)
-        time.sleep(2)
-        _reattach_firmware()
-        _run(["rfkill", "unblock", "bluetooth"], timeout=10)
+        try:
+            time.sleep(2)
+            _reattach_firmware()
+        finally:
+            # the radio must never STAY blocked: anything raised between
+            # block and unblock would leave it down until reboot with no
+            # healer able to reach it (review 2026-07-18 R6)
+            _run(["rfkill", "unblock", "bluetooth"], timeout=10)
         time.sleep(3)
         btbus.adapter_power_on()
         ok = controller_ok()

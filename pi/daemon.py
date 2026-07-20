@@ -1738,7 +1738,12 @@ class Handler(BaseHTTPRequestHandler):
                 cmd = {"/bt/connect": "use", "/bt/forget": "forget",
                        "/bt/disconnect": "disconnect"}[self.path]
                 resume = _bt_quiesce() if cmd == "use" else False
-                r = bt_action([cmd, mac], timeout=90 if cmd == "use" else 30)
+                # 240s, not 90: connect can legitimately run a full
+                # firmware recover() (two re-attach rounds + rfkill
+                # power-cycle) — a 90s SIGKILL could land BETWEEN
+                # rfkill block and unblock and leave the radio down
+                # for good (review 2026-07-18 R6)
+                r = bt_action([cmd, mac], timeout=240 if cmd == "use" else 30)
                 if cmd == "use":
                     _bt_resume(resume)
                 self._send(409 if r is None else 200,
