@@ -384,7 +384,7 @@ def wifi_connect(ssid, password=None):
             tail += "\nsetup hotspot restored — reconnect and retry"
         enabled, cur, ip = wifi_state()
         if code == 0:
-            _strip_bgscan(cur or ssid)
+            _tune_profile(cur or ssid)
             try:
                 net_changed[0]()  # see the hook comment above
             except Exception as e:
@@ -394,15 +394,28 @@ def wifi_connect(ssid, password=None):
         WIFI_LOCK.release()
 
 
-def _strip_bgscan(name):
-    """Best-effort: clear NM's default background scan (simple:30:-70 —
-    a full off-channel sweep every 30s at weak signal: A2DP stutter and
-    battery burn on the shared radio). install.sh does this for the
-    profiles that existed at install time; this covers every profile
-    the portal/PWA creates afterwards. Older NM lacks the property —
-    a nonzero exit is fine, single-AP boxes lose nothing either way."""
+def _tune_profile(name):
+    """Best-effort NM tuning for every profile the portal/PWA creates
+    (install.sh does the same for profiles present at install time):
+
+    - clear the default background scan (simple:30:-70 — a full
+      off-channel sweep every 30s at weak signal: A2DP stutter and
+      battery burn on the shared radio);
+    - disable IPv6 on the connection. The box is IPv4-only end to end
+      (daemon binds 0.0.0.0, go-librespot/pisugar on 127.0.0.1, avahi
+      advertises tapbox.local over IPv4). With only a link-local fe80::
+      and no global route, go-librespot tried Spotify over IPv6 at boot
+      and fatal-crashed 'network is unreachable' before systemd's
+      restart recovered it on IPv4 (field 2026-07-20 08:18:34). Killing
+      IPv6 on the interface removes the whole trap — Go never sees an
+      IPv6 address to try. Applies on the next activation (like the
+      bgscan strip); dual-stack networks just use IPv4 there too.
+
+    Both settle in one nmcli call. Older NM lacking a property exits
+    nonzero — fine, the box loses nothing either way."""
     _nmcli("connection", "modify", "id", name,
-           "802-11-wireless.bgscan", "", timeout=10)
+           "802-11-wireless.bgscan", "",
+           "ipv6.method", "disabled", timeout=10)
 
 
 def _hotspot_profile_exists():
@@ -442,7 +455,7 @@ def wifi_add(ssid, password=None):
         if code != 0:
             return {"ok": False,
                     "output": out.splitlines()[-1] if out else "nmcli failed"}
-        _strip_bgscan(ssid)
+        _tune_profile(ssid)
         return {"ok": True,
                 "output": f"{action} — the box joins it automatically "
                           f"when in range"}

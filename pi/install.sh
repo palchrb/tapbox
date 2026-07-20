@@ -258,16 +258,29 @@ then
   echo "    NetworkManager log level WARN (wpa_supplicant evidence unaffected)"
 fi
 
-# Background wifi scanning OFF (review R1): NM passes bgscan
-# "simple:30:-70" to wpa_supplicant — below -70 dBm that is a full
-# 13-channel off-channel sweep (~1.5-2s of radio absence) every 30s,
-# a macroscopic burst that bypasses the whole BUSY/PAGING marker system
-# and can stutter A2DP mid-stream. The box lives on ONE home AP:
-# roaming scans buy nothing. Guarded: the bgscan property needs a
-# recent NM; older ones just skip with a note.
+# Per-wifi-profile tuning on every saved network. Two knobs, both
+# best-effort (netmgmt._tune_profile does the same for profiles created
+# later via the portal/PWA):
+#   1. Background scanning OFF (review R1): NM passes bgscan
+#      "simple:30:-70" to wpa_supplicant — below -70 dBm that is a full
+#      13-channel off-channel sweep (~1.5-2s of radio absence) every
+#      30s, a macroscopic burst that bypasses the whole BUSY/PAGING
+#      marker system and can stutter A2DP mid-stream. The box lives on
+#      ONE home AP: roaming scans buy nothing.
+#   2. IPv6 DISABLED (energy/boot review 2026-07-20): the box is IPv4
+#      end to end, but with only a link-local fe80:: and no global
+#      route, go-librespot tried Spotify over IPv6 at boot and fatal-
+#      crashed 'network is unreachable' before systemd restarted it on
+#      IPv4. Disabling IPv6 on the connection removes the trap; nothing
+#      on the box (daemon 0.0.0.0, go-librespot/pisugar 127.0.0.1,
+#      avahi over IPv4) needs it, and dual-stack networks use IPv4 too.
+# Applies on the next activation. Guarded: an older NM lacking either
+# property just skips with a note.
 BGSCAN_MISSING=0
 while IFS= read -r c; do
   [[ -n $c ]] || continue
+  nmcli connection modify "$c" ipv6.method disabled 2>/dev/null \
+    && echo "    wifi '$c': IPv6 off (IPv4-only box; no boot-time v6 stalls)"
   if nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null; then
     echo "    wifi '$c': background scanning off (no mid-stream channel sweeps)"
   else

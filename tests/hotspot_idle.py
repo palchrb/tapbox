@@ -34,21 +34,24 @@ netmgmt.wifi_scan = lambda: None
 netmgmt.net_changed[0] = lambda: None
 
 
-def bgscan_stripped():
-    hit = any("802-11-wireless.bgscan" in a for a in NMCLI)
+def tuned():
+    """(bgscan_stripped, ipv6_disabled) across all nmcli calls seen."""
+    bg = any("802-11-wireless.bgscan" in a for a in NMCLI)
+    v6 = any("ipv6.method" in a and "disabled" in a for a in NMCLI)
     NMCLI.clear()
-    return hit
+    return bg, v6
 
 
-# 1. joining via the portal/PWA strips bgscan on the new profile
+# 1. joining via the portal/PWA tunes the new profile: bgscan off + IPv6
+# disabled (the IPv4-only box must not stall on v6 at boot)
 netmgmt.wifi_connect("home", "pass1234")
-assert bgscan_stripped(), "wifi_connect must strip bgscan"
-print("1. wifi_connect strips NM's default bgscan OK")
+assert tuned() == (True, True), "wifi_connect must strip bgscan AND disable IPv6"
+print("1. wifi_connect strips bgscan and disables IPv6 OK")
 
-# 2. pre-provisioning (cabin wifi) strips it too
+# 2. pre-provisioning (cabin wifi) tunes it too
 netmgmt.wifi_add("cabin", "pass1234")
-assert bgscan_stripped(), "wifi_add must strip bgscan"
-print("2. wifi_add strips NM's default bgscan OK")
+assert tuned() == (True, True), "wifi_add must strip bgscan AND disable IPv6"
+print("2. wifi_add strips bgscan and disables IPv6 OK")
 
 
 # --- the hotspot idle timeout, driven through the watchdog loop -----------
