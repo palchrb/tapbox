@@ -88,6 +88,14 @@ DROP_RETRY_S = float(os.environ.get("TAPBOX_RECON_DROP_RETRY", "3"))
 # playing then (the lost path stopped it), so the radio is free.
 RECENT_DROP_S = float(os.environ.get("TAPBOX_RECON_RECENT", "150"))
 RECENT_RETRY_S = float(os.environ.get("TAPBOX_RECON_RECENT_RETRY", "15"))
+# The ladder used to floor at BACKOFF_MAX forever: a speaker switched
+# off for the night still got a ~5s blind page-TX every 5 minutes, all
+# of it on the shared 2.4GHz radio (energy audit 2026-07-20 #5). After
+# this long away we stop scheduling blind pages entirely — every
+# revival path is event-driven and already in place: the speaker paging
+# US (inbound reconnect), RSSI/appearance evidence, the play-press kick
+# file, a retarget, and boot.
+ABSENT_AFTER_S = float(os.environ.get("TAPBOX_RECON_ABSENT_AFTER", "3600"))
 DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_DEBOUNCE", "5"))
 LOCK_RETRY_S = float(os.environ.get("TAPBOX_RECON_LOCK_RETRY", "10"))
 FALLBACK_S = float(os.environ.get("TAPBOX_RECON_FALLBACK", "20"))
@@ -514,9 +522,13 @@ class Reconnector:
             # for many seconds, and each premature local/bt swing restarts
             # go-librespot and yanks mpv's audio device (episode skips)
             self._output("local")
-        fresh = (self.disconnected_since is not None
-                 and time.monotonic() - self.disconnected_since
-                 < RECENT_DROP_S)
+        away_s = time.monotonic() - self.disconnected_since
+        if away_s >= ABSENT_AFTER_S:
+            log(f"speaker away {int(away_s / 60)} min — parking blind pages "
+                "(an inbound page, nearby evidence or a play press wakes "
+                "them instantly)")
+            return  # stay in WAITING, just stop paying for politeness
+        fresh = away_s < RECENT_DROP_S
         self.schedule(min(self.backoff, RECENT_RETRY_S) if fresh
                       else self.backoff, None)
         self.backoff = min(self.backoff * 2, BACKOFF_MAX_S)

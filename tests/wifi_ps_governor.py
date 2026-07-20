@@ -103,12 +103,17 @@ class StopLoop(Exception):
     pass
 
 
-def run_governor(get_seq, streaming_seq, hyst="0"):
+def run_governor(get_seq, streaming_seq, hyst="0", fresh=True):
     """Run the governor: get_seq scripts the baseline get_power_save
     reads (last value repeats), streaming_seq the _streaming_now ticks.
     Returns the iw set-calls made. hyst pins TAPBOX_WIFI_PS_HYST — 0 by
     default so the pre-hysteresis scenarios keep their instant flips."""
     calls = []
+    if fresh:  # a fresh daemon start — no leftover crash note
+        try:
+            os.remove(daemon._PS_OFF_MARKER)
+        except OSError:
+            pass
     gets = list(get_seq)
     seq = list(streaming_seq)
     os.environ["TAPBOX_WIFI_PS_BASELINE_TRIES"] = str(max(2, len(gets)))
@@ -215,6 +220,25 @@ finally:
 sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], f"long idle must flip PS on: {sets}"
 print("10b. long idle past the window flips PS back on OK")
+
+# 11. crash recovery: the previous daemon set PS off (marker on disk)
+# and died mid-stream. The next start must NOT stand down after a 5-min
+# baseline of 'off' reads — it restores PS on immediately, skips the
+# baseline, and manages from there (energy audit 2026-07-20 #1).
+calls = run_governor(["Power save: on\n"], [True])  # dies with PS off
+assert os.path.exists(daemon._PS_OFF_MARKER), "PS-off must leave the marker"
+calls = run_governor(["Power save: off\n"], [False],
+                     fresh=False)  # restart: baseline would read OFF
+sets = [c[-1] for c in calls]
+assert sets[0] == "on", f"restart with marker must restore PS first: {sets}"
+assert not os.path.exists(daemon._PS_OFF_MARKER), "recovery clears the marker"
+print("11. daemon restart with PS left off restores power save at once OK")
+
+# 12. no marker + baseline never sees 'on' -> operator perf-mode is
+# still honored: the governor stands down and sets nothing
+calls = run_governor(["Power save: off\n"], [True, False])
+assert calls == [], f"perf mode must stay untouched: {calls}"
+print("12. deliberate PS-off (perf mode, no marker) still stands down OK")
 
 print("WIFI PS GOVERNOR OK — power save off only while streaming, "
       "battery naps when idle, operator choice respected.")

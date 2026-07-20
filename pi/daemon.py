@@ -109,7 +109,7 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
         break
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from tapbox import spotify_web as _spotify_web  # noqa: E402
-from tapbox.paths import ART_DIR, STATE_DIR  # noqa: E402
+from tapbox.paths import ART_DIR, RUN_DIR, STATE_DIR  # noqa: E402
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
 # these names) keeps calling daemon.<helper>.
@@ -1771,6 +1771,15 @@ def _spotify_bookmarker():
     The per-tick accept rules (box-initiated only, per-context files) live
     in spotify.bookmark_step/save_bookmark."""
     interval = 5
+    # SD hygiene twin of player.py's throttle (energy audit 2026-07-20
+    # #2): 5s ticks used to json+rename every tick — 720 SD bursts/hour
+    # of listening. Write on track change or every 30s; when the tick
+    # stops yielding a bookmark (pause/stop/phone takeover) the last
+    # throttled position flushes immediately — pausing still bookmarks
+    # the pause point, and only a hard power cut can lose <=30s.
+    bm_flush_s = float(os.environ.get("TAPBOX_BOOKMARK_FLUSH", "30"))
+    bm_written = [0.0, None]  # wall clock of last write, track uri
+    bm_pending = None
     while True:
         woke = _bm_wake.wait(interval)
         _bm_wake.clear()
@@ -1797,7 +1806,17 @@ def _spotify_bookmarker():
                 context = _spotify.to_uri(ORCH.target)
             bm = _spotify.bookmark_step(st, context)
             if bm is not None:
-                _spotify.save_bookmark(bm)
+                if (bm.get("uri") != bm_written[1]
+                        or time.monotonic() - bm_written[0] >= bm_flush_s):
+                    _spotify.save_bookmark(bm)
+                    bm_written = [time.monotonic(), bm.get("uri")]
+                    bm_pending = None
+                else:
+                    bm_pending = bm
+            elif bm_pending is not None:
+                _spotify.save_bookmark(bm_pending)
+                bm_written = [time.monotonic(), bm_pending.get("uri")]
+                bm_pending = None
         except Exception:
             pass
 
@@ -2516,6 +2535,24 @@ def _wifi_ps_governor():
     preference) the governor leaves it alone entirely."""
     if os.environ.get("TAPBOX_WIFI_PS_GOVERNOR", "1") != "1":
         return
+    # Crash recovery FIRST: the marker means a previous daemon turned PS
+    # off for a stream and died before turning it back on. Without it,
+    # the baseline loop below reads 'off' for 5 minutes, stands down,
+    # and PS stays off until the next reboot — +30-50mA around the clock
+    # (energy audit 2026-07-20 #1). /run clears at boot, so an operator's
+    # deliberate perf-mode PS-off (no marker) is still honored.
+    if os.path.exists(_PS_OFF_MARKER):
+        try:
+            subprocess.run(["iw", "dev", "wlan0", "set", "power_save", "on"],
+                           timeout=10, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            os.remove(_PS_OFF_MARKER)
+            log("wifi ps governor: restored power save after restart "
+                "(previous daemon died with PS off)")
+            _ps_govern()  # marker proves PS is ours to manage — no baseline
+            return
+        except OSError:
+            pass  # can't read/fix — fall through to the normal baseline
     # The baseline read must WAIT OUT the boot: at daemon start wlan0
     # exists but PS is still off — NetworkManager enables it ~2min later
     # and tapbox-power(save) re-asserts it. Reading 'off' once at t=0 and
@@ -2539,6 +2576,27 @@ def _wifi_ps_governor():
     if not managed:
         log("wifi ps governor: power save never seen on — not managing")
         return
+    _ps_govern()
+
+
+_PS_OFF_MARKER = os.path.join(RUN_DIR, "tapbox-wifi-ps-off")
+
+
+def _ps_mark(off):
+    """Advisory crash-note: 'the governor set PS off'. Best-effort — a
+    failed write only means a crash recovers PS on the next reboot
+    instead of the next daemon start, i.e. exactly today's behavior."""
+    try:
+        if off:
+            with open(_PS_OFF_MARKER, "w"):
+                pass
+        else:
+            os.remove(_PS_OFF_MARKER)
+    except OSError:
+        pass
+
+
+def _ps_govern():
     log("wifi ps governor: managing (ps off while streaming, on when idle)")
     ps_off = False  # current state we set (baseline = on)
     idle_since = None  # when continuous not-streaming began (PS still off)
@@ -2570,6 +2628,7 @@ def _wifi_ps_governor():
                            timeout=10, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
             ps_off = want_off
+            _ps_mark(want_off)
             log("wifi power save off (streaming)" if want_off
                 else "wifi power save on (idle)")
         except Exception as e:

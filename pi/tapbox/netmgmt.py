@@ -166,9 +166,34 @@ def hotspot_active():
     return HOTSPOT_CON in [_nm_unescape(x) for x in out.splitlines()]
 
 
+# AP mode beacons 10x/s with wifi power save off (~40-70mA) — a hotspot
+# nobody is connected to must not run until the battery dies. The
+# watchdog stops it after this long with zero associated clients; an
+# idle-stop also stands down the fresh-box auto-AP until the next boot
+# or an explicit start (else the watchdog would bring it right back).
+HOTSPOT_IDLE_OFF_S = int(os.environ.get("TAPBOX_HOTSPOT_IDLE_OFF", 45 * 60))
+_hs = {"last_client": 0.0, "idle_stopped": False}
+
+
+def _hotspot_stations():
+    """Associated AP clients — 'iw dev wlan0 station dump' prints one
+    'Station <mac>' block per client. Unreadable -> assume someone is
+    there (fail open: the hotspot stays up, never dies mid-setup)."""
+    try:
+        r = subprocess.run(["iw", "dev", "wlan0", "station", "dump"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return 1
+        return sum(1 for ln in r.stdout.splitlines()
+                   if ln.startswith("Station "))
+    except (OSError, subprocess.TimeoutExpired):
+        return 1
+
+
 def start_hotspot():
     """Bring up the setup AP. Scans first — the radio can't scan in AP mode,
     so the portal's network picker serves this cached list."""
+    _hs.update(last_client=time.monotonic(), idle_stopped=False)
     sc = wifi_scan()
     if sc and sc.get("ok") and sc.get("networks"):
         _last_scan.update(networks=sc["networks"], at=time.time())
@@ -221,6 +246,17 @@ def _wifi_watchdog():
             now = time.monotonic()
             if _link_up():
                 _auto.update(last_ok=now, blocked=False)
+                # In AP mode the link reads 'up' too — pay one iw fork
+                # per 30s only while the hotspot runs, and stop it when
+                # nobody has been connected for HOTSPOT_IDLE_OFF_S.
+                if hotspot_active():
+                    if _hotspot_stations() > 0:
+                        _hs["last_client"] = now
+                    elif now - _hs["last_client"] > HOTSPOT_IDLE_OFF_S:
+                        log(f"setup hotspot idle {HOTSPOT_IDLE_OFF_S // 60} "
+                            "min with no clients — stopping to save battery")
+                        _hs["idle_stopped"] = True
+                        stop_hotspot()
                 time.sleep(30)
                 continue
             enabled, ssid, _ip = wifi_state()
@@ -228,9 +264,12 @@ def _wifi_watchdog():
                 if ssid or hotspot_active():
                     _auto.update(last_ok=now, blocked=False)
                 elif not _known_wifi_names():
-                    log("no saved wifi + not connected — starting setup "
-                        "hotspot")
-                    start_hotspot()
+                    if _hs["idle_stopped"]:
+                        pass  # already gave up once — wait for boot/button
+                    else:
+                        log("no saved wifi + not connected — starting setup "
+                            "hotspot")
+                        start_hotspot()
                 else:
                     s = load_settings()
                     auto_min = s.get("wifi_auto_off_min", 0)
@@ -345,6 +384,7 @@ def wifi_connect(ssid, password=None):
             tail += "\nsetup hotspot restored — reconnect and retry"
         enabled, cur, ip = wifi_state()
         if code == 0:
+            _strip_bgscan(cur or ssid)
             try:
                 net_changed[0]()  # see the hook comment above
             except Exception as e:
@@ -352,6 +392,17 @@ def wifi_connect(ssid, password=None):
         return {"ok": code == 0, "output": tail, "ssid": cur, "ip": ip}
     finally:
         WIFI_LOCK.release()
+
+
+def _strip_bgscan(name):
+    """Best-effort: clear NM's default background scan (simple:30:-70 —
+    a full off-channel sweep every 30s at weak signal: A2DP stutter and
+    battery burn on the shared radio). install.sh does this for the
+    profiles that existed at install time; this covers every profile
+    the portal/PWA creates afterwards. Older NM lacks the property —
+    a nonzero exit is fine, single-AP boxes lose nothing either way."""
+    _nmcli("connection", "modify", "id", name,
+           "802-11-wireless.bgscan", "", timeout=10)
 
 
 def _hotspot_profile_exists():
@@ -391,6 +442,7 @@ def wifi_add(ssid, password=None):
         if code != 0:
             return {"ok": False,
                     "output": out.splitlines()[-1] if out else "nmcli failed"}
+        _strip_bgscan(ssid)
         return {"ok": True,
                 "output": f"{action} — the box joins it automatically "
                           f"when in range"}

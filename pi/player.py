@@ -676,6 +676,16 @@ def main():
     last_beat = 0.0
     prev_path, track_started = None, time.monotonic()
     fast_skips, stable = 0, None
+    # Bookmark writes are throttled: every 3s tick used to json+rename
+    # into STATE_DIR on the SD card — 1200 write bursts/hour for the
+    # whole listening session, and a paused mpv kept writing too
+    # (energy audit 2026-07-20 #2). Write only when the episode or the
+    # pause state changes, or BM_FLUSH_S has passed; the skipped writes
+    # park in bm_pending and flush once when mpv exits, so a clean
+    # stop/reboot loses nothing and a yanked battery loses <=30s.
+    bm_flush_s = float(os.environ.get("TAPBOX_BOOKMARK_FLUSH", "30"))
+    bm_last = [0.0, None, None]  # wall clock of last write, path, paused
+    bm_pending = None
     while proc.poll() is None:
         try:
             path = ipc_get(sock, "path")
@@ -736,7 +746,13 @@ def main():
                 if not paused and now_m - track_started > 15:
                     stable = (path, pos)  # last spot that audibly played
                 if not live and not no_resume:
-                    save_state(key, path, pos, ids.get(path), dur)
+                    if (path != bm_last[1] or bool(paused) != bm_last[2]
+                            or time.monotonic() - bm_last[0] >= bm_flush_s):
+                        save_state(key, path, pos, ids.get(path), dur)
+                        bm_last = [time.monotonic(), path, bool(paused)]
+                        bm_pending = None
+                    else:
+                        bm_pending = (key, path, pos, ids.get(path), dur)
                 # heartbeat so a quiet-but-playing stream isn't mistaken
                 # for frozen (mpv runs silent); every ~30s
                 now_m = time.monotonic()
@@ -754,6 +770,12 @@ def main():
         except OSError:
             pass
         time.sleep(POLL_S)
+
+    if bm_pending:  # flush the last throttled position — nothing is lost
+        try:
+            save_state(*bm_pending)
+        except OSError:
+            pass
 
     # Clear the bookmark ONLY when the queue truly finished by itself.
     # mpv exits 0 on a clean SIGTERM quit too (reboot, daemon restart,
