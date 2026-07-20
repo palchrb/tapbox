@@ -331,6 +331,34 @@ def _nrk_slug(target):
     return None
 
 
+def newest_episode_id(target):
+    """The id of the newest episode in a podcast/series' CACHED listing,
+    or None (not a feed, or nothing cached yet). Reads only local files —
+    the sweeper calls it right after a sync to spot fresh content."""
+    slug = _nrk_slug(target)
+    if slug:
+        for prefix in ("catalog", "catalog-series"):
+            try:
+                with open(os.path.join(CACHE_DIR,
+                                       f"{prefix}-{slug}.json")) as f:
+                    eps = json.load(f).get("episodes") or []
+                if eps:
+                    return eps[-1].get("id")  # oldest-first -> last is newest
+            except (OSError, ValueError):
+                continue
+        return None
+    if target.startswith(("http://", "https://")):
+        try:
+            with open(os.path.join(CACHE_DIR, feed_key(target),
+                                   "feed.json")) as f:
+                items = json.load(f).get("items") or []
+            if items:
+                return _feed_episode_id(items[0][0])  # newest first
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def cache_key_for(target):
     """The CACHE_DIR subdirectory an entry's downloads live under, or None
     for targets we never cache (Spotify, local folders)."""

@@ -1647,6 +1647,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not target:
                     self._send(400, {"error": "target or id required"})
                     return
+                _library.acknowledge_new(target)  # played it -> clear its dot
                 self._send(200, ORCH.play(target, bool(body.get("fresh")),
                                           body.get("episode") or None, reverse,
                                           cache, resume))

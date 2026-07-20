@@ -125,12 +125,15 @@ def library_with_covers():
     never the network. Entries without a synced/remembered cover get
     None until their feed is first expanded or cached."""
     lib = load_library()
+    fresh = new_targets()  # entries with an unacknowledged new episode
     for s in lib.get("sections", []):
         for e in s.get("entries", []):
             try:
                 e["image"] = content.collection_image(e["target"])
             except Exception:
                 e["image"] = None
+            if e["target"] in fresh:
+                e["new"] = True
     return lib
 
 
@@ -398,6 +401,81 @@ def _precache_prune(active_uris):
         _precache_save(kept)
 
 
+# --- 'new episode' badge state ----------------------------------------------
+# A podcast/series entry is 'new' when a sweep has downloaded an episode
+# newer than the one the listener last engaged with — surfaced as a dot
+# on its carousel tile, cleared when they play it. We never auto-jump to
+# the new episode (resume stays predictable, no surprise audio); the dot
+# just says 'there's fresh content here'. State: {target: {newest, ack}}
+# — newest != ack means unacknowledged new content.
+NEW_STATE = os.path.join(STATE_DIR, "podcast-new.json")
+
+
+def _new_state():
+    try:
+        with open(NEW_STATE) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _new_save(state):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(NEW_STATE + ".tmp", "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(NEW_STATE + ".tmp", NEW_STATE)
+    except OSError:
+        pass  # advisory badge state — never break the sweep
+
+
+def _mark_new_seen(target, newest_id):
+    """Record the newest cached episode after a sync. The FIRST time we
+    see a show we acknowledge it (existing content must not all light up
+    as 'new' the moment this feature ships); after that, a changed newest
+    id leaves 'ack' behind so the entry reads as new until it's played."""
+    if not newest_id:
+        return
+    state = _new_state()
+    cur = state.get(target)
+    if cur is None:
+        state[target] = {"newest": newest_id, "ack": newest_id}
+    elif cur.get("newest") != newest_id:
+        state[target] = {"newest": newest_id, "ack": cur.get("ack")}
+    else:
+        return
+    _new_save(state)
+
+
+def is_new(target):
+    """Does this entry have unacknowledged new content?"""
+    s = _new_state().get(target) or {}
+    return bool(s.get("newest")) and s.get("newest") != s.get("ack")
+
+
+def acknowledge_new(target):
+    """The listener engaged with the show (played it) — clear its badge."""
+    state = _new_state()
+    s = state.get(target)
+    if s and s.get("ack") != s.get("newest"):
+        s["ack"] = s.get("newest")
+        _new_save(state)
+
+
+def new_targets():
+    """Every target with an unacknowledged new episode (for /library)."""
+    return {t for t, s in _new_state().items()
+            if s.get("newest") and s.get("newest") != s.get("ack")}
+
+
+def _new_prune(active_targets):
+    state = _new_state()
+    kept = {t: s for t, s in state.items() if t in active_targets}
+    if kept != state:
+        _new_save(kept)
+
+
 def _cache_sweeper():
     # Sweeps run on battery too: a box that mostly lives off the charger
     # otherwise never syncs at all — no fresh episodes, no covers. The
@@ -473,6 +551,13 @@ def _cache_sweeper():
                         "abandoned — retried next sweep)")
                 except (OSError, subprocess.TimeoutExpired) as exc:
                     log(f"cache sweep failed for {e['name']}: {exc!r}")
+                # the sync wrote the fresh listing (feed.json / catalog);
+                # note its newest episode so a genuinely new one badges
+                try:
+                    _mark_new_seen(e["target"],
+                                   content.newest_episode_id(e["target"]))
+                except Exception:
+                    pass
                 _sync_wake.wait(SYNC_STAGGER_S)  # breathe between entries
                 _sync_wake.clear()
         _stamp_sweep()
@@ -480,6 +565,8 @@ def _cache_sweeper():
             _precache_prune({spotify.to_uri(e["target"])
                              for s in lib["sections"] for e in s["entries"]
                              if e.get("cache") and is_spotify(e["target"])})
+            _new_prune({e["target"] for s in lib["sections"]
+                        for e in s["entries"]})
         except Exception:
             pass
         _sync_wake.wait(SYNC_INTERVAL_S)  # a library save wakes us early

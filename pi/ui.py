@@ -1828,11 +1828,12 @@ class App:
             self.bt_connecting_until = 0.0
         threading.Thread(target=go, daemon=True).start()
 
-    def _cover_tile(self, d, img, art, name):
+    def _cover_tile(self, d, img, art, name, new=False):
         """The shared big-tile layout: a cover (or a stable colored
         initial), the B/Y flip chevrons, the A action marker, and the
-        sliding name. Returns (drawn_name, marquee_flag); callers add any
-        per-view overlay (the now-playing underline/progress)."""
+        sliding name. `new` draws the fresh-content dot. Returns
+        (drawn_name, marquee_flag); callers add any per-view overlay
+        (the now-playing underline/progress)."""
         ax, ay = (W - 176) // 2, 24
         if art:
             img.paste(art, ((W - art.width) // 2, ay))
@@ -1857,6 +1858,14 @@ class App:
         # A (top left): the action here (open / play), so it gets the
         # highlight color; hugs the edge like the chevrons
         d.polygon([(5, 47), (5, 63), (19, 55)], fill=HILITE)
+        if new:
+            # fresh-content dot, top-right corner of the cover — a dark
+            # ring lifts it off any artwork. Cleared once the show is
+            # played; never changes what A does.
+            cx, cy, r = ax + 176 - 15, ay + 15, 8
+            d.ellipse([cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2],
+                      fill=BG)
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=GOOD)
         label, rolls = marquee(name, 20)
         d.text((W // 2, 206), label, font=F_MED, fill=FG, anchor="ma")
         return label, rolls
@@ -1875,7 +1884,10 @@ class App:
         s = cats[self.cat_sel]
         art = self.artwork(s["image"], 176, square=True) if s.get("image") \
             else None
-        _label, rolls = self._cover_tile(d, img, art, s.get("name") or "?")
+        # a category tile lights up if ANYTHING inside it is new
+        cat_new = any(e.get("new") for e in s.get("entries") or [])
+        _label, rolls = self._cover_tile(d, img, art, s.get("name") or "?",
+                                         new=cat_new)
         self._volume_overlay(d)
         self._bt_overlay(d)
         return rolls  # a long category name slides like an entry's
@@ -1900,7 +1912,8 @@ class App:
             d.text((10, 4), "No internet", font=F_SMALL, fill=WARN)
         art = self.artwork_async(e.get("image"), 176, square=True)
         ax, ay = (W - 176) // 2, 24
-        name, rolls = self._cover_tile(d, img, art, e["name"])
+        name, rolls = self._cover_tile(d, img, art, e["name"],
+                                       new=bool(e.get("new")))
         st = self.status or {}
         if st.get("target") == e["target"]:
             # this tile is what's (or was) playing: a thick orange
