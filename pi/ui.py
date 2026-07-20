@@ -223,6 +223,7 @@ class FifoInput:
             os.mkfifo(path)
         self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         self.gesture_mode = False  # resolved tokens come pre-cooked here
+        self.b_hold = False        # (dev fifo: tokens are pre-cooked)
         log(f"dev input <- {path}")
 
     def poll(self, timeout):
@@ -268,10 +269,12 @@ class GpioInput:
                         for name, pin in self.PINS.items()}
         self.queue = []
         self.gesture_mode = False
+        self.b_hold = False   # detect a B hold even outside now-playing
+                              # (the category carousel's 'up a level')
         self.down = {}        # name -> press timestamp while held
         self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._long_sent = {}  # name -> the hold already fired
-        self._b_gesture = False   # gesture_mode when B was pressed
+        self._b_gesture = False   # hold-B armed when B was pressed
         self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
@@ -294,8 +297,10 @@ class GpioInput:
             # judge the RELEASE by the mode the press STARTED in: b_long
             # navigates away from now-playing while still held, flipping
             # gesture_mode off — the release must not then be re-read as
-            # a menu press (field bug: it re-selected the episode)
-            self._b_gesture = self.gesture_mode
+            # a menu press (field bug: it re-selected the episode).
+            # b_hold arms the same detection in the category carousel so
+            # a held B steps up a level (short B still flips on release).
+            self._b_gesture = self.gesture_mode or self.b_hold
 
     def _released(self, name):
         self.wake.set()
@@ -380,6 +385,7 @@ class LgpioInput(GpioInput):
             raise RuntimeError("no gpiochip exposes the button pins")
         self.queue = []
         self.gesture_mode = False
+        self.b_hold = False
         self.down = {}
         self.tainted = set()
         self._long_sent = {}
@@ -732,13 +738,19 @@ class App:
         box's settings menu. Only browse-side views are swapped; an open
         settings/bt view is left alone and reconciles when it is left."""
         nav = self._nav_mode()
-        # Which browse views are legal for each mode. Mode 2 has TWO
-        # (the category carousel AND a scoped entry carousel), so
-        # navigating between them must NOT be reconciled away. episodes
-        # / now are shared sub-views and never reconciled.
-        legal = {0: ("home", "entries"),
-                 1: ("carousel",),
-                 2: ("cats", "carousel")}[nav]
+        # Which browse views are legal for each mode. episodes / now are
+        # shared sub-views and never reconciled. Mode 2 has TWO carousel
+        # levels — but a 'carousel' with NO category selected is a leftover
+        # flat carousel from mode 1 (switching flat -> categories while
+        # browsing it), which must drop back to the category root, not
+        # strand the kid on a flat carousel with no way up.
+        if nav == 0:
+            legal = ("home", "entries")
+        elif nav == 1:
+            legal = ("carousel",)
+        else:  # nav 2
+            legal = ("cats",) if self.car_section is None \
+                else ("cats", "carousel")
         reconcilable = ("home", "entries", "carousel", "cats")
         if self.view in reconcilable and self.view not in legal:
             self.stack, self.view, self.sel = [], self._root_view(), 0
@@ -2025,6 +2037,10 @@ class App:
         while True:
             self._loop_beat = time.monotonic()
             self.inputs.gesture_mode = (self.view == "now")
+            # arm hold-B up-navigation in the category carousel (mode 2):
+            # short B still flips tiles, a held B steps up a level
+            self.inputs.b_hold = (self.view in ("cats", "carousel")
+                                  and self._nav_mode() == 2)
             # Screen off = deep idle: long ticks, and a button press sets
             # the wake event so poll() returns INSTANTLY — no latency, and
             # 8x fewer wakeups than the old 0.6s polling

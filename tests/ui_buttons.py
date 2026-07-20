@@ -19,6 +19,7 @@ def fresh(gesture):
     inp = object.__new__(ui.GpioInput)  # skip __init__ (needs gpiozero)
     inp.queue = []
     inp.gesture_mode = gesture
+    inp.b_hold = False
     inp.down = {}
     inp.tainted = set()
     inp._long_sent = {}

@@ -113,5 +113,19 @@ app._apply_nav_mode()
 assert app.view == "settings", "an open settings screen is never yanked"
 print("8. mode switches reconcile the browse root, spare settings OK")
 
+# 9. switching flat -> categories WHILE on the flat carousel (no category
+# selected) must drop to the category root, not strand the kid on a flat
+# carousel with no way up (a 'carousel' with car_section None is illegal
+# in mode 2)
+app.view, app.car_section = "carousel", None
+app.settings = {"simple_nav": 2}
+app._apply_nav_mode()
+assert app.view == "cats", (app.view, app.car_section)
+# ...but a scoped carousel (a category IS open) is left alone
+app.view, app.car_section = "carousel", "fort"
+app._apply_nav_mode()
+assert app.view == "carousel" and app.car_section == "fort"
+print("9. flat->categories drops to cats; an open category is kept OK")
+
 print("CAT CAROUSEL OK — categories first, scoped entry carousels, "
       "hold-B walks back up, empties hidden.")
