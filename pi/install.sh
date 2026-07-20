@@ -288,12 +288,18 @@ while IFS= read -r c; do
   # bgscan: distinguish 'property unsupported on this NM' (query exits
   # nonzero -> the rig NOTE) from 'supported but already empty' (exit 0,
   # blank -> nothing to do, stay silent) from 'set -> clear it once'.
-  cur_bg="$(nmcli -g 802-11-wireless.bgscan connection show "$c" 2>/dev/null)"
-  if [[ $? -ne 0 ]]; then
+  # The query MUST sit in the `if` condition, not a bare assignment:
+  # under `set -e` a `x="$(cmd-that-fails)"` aborts the whole script,
+  # and on this rig the property IS unsupported (nmcli exits nonzero) —
+  # which killed install after [3/8], skipping the service restarts
+  # (regression from the idempotent rewrite, fixed 2026-07-20).
+  if cur_bg="$(nmcli -g 802-11-wireless.bgscan connection show "$c" 2>/dev/null)"; then
+    if [[ -n $cur_bg ]]; then
+      nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null \
+        && echo "    wifi '$c': background scanning off (no mid-stream sweeps)"
+    fi
+  else
     BGSCAN_MISSING=1
-  elif [[ -n $cur_bg ]]; then
-    nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null \
-      && echo "    wifi '$c': background scanning off (no mid-stream sweeps)"
   fi
 done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
            | awk -F: '$2=="802-11-wireless"{print $1}')
