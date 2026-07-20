@@ -267,6 +267,7 @@ class Orchestrator:
         # last spotify control timeout; far past, NOT 0.0 — on a young
         # monotonic clock 0.0 would read as 'timed out seconds ago'
         self._spot_cmd_timeout_at = -1e9
+        self._crash_respawns = 0  # crashed-child heals this boot (max 2)
         threading.Thread(target=self._arbiter, daemon=True).start()
         threading.Thread(target=self._stall_watchdog, daemon=True).start()
 
@@ -312,6 +313,7 @@ class Orchestrator:
         _audio_ready() would never fire, since bluez keeps lying."""
         last_pos, last_change = None, time.monotonic()
         last_tx, last_tx_change = None, time.monotonic()
+        crashed_since = 0.0  # first poll that saw the crashed child dead
         while True:
             _tick(STALL_POLL_S)
             try:
@@ -319,9 +321,12 @@ class Orchestrator:
                     alive = self._mpv_alive()
                     age = time.monotonic() - self.child_started
                 if not alive or age < 30:  # startup grace: file/stream open
+                    crashed_since = (self._heal_crashed_child(crashed_since)
+                                     if not alive else 0.0)
                     last_pos, last_change = None, time.monotonic()
                     last_tx, last_tx_change = None, time.monotonic()
                     continue
+                crashed_since = 0.0
                 paused = mpv_get("pause")
                 pos = mpv_get("playback-time")
                 now = time.monotonic()
@@ -397,6 +402,53 @@ class Orchestrator:
                 last_tx, last_tx_change = None, time.monotonic()
             except Exception as e:
                 log(f"stall watchdog error: {e!r}")
+
+    def _heal_crashed_child(self, dead_since):
+        """A player child that DIES — OOM kill, segfault — left 'playing'
+        on the screen and silence in the room: the stall watchdog stood
+        down on a dead child, and unlike a BT blip nothing auto-resumed
+        (review 2026-07-18 R5). Respawn a CRASHED child: nonzero rc only
+        (a deliberate stop clears self.child before this can see it, and
+        a finished queue exits 0), and only when the persisted intent
+        says audio was audibly playing (player.py's published pause
+        state for this very target), the output can make sound, and the
+        crash is fresh — the same no-surprise-audio window as a BT blip
+        (BT_RESUME_S; an output that's away retries inside that window,
+        then never again). Max 2 respawns per boot: a player that keeps
+        dying has a real problem, and the bookmarked ghost state (press
+        play to resume exactly there) is the honest fallback.
+
+        Called from the watchdog's dead-child branch with the previous
+        first-seen-dead stamp; returns the next stamp (0.0 = nothing to
+        watch / respawned)."""
+        with self.lock:
+            child, target, source = self.child, self.target, self.source
+            reverse, resume = self.reverse, self.resume
+        if child is None or child.poll() in (None, 0):
+            return 0.0  # no child, still alive, or a clean exit
+        now = time.monotonic()
+        dead_since = dead_since or now
+        if now - dead_since > BT_RESUME_S or self._crash_respawns >= 2 \
+                or source != "mpv" or not target:
+            return dead_since
+        try:  # persisted intent — never guess toward surprise audio
+            with open(NOW_FILE) as f:
+                published = json.load(f)
+        except (OSError, ValueError):
+            return dead_since
+        if published.get("target") != target or published.get("paused"):
+            return dead_since
+        if not _audio_ready():
+            return dead_since  # speaker away — retry within the window
+        with self.lock:
+            if self.child is not child or self._mpv_alive():
+                return 0.0  # another path already spawned/stopped it
+            self._crash_respawns += 1
+            log(f"player died (rc {child.poll()}) while playing — "
+                f"respawning ({self._crash_respawns}/2 this boot)")
+            self.child = None
+            self._spawn(target, reverse=reverse, resume=resume)
+        return 0.0
 
     def _persist(self):
         os.makedirs(STATE_DIR, exist_ok=True)
