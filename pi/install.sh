@@ -274,17 +274,26 @@ fi
 #      IPv4. Disabling IPv6 on the connection removes the trap; nothing
 #      on the box (daemon 0.0.0.0, go-librespot/pisugar 127.0.0.1,
 #      avahi over IPv4) needs it, and dual-stack networks use IPv4 too.
-# Applies on the next activation. Guarded: an older NM lacking either
-# property just skips with a note.
+# Applies on the next activation. Idempotent: each knob is read first
+# and only written (and logged) when it actually differs, so a re-run
+# that changes nothing stays silent and doesn't rewrite the profile.
+# Guarded: an older NM lacking either property just skips with a note.
 BGSCAN_MISSING=0
 while IFS= read -r c; do
   [[ -n $c ]] || continue
-  nmcli connection modify "$c" ipv6.method disabled 2>/dev/null \
-    && echo "    wifi '$c': IPv6 off (IPv4-only box; no boot-time v6 stalls)"
-  if nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null; then
-    echo "    wifi '$c': background scanning off (no mid-stream channel sweeps)"
-  else
+  if [[ "$(nmcli -g ipv6.method connection show "$c" 2>/dev/null)" != disabled ]]; then
+    nmcli connection modify "$c" ipv6.method disabled 2>/dev/null \
+      && echo "    wifi '$c': IPv6 off (IPv4-only box; no boot-time v6 stalls)"
+  fi
+  # bgscan: distinguish 'property unsupported on this NM' (query exits
+  # nonzero -> the rig NOTE) from 'supported but already empty' (exit 0,
+  # blank -> nothing to do, stay silent) from 'set -> clear it once'.
+  cur_bg="$(nmcli -g 802-11-wireless.bgscan connection show "$c" 2>/dev/null)"
+  if [[ $? -ne 0 ]]; then
     BGSCAN_MISSING=1
+  elif [[ -n $cur_bg ]]; then
+    nmcli connection modify "$c" 802-11-wireless.bgscan "" 2>/dev/null \
+      && echo "    wifi '$c': background scanning off (no mid-stream sweeps)"
   fi
 done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
            | awk -F: '$2=="802-11-wireless"{print $1}')
