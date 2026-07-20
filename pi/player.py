@@ -281,7 +281,8 @@ def play_spotify(target, fresh=False, exact=False):
 
     # Exact resume: tapboxd bookkeeps track+position while Spotify plays
     # (its cloud only resumes for Spotify's own clients). Same context ->
-    # play {uri, skip_to_uri} keeps the queue intact, then seek.
+    # play {uri, skip_to_uri, position} keeps the queue intact and lands
+    # exactly where we left off in ONE atomic call (fork v0.0.5).
     bm = None
     if fresh:
         spotify.clear_bookmark(uri)
@@ -302,12 +303,16 @@ def play_spotify(target, fresh=False, exact=False):
     body = {"uri": uri}
     if bm:
         body["skip_to_uri"] = bm["uri"]
-        # Load silently and unpause only after the seek — otherwise the
-        # first 1-2s of the track play audibly from 0:00 while we wait
-        # for it to load. (An early bookmark plays the track from 0:00
-        # anyway — no seek needed, start audibly right away.)
+        # fork v0.0.5: go-librespot loads the track PAUSED, seeks to
+        # `position`, then resumes — atomically, server-side. That
+        # replaces the old load-paused -> poll-until-loaded -> seek ->
+        # resume dance here, which both played nothing audible from 0:00
+        # AND raced go-librespot's blocking api: a status read mid-load
+        # looked 'empty', and a slow (>20s) load silently skipped the
+        # seek and resumed at 0:00 (field 2026-07-18). One call, no race.
+        # (An early bookmark has position 0 -> omit it, play from the top.)
         if bm["position"]:
-            body["paused"] = True
+            body["position"] = int(bm["position"])
     # Even with the session up, the FIRST request after a restart can be
     # slow server-side (dealer/audio-key fetch still warming: 'context
     # deadline exceeded' in go-librespot's log) — retry instead of dying.
@@ -351,27 +356,6 @@ def play_spotify(target, fresh=False, exact=False):
     log(f"spotify: playing {uri}"
         + (f" (resuming {bm['uri']} at {bm['position'] // 1000}s)" if bm else ""))
     _apply_box_volume()
-
-    if bm and bm["position"]:
-        # seek once the right track has actually loaded — after a cold boot
-        # (dealer warm-up, BT audio) that can take well over the old 6s
-        # window, which silently skipped the seek and "resumed" at 0:00
-        for _ in range(40):  # up to 20s
-            time.sleep(0.5)
-            track = spotify.status().get("track") or {}
-            if track.get("uri") == bm["uri"]:
-                try:
-                    spotify.go("/player/seek",
-                               body={"position": int(bm["position"])})
-                except OSError:
-                    log("seek failed — continuing from the track start")
-                break
-        else:
-            log("resume track never loaded in 20s — playing it from the start")
-        try:
-            spotify.go("/player/resume")
-        except OSError:
-            log("resume call failed — press play to start audio")
 
     time.sleep(2)
     track = spotify.status().get("track") or {}

@@ -32,10 +32,15 @@ def status(timeout=5):
     return {"username": "u", "track": CURRENT["track"]}
 
 
+PLAY_BODY = {}
+
+
 def go(path, timeout=15, body=None):
     GO.append(path)
     if path != "/player/play":
-        return  # seek / resume
+        return  # (no seek/resume any more — position rides the play call)
+    PLAY_BODY.clear()
+    PLAY_BODY.update(body or {})
     act = SCRIPT.pop(0)
     if act == "ok":
         CURRENT["track"] = {"uri": BM_URI}
@@ -66,18 +71,20 @@ def run(script, pre_track):
 
 
 # 1. timeout but the request LANDED (track loaded) -> NO re-POST; the
-# seek + resume still run so the bookmark position is honored
+# bookmark position rides the play body (fork v0.0.5, no separate
+# seek/resume), so resume still lands exactly where we left off
 plays = run(["timeout-lands"], pre_track=None)
 assert len(plays) == 1, f"landed request must not be re-POSTed: {GO}"
-assert "/player/seek" in GO and "/player/resume" in GO, GO
-print("1. timed-out play that landed: no duplicate context load OK")
+assert PLAY_BODY.get("position") == 30000, PLAY_BODY
+assert "/player/seek" not in GO and "/player/resume" not in GO, GO
+print("1. timed-out play that landed: no duplicate load, position in body OK")
 
 # 2. timeout and the server genuinely failed (track unchanged) -> ONE
-# retry, which succeeds against the warm server
+# retry, which succeeds against the warm server (position still carried)
 plays = run(["timeout-dead", "ok"], pre_track={"uri": "spotify:track:OLD"})
 assert len(plays) == 2, f"a dead attempt must be retried: {GO}"
-assert "/player/seek" in GO and "/player/resume" in GO, GO
-print("2. genuinely failed play: one fast retry, then seek+resume OK")
+assert PLAY_BODY.get("position") == 30000, PLAY_BODY
+print("2. genuinely failed play: one fast retry, position rides the play OK")
 
 # 3. never lands, all attempts dead -> exits nonzero with the hint
 try:
