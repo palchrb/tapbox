@@ -40,7 +40,8 @@ SETTING_SPECS = {
     "wifi_auto_off_min": (15, 0, 240),  # 0 = never auto-off
     "wifi_probe": (1, 0, 1),  # auto-off'd wifi: 1 = re-probe ~10 min,
     # 0 = stay off until the PWA/screen reconnect button
-    "simple_nav": (0, 0, 1),  # 1 = kid mode: flat big-cover carousel
+    "simple_nav": (0, 0, 2),  # browse: 0 text menus, 1 flat cover carousel,
+                              # 2 category carousel -> per-category carousel
 }
 
 

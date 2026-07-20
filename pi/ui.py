@@ -3,11 +3,11 @@
 four buttons). A pure consumer of the tapboxd API (:3679).
 
 Views:  Home (sections) -> Entries -> Episodes -> Now Playing
-        Kid mode (settings.simple_nav): the browse hierarchy is replaced
-        by ONE flat carousel — a big cover per library entry, B/Y flip,
-        X volume, A plays and opens the normal Now Playing view (which
-        keeps all its controls); hold-B there returns to the carousel.
-        No categories, no reading needed.
+        Browse mode (settings.simple_nav): 0 = the text hierarchy above.
+        1 = ONE flat cover carousel over every entry (B/Y flip, X volume,
+        A plays into the normal Now Playing). 2 = a category carousel
+        first, then that category's cover carousel — hold-B steps back
+        up a level (entry carousel -> categories). No reading needed.
         Settings: hold A+B ~2s (parental lock — a kid must not be able to
         shut the box down or wipe caches)
 
@@ -636,7 +636,10 @@ class App:
         self.dirty = True
         self.last_render = 0.0
         self.marquee_active = False  # keep repainting while a label slides
-        self.car_sel = 0            # kid mode: index into the flat carousel
+        self.car_sel = 0            # carousel: index into the shown entries
+        self.cat_sel = 0            # nav mode 2: index into the categories
+        self.car_section = None     # nav mode 2: selected category's id, or
+                                    # None while at the category level
         self.artwork_cache = {}
         self._art_pending = set()   # remote covers being fetched off-thread
         self._art_fails = {}        # per-cover failure count -> retry backoff
@@ -689,7 +692,7 @@ class App:
                 self.stack = [("home", 0)]
                 self.view = "now"
                 self.dirty = True
-        if self.view in ("now", "episodes", "carousel") \
+        if self.view in ("now", "episodes", "carousel", "cats") \
                 and now - self.last_status > STATUS_POLL_S:
             self.last_status = now
             try:
@@ -697,19 +700,49 @@ class App:
             except OSError:
                 self._set("status", {})
 
+    def _nav_mode(self):
+        """0 = text menus, 1 = flat cover carousel, 2 = category carousel."""
+        try:
+            return int(self.settings.get("simple_nav") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def carousel_cats(self):
+        """Nav mode 2: the categories shown as big tiles — only those with
+        content (entries, or a followed profile the sweeper fills in)."""
+        return [s for s in (self.library or {}).get("sections", [])
+                if s.get("entries") or s.get("spotify_user")]
+
+    def carousel_entries(self):
+        """The entries the cover carousel shows: a single category's in
+        nav mode 2 (once one is opened), else every entry flat."""
+        if self._nav_mode() == 2 and self.car_section is not None:
+            for s in (self.library or {}).get("sections", []):
+                if s.get("id") == self.car_section:
+                    return s.get("entries") or []
+            return []  # the category was deleted under us
+        return self.flat_entries()
+
+    def _root_view(self):
+        """Where 'back to browsing' lands for the active nav mode."""
+        return {0: "home", 1: "carousel", 2: "cats"}[self._nav_mode()]
+
     def _apply_nav_mode(self):
-        """Follow the simple_nav (kid mode) setting live — flipped in the
-        PWA or the box's settings menu. Only browse-side views are
-        swapped; an open settings/bt view is left alone and reconciles
-        the moment it is left."""
-        simple = bool(self.settings.get("simple_nav"))
-        if simple and self.view in ("home", "entries"):
-            # (now-playing AND the hold-Y episode picker are shared by
-            # both modes — left alone)
-            self.stack, self.view = [], "carousel"
-            self.dirty = True
-        elif not simple and self.view == "carousel":
-            self.stack, self.view, self.sel = [], "home", 0
+        """Follow the simple_nav setting live — flipped in the PWA or the
+        box's settings menu. Only browse-side views are swapped; an open
+        settings/bt view is left alone and reconciles when it is left."""
+        nav = self._nav_mode()
+        # Which browse views are legal for each mode. Mode 2 has TWO
+        # (the category carousel AND a scoped entry carousel), so
+        # navigating between them must NOT be reconciled away. episodes
+        # / now are shared sub-views and never reconciled.
+        legal = {0: ("home", "entries"),
+                 1: ("carousel",),
+                 2: ("cats", "carousel")}[nav]
+        reconcilable = ("home", "entries", "carousel", "cats")
+        if self.view in reconcilable and self.view not in legal:
+            self.stack, self.view, self.sel = [], self._root_view(), 0
+            self.car_section = None
             self.dirty = True
 
     def load_library(self, ttl=2.0):
@@ -951,6 +984,9 @@ class App:
         if self.view == "carousel":
             self.handle_carousel(ev)
             return
+        if self.view == "cats":
+            self.handle_cats(ev)
+            return
         if ev == "b_long":
             ev = "b"  # the hold gesture only means something while playing
         items = self.current_items()
@@ -1055,11 +1091,24 @@ class App:
         resets the stack to [home], which made hold-A land on the home
         screen instead of the episodes (field: 'jumps back several
         pages')."""
-        if self.settings.get("simple_nav"):
-            # kid mode: the carousel IS the browse level — land on the
-            # playing tile
+        nav = self._nav_mode()
+        if nav in (1, 2):
+            # carousel modes: the cover carousel IS the browse level.
             tgt = (self.status or {}).get("target")
-            for i, e in enumerate(self.flat_entries()):
+            if nav == 2:
+                # land inside the PLAYING entry's category carousel
+                # (hold-B again there steps out to the categories)
+                for s in (self.library or {}).get("sections", []):
+                    for i, e in enumerate(s.get("entries") or []):
+                        if e.get("target") == tgt:
+                            self.car_section, self.car_sel = s.get("id"), i
+                            self.stack, self.view = [], "carousel"
+                            self.dirty = True
+                            return
+                self.stack, self.view, self.car_section = [], "cats", None
+                self.dirty = True
+                return
+            for i, e in enumerate(self.flat_entries()):  # nav 1: flat
                 if e["target"] == tgt:
                     self.car_sel = i
                     break
@@ -1093,9 +1142,14 @@ class App:
         view. The daemon makes a replay of what's already loaded a plain
         unpause/no-op, so A never restarts anything. Hold-B in
         now-playing comes back here; settings stay behind the parental
-        A+B hold."""
-        ents = self.flat_entries()
+        A+B hold. In nav mode 2 the tiles are one category's, and hold-B
+        steps out to the category carousel (short B still flips)."""
+        ents = self.carousel_entries()
         if not ents:
+            # a since-emptied category: hold-B still escapes to the cats
+            if ev == "b_long" and self._nav_mode() == 2:
+                self.stack, self.view, self.car_section = [], "cats", None
+                self.dirty = True
             return
         st = self.status or {}
         if ev == "x" and (st.get("bt_waiting") or st.get("bt_lost")):
@@ -1107,6 +1161,13 @@ class App:
             self._play_on_local()  # the popup's "play on box speaker"
             return
         in_vol = time.monotonic() < self.vol_mode_until
+        # nav mode 2: hold-B inside a category steps back up to the
+        # category carousel (short B keeps flipping tiles)
+        if ev == "b_long" and not in_vol and self._nav_mode() == 2 \
+                and self.car_section is not None:
+            self.stack, self.view, self.car_section = [], "cats", None
+            self.dirty = True
+            return
         try:
             if ev == "y":
                 if in_vol:
@@ -1135,6 +1196,31 @@ class App:
                 self._volume_mode(delta=None)  # open/extend the volume card
         except OSError as e:
             log(f"carousel action failed: {e}")
+
+    def handle_cats(self, ev):
+        """Nav mode 2 root: B/Y flip categories, X is the volume card, A
+        opens the selected category's cover carousel (car_section)."""
+        cats = self.carousel_cats()
+        if not cats:
+            return
+        in_vol = time.monotonic() < self.vol_mode_until
+        if ev == "y":
+            if in_vol:
+                self._volume_mode(delta=5)
+            else:
+                self.cat_sel = (self.cat_sel + 1) % len(cats)
+        elif ev in ("b", "b_long"):
+            if in_vol:
+                self._volume_mode(delta=-5)
+            else:
+                self.cat_sel = (self.cat_sel - 1) % len(cats)
+        elif ev == "a":
+            s = cats[self.cat_sel % len(cats)]
+            self.car_section, self.car_sel = s.get("id"), 0
+            self.stack, self.view = [], "carousel"
+            self.dirty = True
+        elif ev == "x":
+            self._volume_mode(delta=None)
 
     def _toggle_output(self):
         """Hold X: flip between the bluetooth speaker and the built-in
@@ -1186,7 +1272,9 @@ class App:
                     ("Brightness", f"{s.get('screen_brightness', 100)}%"),
                     ("Volume cap", f"{s['volume_cap']}%"),
                     ("Auto-off (idle)", self.fmt_idle(s["idle_shutdown_min"])),
-                    ("Kid mode", "on" if s.get("simple_nav") else "off"),
+                    ("Browse", {0: "menus", 1: "carousel",
+                                2: "categories"}.get(
+                                    self._nav_mode(), "menus")),
                     ("Wi-Fi", wifi),
                     ("Setup hotspot", "on" if w.get("hotspot") else ""),
                     ("Bluetooth", ""),
@@ -1269,7 +1357,7 @@ class App:
                   1: ("screen_brightness", [25, 50, 75, 100]),
                   2: ("volume_cap", [60, 70, 80, 90, 100]),
                   3: ("idle_shutdown_min", [15, 30, 60, 0]),
-                  4: ("simple_nav", [1, 0])}  # kid mode on/off
+                  4: ("simple_nav", [0, 1, 2])}  # browse: menus/flat/cats
         if i in cycles:
             key, opts = cycles[i]
             cur = self.settings.get(key)
@@ -1429,6 +1517,9 @@ class App:
         elif self.view == "carousel":
             self.load_library()
             rolls = self.render_carousel(d, img)
+        elif self.view == "cats":
+            self.load_library()
+            rolls = self.render_cats(d, img)
         elif self.view == "now":
             rolls = self.render_now(d, img)
         self.marquee_active = bool(rolls)
@@ -1737,15 +1828,69 @@ class App:
             self.bt_connecting_until = 0.0
         threading.Thread(target=go, daemon=True).start()
 
-    def render_carousel(self, d, img):
-        """Kid mode: ONE big cover per entry — flip with B/Y, play with A.
-        The carousel doubles as now-playing: the playing entry shows its
-        play state and a progress bar. Returns the marquee flag."""
+    def _cover_tile(self, d, img, art, name):
+        """The shared big-tile layout: a cover (or a stable colored
+        initial), the B/Y flip chevrons, the A action marker, and the
+        sliding name. Returns (drawn_name, marquee_flag); callers add any
+        per-view overlay (the now-playing underline/progress)."""
+        ax, ay = (W - 176) // 2, 24
+        if art:
+            img.paste(art, ((W - art.width) // 2, ay))
+        else:
+            # no cover: a colored tile with the initial — stable color
+            # per name so kids still recognise "their" tile
+            palette = [(196, 92, 82), (206, 148, 70), (98, 158, 88),
+                       (84, 138, 186), (142, 108, 178), (186, 98, 140)]
+            color = palette[sum(name.encode()) % len(palette)]
+            d.rounded_rectangle([ax, ay, ax + 176, ay + 176], radius=14,
+                                fill=color)
+            d.text((W // 2, ay + 88), (name[:1] or "?").upper(),
+                   font=font(96), fill=FG, anchor="mm")
+        # Markers sit where the PHYSICAL buttons are: the Pirate Audio
+        # buttons are inset from the screen corners — centers land around
+        # y=55 (A/X) and y=185 (B/Y) on the 240px panel (field-calibrated).
+        # flip chevrons < > (B / Y), dim outlines hugging the screen edges
+        d.line([(17, 177), (6, 185), (17, 193)], fill=DIM, width=3,
+               joint="curve")
+        d.line([(W - 17, 177), (W - 6, 185), (W - 17, 193)], fill=DIM,
+               width=3, joint="curve")
+        # A (top left): the action here (open / play), so it gets the
+        # highlight color; hugs the edge like the chevrons
+        d.polygon([(5, 47), (5, 63), (19, 55)], fill=HILITE)
+        label, rolls = marquee(name, 20)
+        d.text((W // 2, 206), label, font=F_MED, fill=FG, anchor="ma")
+        return label, rolls
+
+    def render_cats(self, d, img):
+        """Nav mode 2: ONE big category tile — flip with B/Y, A opens that
+        category's cover carousel. hold-B inside a category comes back
+        here."""
         battery_corner(d, self.system)
-        ents = self.flat_entries()
-        if not ents:
+        cats = self.carousel_cats()
+        if not cats:
             d.text((W // 2, H // 2), "Library is empty", font=F_MED,
                    fill=DIM, anchor="mm")
+            return False
+        self.cat_sel %= len(cats)
+        s = cats[self.cat_sel]
+        art = self.artwork(s["image"], 176, square=True) if s.get("image") \
+            else None
+        _label, rolls = self._cover_tile(d, img, art, s.get("name") or "?")
+        self._volume_overlay(d)
+        self._bt_overlay(d)
+        return rolls  # a long category name slides like an entry's
+
+    def render_carousel(self, d, img):
+        """ONE big cover per entry — flip with B/Y, play with A. Doubles
+        as now-playing: the playing entry shows its state and a progress
+        bar. In nav mode 2 the entries are one category's; hold-B returns
+        to the category carousel."""
+        battery_corner(d, self.system)
+        ents = self.carousel_entries()
+        if not ents:
+            msg = ("Nothing here yet" if self._nav_mode() == 2
+                   else "Library is empty")
+            d.text((W // 2, H // 2), msg, font=F_MED, fill=DIM, anchor="mm")
             return False
         self.car_sel %= len(ents)
         e = ents[self.car_sel]
@@ -1755,37 +1900,11 @@ class App:
             d.text((10, 4), "No internet", font=F_SMALL, fill=WARN)
         art = self.artwork_async(e.get("image"), 176, square=True)
         ax, ay = (W - 176) // 2, 24
-        if art:
-            img.paste(art, ((W - art.width) // 2, ay))
-        else:
-            # no cover: a colored tile with the entry's initial — stable
-            # color per name so kids can still recognise "their" tile
-            palette = [(196, 92, 82), (206, 148, 70), (98, 158, 88),
-                       (84, 138, 186), (142, 108, 178), (186, 98, 140)]
-            color = palette[sum(e["name"].encode()) % len(palette)]
-            d.rounded_rectangle([ax, ay, ax + 176, ay + 176], radius=14,
-                                fill=color)
-            d.text((W // 2, ay + 88), (e["name"][:1] or "?").upper(),
-                   font=font(96), fill=FG, anchor="mm")
-        # Markers sit where the PHYSICAL buttons are: the Pirate Audio
-        # buttons are inset from the screen corners — centers land around
-        # y=55 (A/X) and y=185 (B/Y) on the 240px panel (field-calibrated;
-        # corner-aligned markers pointed well past the actual buttons).
-        # flip chevrons < > (B / Y), dim outlines hugging the screen edges
-        d.line([(17, 177), (6, 185), (17, 193)], fill=DIM, width=3,
-               joint="curve")
-        d.line([(W - 17, 177), (W - 6, 185), (W - 17, 193)], fill=DIM,
-               width=3, joint="curve")
-        # A (top left): play the selected tile — THE action here, so it
-        # gets the highlight color; hugs the edge like the chevrons
-        d.polygon([(5, 47), (5, 63), (19, 55)], fill=HILITE)
-        name, rolls = marquee(e["name"], 20)
-        d.text((W // 2, 206), name, font=F_MED, fill=FG, anchor="ma")
+        name, rolls = self._cover_tile(d, img, art, e["name"])
         st = self.status or {}
         if st.get("target") == e["target"]:
             # this tile is what's (or was) playing: a thick orange
-            # underline beneath the name (playing or paused alike) — a
-            # frame around the art read as clutter, per field feedback
+            # underline beneath the name (playing or paused alike)
             tl = d.textlength(name, font=F_MED)
             d.rounded_rectangle([(W - tl) / 2, 228, (W + tl) / 2, 232],
                                 radius=2, fill=HILITE)
@@ -1855,18 +1974,33 @@ class App:
             self.status = api_get("/status", timeout=3)
         except (OSError, ValueError):
             self.status = {}
-        if self.settings.get("simple_nav"):
-            # kid mode: carousel is the root, positioned on whatever is
-            # (or last was) playing — which opens on now-playing if live
+        nav = self._nav_mode()
+        if nav in (1, 2):
+            # carousel modes: position on whatever is (or last was)
+            # playing — opens on now-playing if live, else on the browse
+            # root (the flat carousel, or the category carousel).
             tgt = self.status.get("target")
-            for i, e in enumerate(self.flat_entries()):
-                if e["target"] == tgt:
-                    self.car_sel = i
-                    break
-            if self.status.get("title"):
-                self.stack, self.view = [("carousel", 0)], "now"
+            root = "carousel"
+            if nav == 2:
+                self.car_section = None
+                root = "cats"
+                for s in (self.library or {}).get("sections", []):
+                    for i, e in enumerate(s.get("entries") or []):
+                        if e.get("target") == tgt:
+                            self.car_section, self.car_sel = s.get("id"), i
+                            root = "carousel"
+                            break
+                    if self.car_section is not None:
+                        break
             else:
-                self.stack, self.view = [], "carousel"
+                for i, e in enumerate(self.flat_entries()):
+                    if e["target"] == tgt:
+                        self.car_sel = i
+                        break
+            if self.status.get("title"):
+                self.stack, self.view = [(root, 0)], "now"
+            else:
+                self.stack, self.view = [], root
         elif self.status.get("title"):
             self.stack = [("home", 0)]
             self.view = "now"
@@ -1904,7 +2038,8 @@ class App:
                 # now-playing. Only from the browse views — settings/BT
                 # flows have their own long waits (scan, pair) and must
                 # not be yanked away from.
-                if (self.view in ("home", "entries", "episodes", "carousel")
+                if (self.view in ("home", "entries", "episodes",
+                                  "carousel", "cats")
                         and self.status.get("playing")
                         and time.monotonic() - self.last_input
                         > NOW_RETURN_S):

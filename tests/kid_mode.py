@@ -14,9 +14,9 @@ os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
 import ui  # noqa: E402
 from tapbox import sysinfo  # noqa: E402
 
-# 1. the setting exists, defaults off, clamps to 0/1
-assert sysinfo.SETTING_SPECS["simple_nav"] == (0, 0, 1)
-print("1. simple_nav setting registered (default off) OK")
+# 1. the setting exists, defaults off, now a 3-way (0 menus/1 flat/2 cats)
+assert sysinfo.SETTING_SPECS["simple_nav"] == (0, 0, 2)
+print("1. simple_nav setting registered (default off, 3-way) OK")
 
 
 class FakeDisplay:
