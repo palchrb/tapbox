@@ -54,7 +54,7 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
         break
 from tapbox import btbus  # noqa: E402
 from tapbox.btbus import _run, log  # noqa: E402 — shared helpers
-from tapbox.paths import STATE_DIR  # noqa: E402
+from tapbox.paths import STATE_DIR, note_go_restart  # noqa: E402
 
 MAC_FILE = os.environ.get("TAPBOX_BT_FILE", "/etc/tapbox/bt-headset")
 # tapboxd touches this when the user switches output to bt while the
@@ -387,6 +387,9 @@ pcm.tapbox_local {{
     os.replace(ASOUND + ".tmp", ASOUND)
     log(f"==> ALSA output routed to {mac}, restarting go-librespot...")
     _run(["systemctl", "restart", "go-librespot"], timeout=30)
+    # tell the daemon's dead-device rebuild this reconnect already got a
+    # fresh go-librespot — so it doesn't bounce it a second time
+    note_go_restart()
 
 
 def pair_auto(name_filter=None):

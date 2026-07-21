@@ -405,6 +405,11 @@ daemon._note_go_restart()          # the output retarget just restarted it
 daemon._go_output_rebuild()        # blip rebuild moments later -> skip
 assert REST == [], f"rebuild within cooldown must NOT restart again: {REST}"
 daemon._GO_REBUILD["at"] = time.monotonic() - daemon.GO_REBUILD_COOLDOWN_S - 1
+from tapbox import paths as _paths  # noqa: E402
+try:
+    os.remove(_paths.GO_RESTART_FILE)  # the cross-process restart aged out too
+except OSError:
+    pass
 daemon._go_output_rebuild()        # cooldown elapsed -> a real restart
 assert len(REST) == 1 and "restart" in REST[0], \
     f"a rebuild past the cooldown must restart: {REST}"

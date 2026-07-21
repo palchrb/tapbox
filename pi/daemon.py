@@ -109,7 +109,8 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
         break
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from tapbox import spotify_web as _spotify_web  # noqa: E402
-from tapbox.paths import ART_DIR, RUN_DIR, STATE_DIR  # noqa: E402
+from tapbox.paths import (  # noqa: E402
+    ART_DIR, RUN_DIR, STATE_DIR, go_restarted_within, note_go_restart)
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
 # these names) keeps calling daemon.<helper>.
@@ -2144,6 +2145,7 @@ def _note_go_restart():
     own redundant restart."""
     with _GO_REBUILD_LOCK:
         _GO_REBUILD["at"] = time.monotonic()
+    note_go_restart()  # cross-process marker: bt.py's route rewrite sees it
 
 
 def _go_output_rebuild():
@@ -2172,7 +2174,13 @@ def _go_output_rebuild():
     exactly what that toggle did."""
     with _GO_REBUILD_LOCK:
         now = time.monotonic()
-        fresh = now - _GO_REBUILD["at"] < GO_REBUILD_COOLDOWN_S
+        # 'fresh' also honours bt.py's ALSA-route restart (cross-process
+        # marker): a first-pair connect writes the route + restarts, so
+        # rebuilding the device again on the same transport-up is the
+        # redundant second bounce we're deduping (only ever skips when
+        # the retarget below finds nothing to change).
+        fresh = (now - _GO_REBUILD["at"] < GO_REBUILD_COOLDOWN_S
+                 or go_restarted_within(GO_REBUILD_COOLDOWN_S))
         _GO_REBUILD["at"] = now
     pcm = current_output().get("pcm")
     if pcm and _retarget_go_librespot(pcm):
