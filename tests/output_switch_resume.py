@@ -29,7 +29,11 @@ daemon._kick_bt_connect = lambda: None
 daemon._note_go_restart = lambda: None
 daemon._i2s_card_present = lambda: True
 daemon._bt_transport_ready = lambda: True
-daemon._retarget_go_librespot = lambda pcm: True  # config differs -> restart
+RETARGETED = []
+daemon._retarget_go_librespot = lambda pcm: (RETARGETED.append(pcm) or True)
+# default: pre-v0.0.7 binary — the live reopen endpoint is absent, so
+# every switch falls back to the config-rewrite + restart path
+daemon.reopen_go_output = lambda pcm: False
 
 SPAWNED, STOPPED = [], []
 orch._spawn = lambda target, **kw: SPAWNED.append((target, kw.get("exact")))
@@ -92,5 +96,41 @@ set_out("local", fallback=True)
 assert SPAWNED == [], f"idle switch must not start music: {SPAWNED}"
 print("4. idle switch: no surprise playback OK")
 
+# 5. v0.0.7 LIVE reopen: the endpoint moves the output without tearing
+# down the session, so an in-flight resume needs NO stop/respawn and NO
+# restart — the music just keeps playing on the new device.
+SPAWNED.clear()
+STOPPED.clear()
+RETARGETED.clear()
+orch.child = LiveChild()
+daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:coco4"},
+                               "paused": True, "stopped": False}
+daemon.reopen_go_output = lambda pcm: True  # current binary
+r = set_out("local", fallback=True)
+assert STOPPED == [], f"live reopen keeps the session — no stop: {STOPPED}"
+assert SPAWNED == [], f"live reopen keeps the session — no respawn: {SPAWNED}"
+assert RETARGETED == [], f"live reopen must not restart go-librespot: {RETARGETED}"
+assert r.get("spotify_restarted") is False
+print("5. v0.0.7 live reopen: session kept, no restart, no respawn OK")
+
+# 6. bt not ready: neither the live reopen NOR the restart may touch
+# go-librespot — the wifi burst/reopen would land mid-AVDTP on the
+# shared radio. The switch is deferred to btwatchd's announce.
+SPAWNED.clear()
+STOPPED.clear()
+RETARGETED.clear()
+REOPENED = []
+daemon.reopen_go_output = lambda pcm: (REOPENED.append(pcm) or True)
+daemon._bt_transport_ready = lambda: False
+orch.child = LiveChild()
+r = set_out("bt", fallback=True)
+assert REOPENED == [], f"no reopen onto a transport-less speaker: {REOPENED}"
+assert RETARGETED == [], f"no restart onto a transport-less speaker: {RETARGETED}"
+assert SPAWNED == [] and STOPPED == []
+assert r.get("spotify_restarted") is False
+daemon._bt_transport_ready = lambda: True  # restore
+print("6. bt not ready: go-librespot untouched, switch deferred OK")
+
 print("OUTPUT SWITCH RESUME OK — an in-flight spotify resume survives "
-      "speaker-away/connected flips; idle stays idle.")
+      "speaker-away/connected flips (v0.0.7 live reopen keeps it playing "
+      "with no restart); idle stays idle.")

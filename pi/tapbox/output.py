@@ -90,10 +90,9 @@ def current_output():
         return {"output": "bt", "pcm": "tapbox_bt"}
 
 
-def _retarget_go_librespot(pcm):
-    """Point go-librespot's audio_device at pcm. Unlike mpv, its audio
-    device is startup config — a change means config rewrite + restart.
-    Returns True when the config was changed."""
+def _write_audio_device(pcm):
+    """Persist audio_device=pcm in config.yml for the NEXT process start.
+    Returns True when the file actually changed. Never restarts."""
     if not GO_CONFIG:
         return False
     try:
@@ -106,9 +105,40 @@ def _retarget_go_librespot(pcm):
         new = text.rstrip("\n") + f"\naudio_device: {pcm}\n"
     if new == text:
         return False
-    with open(GO_CONFIG + ".tmp", "w") as f:
-        f.write(new)
-    os.replace(GO_CONFIG + ".tmp", GO_CONFIG)
+    try:
+        with open(GO_CONFIG + ".tmp", "w") as f:
+            f.write(new)
+        os.replace(GO_CONFIG + ".tmp", GO_CONFIG)
+    except OSError:
+        return False
+    return True
+
+
+def reopen_go_output(pcm):
+    """v0.0.7: reopen go-librespot's audio output on `pcm` LIVE — keeping
+    the Spotify session (track / position / paused / volume) intact. No
+    restart, no bookmark-resume, and no session teardown that re-bursts
+    the shared 2.4GHz radio. Also fixes the 'output died with the BT
+    transport and stays dead' bug (the reopen rebuilds the device without
+    a restart). Persists audio_device for the next process start too.
+    Returns True on a live reopen; False if the endpoint is unreachable
+    or too old (a pre-v0.0.7 binary 404s) — the caller falls back to the
+    config-rewrite + restart path."""
+    from tapbox import spotify  # local: avoid an import cycle at module load
+    _write_audio_device(pcm)  # persist for boot; best-effort, no restart
+    try:
+        spotify.go("/player/output", timeout=5, body={"device": pcm})
+        return True
+    except OSError:  # unreachable / 404 on an old binary (HTTPError is OSError)
+        return False
+
+
+def _retarget_go_librespot(pcm):
+    """FALLBACK for a pre-v0.0.7 go-librespot: point audio_device at pcm
+    and restart (its device is startup config there). Returns True when
+    the config was changed (and a restart was issued)."""
+    if not _write_audio_device(pcm):
+        return False
     try:
         subprocess.run(["systemctl", "restart", "go-librespot"], timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:

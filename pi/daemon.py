@@ -228,7 +228,7 @@ from tapbox.netmgmt import (  # noqa: E402
     wifi_scan, wifi_state, _wifi_watchdog)
 from tapbox.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
-    _retarget_go_librespot)
+    reopen_go_output, _retarget_go_librespot)
 from tapbox import sysinfo as _sysinfo  # noqa: E402 — cache-size invalidation
 from tapbox.sysinfo import (  # noqa: E402
     load_settings, shutdown, system_status, update_settings,
@@ -703,11 +703,15 @@ class Orchestrator:
                             log("output bt: deferred mpv switch applied")
                         except OSError:
                             pass
-                # idempotent: rewrites + restarts only when the config
-                # still points elsewhere (a deferred switch). Runs
-                # OUTSIDE the lock — it's a systemctl restart, and every
-                # /status reader queued behind it (review 2026-07-18 R2)
-                if _retarget_go_librespot(pcm):
+                # v0.0.7: reopen the output live (session kept, no
+                # restart, no radio burst). Falls back to the config
+                # rewrite + restart on a pre-v0.0.7 binary. Runs OUTSIDE
+                # the lock either way — a restart queues every /status
+                # reader behind it (review 2026-07-18 R2).
+                if reopen_go_output(pcm):
+                    log("output bt: deferred go-librespot output "
+                        "reopened live")
+                elif _retarget_go_librespot(pcm):
                     _note_go_restart()
                     log("output bt: deferred go-librespot retarget "
                         "applied")
@@ -754,13 +758,28 @@ class Orchestrator:
         # From here on: status probe + systemctl restart, seconds of I/O
         # that used to hold ORCH.lock and froze every /status reader —
         # the screen's 1/s poll — for the whole switch (review R2).
+        restarted = False
+        go_action = "unchanged"
         if device == "bt" and not _bt_transport_ready():
             # same rule as mpv above: don't bounce go-librespot into a
             # device with no transport — the restart's wifi burst lands
             # exactly during AVDTP setup on the SHARED radio (the
-            # coexistence load that crashes the Zero's BT firmware)
-            restarted = False
+            # coexistence load that crashes the Zero's BT firmware).
+            # (A live reopen onto bluealsa can block on a mid-reconnect
+            # speaker too, so it waits for the transport just the same.)
+            pass
+        elif reopen_go_output(pcm):
+            # v0.0.7 live reopen: the audio output moves to the new
+            # device WITHOUT tearing down the session — track, position,
+            # volume and paused-state all survive, so there is nothing to
+            # resume and no restart to dedup, and the shared radio stays
+            # quiet. This is the path on a current binary.
+            go_action = "reopened live"
         else:
+            # pre-v0.0.7 fallback: audio_device is startup config there,
+            # so the switch is a config rewrite + restart that kills the
+            # session mid-song — we bring the music back from the
+            # bookmark below.
             try:
                 st = go_status(timeout=2)
             except OSError:
@@ -774,6 +793,7 @@ class Orchestrator:
             restarted = _retarget_go_librespot(pcm)
             if restarted:
                 _note_go_restart()
+                go_action = "restarted"
             if restarted and (spot_was_playing or spot_resuming) \
                     and resume_target and is_spotify(resume_target):
                 # unlike mpv (live IPC retarget), the restart killed
@@ -795,7 +815,7 @@ class Orchestrator:
                             "bookmark")
         log(f"output -> {device} (pcm {pcm}, "
             f"mpv {'switched' if mpv_switched else 'n/a'}, "
-            f"go-librespot {'restarted' if restarted else 'unchanged'})")
+            f"go-librespot {go_action})")
         out = {"output": device, "pcm": pcm,
                "mpv_switched": mpv_switched,
                "spotify_restarted": restarted}
@@ -2183,6 +2203,19 @@ def _go_output_rebuild():
                  or go_restarted_within(GO_REBUILD_COOLDOWN_S))
         _GO_REBUILD["at"] = now
     pcm = current_output().get("pcm")
+    if pcm and reopen_go_output(pcm):
+        # v0.0.7: reopen the dead ALSA handle LIVE on the current output.
+        # This rebuilds the device WITHOUT restarting — the session stays
+        # up, so audio flows again on its own with no replay-last and no
+        # radio burst, and it also rewrites the config to the current
+        # output (fixing a deferred switch left on the wrong device, the
+        # exact job the retarget-restart used to do). Session intact means
+        # login never dropped, so skip the wait-for-login below.
+        log("go-librespot output reopened live on the current device "
+            "(no restart, session kept)")
+        return
+    # pre-v0.0.7 fallback: audio_device is startup config, so rebuilding
+    # the device means a restart (which drops the session -> replay-last).
     if pcm and _retarget_go_librespot(pcm):
         # config pointed at the wrong device — moved it + restarted
         log("go-librespot retargeted to the current output (restart)")
