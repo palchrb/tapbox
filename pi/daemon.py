@@ -601,6 +601,15 @@ class Orchestrator:
                 log("play: no internet — spotify can't start")
                 return {"source": "spotify", "target": target,
                         "error": "no-internet"}
+            if target != self.target:
+                # switching to a DIFFERENT context: flush the outgoing
+                # spotify position first. The bookmarker thread isn't torn
+                # down on a switch (unlike player.py on the mpv side) — it
+                # just moves to the new target and drops the old bm_pending,
+                # so the last <=30s of the previous url (incl. a seek just
+                # made) would die with the throttle. Same gap the reboot
+                # flush closes, triggered by a switch instead of a TERM.
+                _flush_spotify_bookmark()
             self._stop_child()
             self._spawn(target, fresh, episode, reverse, cache, resume)
             self.mpv_shuffle = False  # fresh queue plays in order
