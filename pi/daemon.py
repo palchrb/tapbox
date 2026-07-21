@@ -1929,6 +1929,16 @@ def _wifi_boot_reenable():
         log(f"wifi boot re-enable failed: {e!r}")
 
 
+# Box-initiated Spotify: the bookmarker keeps this true/false from a status
+# fetched while go-librespot is still alive, so shutdown's was_playing snapshot
+# can trust it WITHOUT a live query. At poweroff systemd TERMs go-librespot in
+# the same cgroup, so a fresh status() there races its death and reads 'not
+# playing' — mpv sidesteps the same race via its now-playing.json fallback, and
+# Spotify had none. Box-initiated ONLY (source==spotify AND a spotify target),
+# so a phone-driven Connect session never arms boot-resume.
+_SPOT_LAST_PLAYING = [False]
+
+
 def _spotify_bookmarker():
     """Spotify's cloud remembers positions for ITS clients only — so we
     bookkeep like we do for mpv: while Spotify plays, snapshot the track,
@@ -1951,6 +1961,13 @@ def _spotify_bookmarker():
         _bm_wake.clear()
         try:
             st = go_status()
+            # remember whether OUR spotify is audibly playing, for the
+            # shutdown snapshot (see the _SPOT_LAST_PLAYING note) — reuses
+            # this status, no extra I/O
+            _SPOT_LAST_PLAYING[0] = (ORCH.source == "spotify"
+                                     and bool(ORCH.target)
+                                     and is_spotify(ORCH.target)
+                                     and spotify_playing(st))
             track = st.get("track") or {}
             # power hygiene: with no session at all there is nothing to
             # bookkeep — drop to a 30s heartbeat instead of waking the CPU
@@ -2501,7 +2518,10 @@ def _flag_was_playing():
                 except (OSError, ValueError):
                     playing = True  # child alive, no info: assume playing
         if not playing:
-            playing = spotify_playing()
+            # box-initiated spotify: trust the state the bookmarker last saw
+            # while go-librespot was alive (a fresh query here races its
+            # cgroup TERM at poweroff); live probe stays as the fallback.
+            playing = _SPOT_LAST_PLAYING[0] or spotify_playing()
         with open(LAST_FILE) as f:
             last = json.load(f)
         last["was_playing"] = bool(playing)
