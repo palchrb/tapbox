@@ -632,6 +632,9 @@ class App:
         self.volume_flash = 0.0     # show volume overlay until this time
         self.volume_shown = None
         self.vol_mode_until = 0.0   # while set: B/Y adjust volume (X opened it)
+        self.output_flash = 0.0     # show the output-switch popup until this
+        self.output_shown = ""      # the device name to name in that popup
+        self.output_warning = False  # switched to a device with no sound card
         self.bt_connecting_until = 0.0  # popup X pressed: full connect running
         self.wifi_connecting_until = 0.0  # X pressed: wifi reconnect running
         self.catch_up_until = 0.0   # repaint every tick until this time
@@ -1244,10 +1247,14 @@ class App:
         except OSError as e:
             log(f"output toggle failed: {e}")
             return
-        name = "built-in speaker" if dev == "local" else "bluetooth speaker"
-        self.draw_message(f"Output: {name}"
-                          + (" (no sound card?)" if r.get("warning") else ""))
-        time.sleep(1.2)   # let it read before the next repaint
+        # Show the same message, but as the transient rounded-box popup the
+        # speaker/net overlays use (cosmetic parity) instead of a blocking
+        # full-screen repaint — the render loop self-clears it (field ask
+        # 2026-07-21).
+        self.output_shown = ("Built-in speaker" if dev == "local"
+                             else "Bluetooth speaker")
+        self.output_warning = bool(r.get("warning"))
+        self.output_flash = time.monotonic() + 1.5
         self.dirty = True
 
     def _volume_mode(self, delta):
@@ -1657,6 +1664,7 @@ class App:
         self._volume_overlay(d)
         if not self._bt_overlay(d):  # speaker trouble outranks net trouble
             self._net_overlay(d)
+        self._output_overlay(d)  # deliberate hold-X confirmation sits on top
         return rolls
 
     def _volume_overlay(self, d):
@@ -1668,6 +1676,32 @@ class App:
                    fill=HILITE, anchor="ma")
             d.text((60, 116), "B  -", font=F_SMALL, fill=DIM)
             d.text((W - 60, 116), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
+
+    def _output_overlay(self, d):
+        """Hold-X output-switch confirmation, in the SAME rounded-box shape
+        as the speaker/net popups (cosmetic parity, field ask 2026-07-21)
+        rather than the old blocking full-screen message. Transient: it
+        self-clears when output_flash expires, exactly like the volume card.
+        Green box for a normal switch, warning-red when the target has no
+        sound card (the same detail the old message carried)."""
+        if time.monotonic() >= self.output_flash:
+            return
+        if self.output_warning:
+            d.rounded_rectangle([22, 70, W - 22, 156], radius=10,
+                                fill=(45, 30, 30))
+            d.text((W // 2, 80), self.output_shown, font=F_MED, fill=WARN,
+                   anchor="ma")
+            d.text((W // 2, 108), "output switched", font=F_SMALL, fill=FG,
+                   anchor="ma")
+            d.text((W // 2, 130), "no sound card?", font=F_SMALL, fill=DIM,
+                   anchor="ma")
+        else:
+            d.rounded_rectangle([22, 82, W - 22, 144], radius=10,
+                                fill=(28, 45, 30))
+            d.text((W // 2, 92), self.output_shown, font=F_MED, fill=HILITE,
+                   anchor="ma")
+            d.text((W // 2, 118), "output switched", font=F_SMALL, fill=FG,
+                   anchor="ma")
 
     def _bt_overlay(self, d):
         """Speaker-state popup, driven entirely by /status (field log
@@ -2083,6 +2117,9 @@ class App:
                                           and time.monotonic()
                                           - self.last_render >= MARQUEE_STEP_S)
                                       or (self.last_render < self.volume_flash
+                                          and time.monotonic()
+                                          - self.last_render >= 0.5)
+                                      or (self.last_render < self.output_flash
                                           and time.monotonic()
                                           - self.last_render >= 0.5)):
                 # Repaints are change-driven (_set marks dirty): while

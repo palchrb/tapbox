@@ -37,6 +37,9 @@ def make_app(status):
     app.volume_flash = 0.0
     app.volume_shown = None
     app.vol_mode_until = 0.0
+    app.output_flash = 0.0
+    app.output_shown = ""
+    app.output_warning = False
     thumb = Image.new("RGB", (128, 128), (10, 10, 10))
     app.artwork = lambda ref, size=110, square=False: \
         (SYNC.append(ref), thumb)[1] if ref else None
