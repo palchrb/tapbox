@@ -48,25 +48,58 @@ gi.repository = repo
 sys.modules.setdefault("gi", gi)
 sys.modules.setdefault("gi.repository", repo)
 
-from tapbox import bt  # noqa: E402
+from tapbox import bt, output  # noqa: E402
 
 RAN = []
 bt._run = lambda cmd, **kw: RAN.append(tuple(cmd))
+output.current_output = lambda: {"output": "bt", "pcm": "tapbox_bt"}
 
+# 2. v0.0.7 default: routing a NEW headset while bt is the current output
+# reopens go-librespot's output LIVE — ALSA re-reads asound.conf and picks
+# up the new MAC with no restart, no re-auth, no radio burst. No restart
+# means no dedup marker either.
+REOPENED = []
+output.reopen_go_output = lambda pcm: REOPENED.append(pcm) or True
 bt._route_alsa("AA:BB:CC:DD:EE:FF")
-assert any("restart" in c for c in RAN), RAN
-assert paths.go_restarted_within(8) is True, "route rewrite must mark a restart"
-print("2. bt._route_alsa restarts on a new speaker and marks it OK")
+assert REOPENED == ["tapbox_bt"], REOPENED
+assert RAN == [], f"a live reopen must not restart go-librespot: {RAN}"
+assert paths.go_restarted_within(8) is False, "no restart -> no mark"
+print("2. bt._route_alsa reopens live on a new headset (no restart) OK")
 
-# 3. the SAME mac again is a no-op: no rewrite, no restart, no new mark
+# 3. pre-v0.0.7 binary (the endpoint 404s -> reopen False): fall back to
+# the restart, and mark it so the daemon's rebuild won't bounce it again
+output.reopen_go_output = lambda pcm: False
+RAN.clear()
+bt._route_alsa("11:22:33:44:55:66")  # a different, still-new headset
+assert any("restart" in c for c in RAN), RAN
+assert paths.go_restarted_within(8) is True, "fallback restart must mark it"
+print("3. bt._route_alsa falls back to restart on an old binary OK")
+
+# 4. audio on the BUILT-IN speaker: a new bt route must not touch the
+# running process at all — the mapping applies on the next switch to bt,
+# and current local playback must not blip (reopen would close+reopen it)
+output.current_output = lambda: {"output": "local", "pcm": "tapbox_local"}
+output.reopen_go_output = lambda pcm: REOPENED.append(pcm) or True
+REOPENED.clear()
 RAN.clear()
 os.remove(paths.GO_RESTART_FILE)
-bt._route_alsa("AA:BB:CC:DD:EE:FF")
-assert RAN == [], "an unchanged route must not restart"
-assert paths.go_restarted_within(8) is False, "no restart -> no mark"
-print("3. re-routing the same speaker is a silent no-op OK")
+bt._route_alsa("AA:AA:AA:AA:AA:AA")  # yet another new headset
+assert REOPENED == [], f"local output must not be reopened: {REOPENED}"
+assert RAN == [], f"local output must not restart: {RAN}"
+assert paths.go_restarted_within(8) is False
+print("4. new headset while on the built-in speaker leaves playback alone OK")
 
-# 4. the daemon-side fresh check: with the marker fresh AND the config
+# 5. the SAME mac again is a no-op (already in asound.conf): no reopen,
+# no restart, no mark — whatever the current output
+output.current_output = lambda: {"output": "bt", "pcm": "tapbox_bt"}
+REOPENED.clear()
+RAN.clear()
+bt._route_alsa("AA:AA:AA:AA:AA:AA")  # the one section 4 wrote to asound
+assert REOPENED == [], "an unchanged route must not reopen"
+assert RAN == [], "an unchanged route must not restart"
+print("5. re-routing the same speaker is a silent no-op OK")
+
+# 6. the daemon-side fresh check: with the marker fresh AND the config
 # already correct, the dead-device rebuild skips its redundant restart
 # (it only ever skips when the retarget finds nothing to change)
 COOLDOWN = 8
@@ -79,7 +112,7 @@ assert would_restart is False, "fresh marker + no config change -> skip"
 config_changed = True
 would_restart = config_changed or not fresh
 assert would_restart is True, "a real config change always restarts"
-print("4. rebuild skips only when nothing changed and a restart is fresh OK")
+print("6. rebuild skips only when nothing changed and a restart is fresh OK")
 
 print("GO RESTART DEDUP OK — the double bounce on first-pair is gone, and "
       "a restart that must apply a config change is never skipped.")

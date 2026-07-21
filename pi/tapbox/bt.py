@@ -385,7 +385,21 @@ pcm.tapbox_local {{
 }}
 ''')
     os.replace(ASOUND + ".tmp", ASOUND)
-    log(f"==> ALSA output routed to {mac}, restarting go-librespot...")
+    log(f"==> ALSA output routed to {mac}")
+    # The new tapbox_bt->MAC mapping only matters to a RUNNING go-librespot
+    # if bt is its CURRENT output — then reopen it live (v0.0.7) so ALSA
+    # re-reads asound.conf and picks up the new headset with no restart and
+    # no Spotify re-auth. If audio is on the built-in speaker, the running
+    # process never opens tapbox_bt, so leave it (and its playback)
+    # untouched — the mapping applies when the output next switches to bt.
+    # Fall back to a restart on a pre-v0.0.7 binary that lacks the endpoint.
+    from tapbox.output import current_output, reopen_go_output  # lazy: cycle
+    if current_output().get("output") != "bt":
+        return
+    if reopen_go_output("tapbox_bt"):
+        log("==> go-librespot output reopened live on the new headset")
+        return
+    log("==> restarting go-librespot to apply the new route...")
     _run(["systemctl", "restart", "go-librespot"], timeout=30)
     # tell the daemon's dead-device rebuild this reconnect already got a
     # fresh go-librespot — so it doesn't bounce it a second time
