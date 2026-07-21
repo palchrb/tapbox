@@ -891,6 +891,10 @@ class Orchestrator:
                                            state_key(self.target) + ".json"))
                 except OSError:
                     pass
+            # nothing to flush at shutdown, and don't resurrect the just-
+            # cleared bookmark if a reboot lands before the next tick
+            _SPOT_PENDING_BM[0] = None
+            _SPOT_LAST_PLAYING[0] = False
             log("stop (bookmark cleared)")
             return {"stopped": True}
 
@@ -934,6 +938,10 @@ class Orchestrator:
             return self._command_locked(action)
         finally:
             self.lock.release()
+            # a control may have moved the position (prev rewinds to 0,
+            # next/seek jump) — wake the bookmarker so the in-memory
+            # bookmark is fresh within a beat, not up to a 5s tick later
+            _bm_wake.set()
 
     def _command_locked(self, action):
         _kick_bt_connect()  # any transport control = sound intent
@@ -1938,6 +1946,13 @@ def _wifi_boot_reenable():
 # so a phone-driven Connect session never arms boot-resume.
 _SPOT_LAST_PLAYING = [False]
 
+# The freshest box-initiated bookmark, kept in memory so a reboot/poweroff
+# can flush it even mid-song. The bookmarker throttles DISK writes (SD
+# hygiene: 30s / on track change), so a position — e.g. a seek made seconds
+# ago — otherwise lives only in bm_pending and dies with the thread at TERM,
+# leaving boot-resume to continue from a stale spot. _on_term flushes this.
+_SPOT_PENDING_BM = [None]
+
 
 def _spotify_bookmarker():
     """Spotify's cloud remembers positions for ITS clients only — so we
@@ -1989,6 +2004,7 @@ def _spotify_bookmarker():
                 context = _spotify.to_uri(ORCH.target)
             bm = _spotify.bookmark_step(st, context)
             if bm is not None:
+                _SPOT_PENDING_BM[0] = bm  # freshest position for shutdown flush
                 if (bm.get("uri") != bm_written[1]
                         or time.monotonic() - bm_written[0] >= bm_flush_s):
                     _spotify.save_bookmark(bm)
@@ -2532,8 +2548,26 @@ def _flag_was_playing():
         pass
 
 
+def _flush_spotify_bookmark():
+    """Reboot/poweroff while OUR spotify plays: the bookmarker throttles
+    disk writes, so the freshest position lives only in memory and would
+    die with the thread at TERM — boot-resume then continues from a stale
+    spot (field: seek to the start, reboot mid-song, resume lands back at
+    the old position). Flush the last in-memory bookmark here. Playing-
+    gated (stop/pause already flushed or cleared, and must not be
+    resurrected), and it's an in-memory value — no live go_status(), which
+    would race go-librespot's concurrent TERM (the daemon is deliberately
+    NOT ordered after it)."""
+    try:
+        if _SPOT_LAST_PLAYING[0] and _SPOT_PENDING_BM[0] is not None:
+            _spotify.save_bookmark(_SPOT_PENDING_BM[0])
+    except Exception:
+        pass
+
+
 def _on_term(*_args):
     _flag_was_playing()
+    _flush_spotify_bookmark()
     os._exit(0)
 
 
