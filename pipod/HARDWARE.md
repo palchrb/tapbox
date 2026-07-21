@@ -24,6 +24,27 @@ Design decisions here follow from [RESEARCH.md](./RESEARCH.md). Verify the
 wheel → I²C adapter" (doesn't exist); a 5G Video/Classic or mini wheel
 unless you're prepared to reverse-engineer the 14-pin/Molex variant.
 
+## DAC / amp options for the jack (BOM #5–6)
+
+Any of these feeds the 3.5 mm jack. Chosen default is the PCM5102 route
+(least Pi-side fuss, matches TapBox's `hifiberry-dac` "local" path). Others
+are alternatives — pick per taste; details in RESEARCH §3.
+
+| Option | Chips | Headphone amp? | Pi integration | Notes |
+|---|---|---|---|---|
+| **PCM5102A + small amp** *(default)* | PCM5102A + PAM8908/TPA6132 | via the added amp | easy — `hifiberry-dac`, no MCLK | 2 boards; XSMT→3V3 frees BCM25 |
+| Pirate Audio: Headphone Amp | PCM5100A + PAM8908 | ✅ built-in | easy — `hifiberry-dac` + `gpio=25` | pHAT; `gpio=25` clashes w/ wheel Data → remap wheel |
+| **Adafruit TLV320DAC3100** (#6309) | TLV320DAC3100 | ✅ built-in + onboard jack | ⚠️ harder — `tlv320aic31xx` overlay, likely MCLK; adapt `output.py` card check | *alt:* all-in-one DAC+amp+jack, **STEMMA QT/I²C** control; nice if you want Qwiic + one board |
+| USB DAC dongle | (varies) | ✅ built-in | trivial — class-compliant | eats the micro-USB OTG port; Dupont's own fallback |
+| HiFiBerry DAC2 Pro | PCM5122 + TPA6133 | ✅ built-in | easy — `hifiberry-dacplus` | great sound but full-HAT size (too big inside) |
+
+The **TLV320DAC3100** is the Qwiic/STEMMA-friendly all-in-one (DAC + real
+headphone amp + 3.5 mm jack in one small board), but its I²C is for
+*configuration* — audio still rides I²S (BCLK/LRCLK/DIN on GPIO), it needs a
+`tlv320aic31xx` device-tree overlay (+ probably an MCLK via PWM/GPCLK), and
+it won't appear as `sndrpihifiberry`, so pipod's `output.py` card detection
+would need a small tweak. Kept as an alternative, not the default.
+
 ## GPIO pin budget (BCM)
 
 Chosen so nothing collides. The one real hazard is **BCM25**: the wheel's

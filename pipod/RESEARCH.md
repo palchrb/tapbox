@@ -227,10 +227,18 @@ mini-HDMI + micro-USB. The solder test points are composite *video*, not
 audio. So the jack must come from a DAC.
 https://learn.adafruit.com/introducing-the-raspberry-pi-zero/audio-outputs
 
+> **Note on the reference build:** Dupont's sPot did **not** use the mini
+> jack — it was **Bluetooth-only**, and the iPod's original headphone jack
+> was left **decorative/non-functional**. He explicitly wanted to add a
+> **USB DAC** later ("if I switch to a smaller boost module, I can fit a
+> small USB DAC and hook it back up"). pipod does what he planned, but via
+> an **I²S DAC** (fits better, doesn't consume the one micro-USB OTG port).
+> https://hackaday.io/project/177034-spot-spotify-in-a-4th-gen-ipod-2004/details · https://www.whathifi.com/news/this-2004-ipod-has-wi-fi-bluetooth-and-can-stream-any-song-directly-from-spotify
+
 ### Three routes
 - **(a) USB DAC dongle** — class-compliant, includes a real headphone amp,
   zero config. But it eats the single micro-USB OTG data port. Fine as a
-  fallback, awkward inside an iPod.
+  fallback, awkward inside an iPod (this was Dupont's own fallback idea).
 - **(b) I²S DAC (recommended)** — digital over the GPIO header; best
   quality; needs a dtoverlay. **This is what TapBox already uses.**
 - **(c) PWM + RC filter** — cheapest, noisy, needs an amp. Not worth it
