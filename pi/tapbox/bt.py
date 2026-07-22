@@ -155,41 +155,53 @@ def controller_ok():
     return btbus.adapter_powered()
 
 
-_SERDEV_DRIVERS = "/sys/bus/serdev/drivers"
+# The serdev bus registers in sysfs as 'serial' (kernel serdev_bus_type
+# .name = "serial"), NOT 'serdev' — the old path made the re-probe a silent
+# no-op in the field (2026-07-22: recover()'s rfkill cycles ran, the
+# 'Re-probed' line never appeared, hard wedges survived until a cold power
+# cycle). Both are probed for robustness across kernels; env-tunable for
+# the test harness.
+_SERDEV_BASES = tuple(
+    p for p in os.environ.get(
+        "TAPBOX_SERDEV_BASES",
+        "/sys/bus/serial/drivers:/sys/bus/serdev/drivers").split(":") if p)
 
 
 def _reattach_firmware():
     """Reload the BT controller firmware. Older Raspberry Pi OS attached
-    the chip via hciuart.service; Bookworm does it in-kernel (serdev), so
-    restarting the (nonexistent) service is a silent no-op there — seen in
-    the field as recover() 'running' while the -110 reset loop continued.
-    Re-probing the serdev device makes the hci_uart driver power-cycle the
-    chip and re-upload the firmware patchram."""
+    the chip via hciuart.service; Bookworm+ does it in-kernel (serdev), so
+    restarting the (nonexistent) service is a silent no-op there.
+    Re-probing the serdev device (e.g. serial0-0 under the hci_uart_bcm
+    driver) makes hci_uart power-cycle the chip and re-upload the firmware
+    patchram — the same unbind/bind path Home Assistant OS ships for this
+    exact BCM43xx wedge."""
     code, _out = _run(["systemctl", "restart", "hciuart"], timeout=60)
     if code == 0:
         return True
-    try:
-        drivers = os.listdir(_SERDEV_DRIVERS)
-    except OSError:
-        drivers = []
-    for drv in drivers:
-        base = os.path.join(_SERDEV_DRIVERS, drv)
+    for bus in _SERDEV_BASES:
         try:
-            devs = [d for d in os.listdir(base) if d.startswith("serial")]
+            drivers = os.listdir(bus)
         except OSError:
             continue
-        for dev in devs:
+        for drv in drivers:
+            base = os.path.join(bus, drv)
             try:
-                with open(os.path.join(base, "unbind"), "w") as f:
-                    f.write(dev)
-                time.sleep(1)
-                with open(os.path.join(base, "bind"), "w") as f:
-                    f.write(dev)
-                log(f"==> Re-probed BT serdev {dev} ({drv}) — firmware "
-                    f"reloaded")
-                return True
-            except OSError as e:
-                log(f"serdev re-probe of {dev} failed: {e}")
+                devs = [d for d in os.listdir(base)
+                        if d.startswith("serial")]
+            except OSError:
+                continue
+            for dev in devs:
+                try:
+                    with open(os.path.join(base, "unbind"), "w") as f:
+                        f.write(dev)
+                    time.sleep(1)
+                    with open(os.path.join(base, "bind"), "w") as f:
+                        f.write(dev)
+                    log(f"==> Re-probed BT serdev {dev} ({drv}) — "
+                        f"firmware reloaded")
+                    return True
+                except OSError as e:
+                    log(f"serdev re-probe of {dev} failed: {e}")
     log("no firmware re-attach path found (no hciuart unit, no serdev)")
     return False
 
@@ -202,6 +214,13 @@ def recover():
     a reboot used to be the only cure. Re-init the whole chain instead:
     hciuart re-uploads the firmware, then bluetooth + bluealsa return."""
     log("==> Bluetooth controller looks dead — re-attaching firmware...")
+    # Undervoltage evidence: a Zero 2 W on a marginal supply classically
+    # browns out the RADIO section while the SoC runs on — capture the
+    # throttle flags at every crash so the field data accrues by itself.
+    # Anything but throttled=0x0 is a power lead, not a firmware one.
+    code, out = _run(["vcgencmd", "get_throttled"], timeout=10)
+    if code == 0 and out.strip():
+        log(f"==> power state at crash: {out.strip()}")
     _run(["systemctl", "stop", "bluetooth"], timeout=30)
     _reattach_firmware()
     _run(["systemctl", "start", "bluetooth"], timeout=30)
