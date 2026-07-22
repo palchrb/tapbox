@@ -2841,6 +2841,27 @@ def _streaming_now():
     return False
 
 
+def _ps_want_off():
+    """The governor's per-tick verdict: True = PS off, False = PS on,
+    None = unknown (hold current state). Network streaming always wants
+    PS off (the original rule). The wifi_ps_bt_off SETTING (PWA, default
+    off — it costs ~15-20% listening runtime) extends that to any BT
+    audio session, even fully cached: with PS on, every beacon wake is a
+    coex re-arbitration against the never-pausing A2DP stream, the
+    suspected BCM43430 crash trigger (field 2026-07-22, 3 crashes under
+    steady cached A2DP + PS-on). With wifi off entirely this is moot —
+    no beacons at all is even better for BT, and the iw calls no-op."""
+    base = _streaming_now()
+    if base is not None and not base:
+        try:
+            if load_settings().get("wifi_ps_bt_off") \
+                    and _bt_playback_active():
+                return True
+        except Exception:
+            pass  # settings unreadable — fall back to the base verdict
+    return base
+
+
 def _wifi_ps_governor():
     """Wi-Fi power save trades latency for battery — and the two sides
     win at DIFFERENT times. Idle/cached: PS on is pure battery win.
@@ -2923,7 +2944,7 @@ def _ps_govern():
         _PS_KICK.wait(WIFI_PS_TICK_S)  # play intent ends the wait early
         _PS_KICK.clear()
         try:
-            want_off = _streaming_now()
+            want_off = _ps_want_off()
             if want_off is None:  # api mid-load: never flip PS blindly
                 continue
             if want_off:

@@ -39,6 +39,10 @@ SETTING_SPECS = {
     "spotify_bitrate": (160, 96, 320),  # further constrained to BITRATES
     "resume_on_boot": (1, 0, 1),
     "wifi_auto_off_min": (15, 0, 240),  # 0 = never auto-off
+    "wifi_ps_bt_off": (0, 0, 1),  # 1 = hold wifi power save OFF while BT
+    # audio plays (fewer beacon-wake coex arbitrations against A2DP — the
+    # suspected BCM43430 crash trigger). Costs ~15-20% listening runtime,
+    # so it's the parent's call; default off.
     "wifi_probe": (1, 0, 1),  # auto-off'd wifi: 1 = re-probe ~10 min,
     # 0 = stay off until the PWA/screen reconnect button
     "simple_nav": (0, 0, 2),  # browse: 0 text menus, 1 flat cover carousel,

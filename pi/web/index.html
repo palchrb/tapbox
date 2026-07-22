@@ -152,6 +152,16 @@
         <option value="0">never</option>
       </select>
     </label>
+    <label>Keep Wi-Fi awake while Bluetooth plays
+      <select id="set-psbt">
+        <option value="0">off (longer battery)</option>
+        <option value="1">on (steadier Bluetooth)</option>
+      </select>
+    </label>
+    <p class="dim small">On: Wi-Fi skips its power-save naps during
+    Bluetooth playback — fewer radio handovers that can glitch the
+    Bluetooth chip, at the cost of roughly 15–20% shorter listening
+    time on battery. Irrelevant when Wi-Fi is off entirely.</p>
     <label>Look for known Wi-Fi while off
       <select id="set-wifiprobe">
         <option value="1">every 10 min</option>

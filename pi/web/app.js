@@ -648,6 +648,7 @@ async function loadSettings() {
   $("#set-kidnav").value = String(s.simple_nav || 0);
   $("#set-wifioff").value = String(s.wifi_auto_off_min);
   $("#set-wifiprobe").value = String(s.wifi_probe);
+  $("#set-psbt").value = String(s.wifi_ps_bt_off || 0);
 }
 
 for (const [id, key] of [["#set-screen", "screen_timeout_s"],
@@ -659,7 +660,8 @@ for (const [id, key] of [["#set-screen", "screen_timeout_s"],
                          ["#set-resume", "resume_on_boot"],
                          ["#set-kidnav", "simple_nav"],
                          ["#set-wifioff", "wifi_auto_off_min"],
-                         ["#set-wifiprobe", "wifi_probe"]]) {
+                         ["#set-wifiprobe", "wifi_probe"],
+                         ["#set-psbt", "wifi_ps_bt_off"]]) {
   $(id).addEventListener("change", async () => {
     try {
       await api("/settings", { method: "PUT",
