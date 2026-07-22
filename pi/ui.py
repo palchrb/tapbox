@@ -100,6 +100,8 @@ DARK_POLL_TICK_S = 5.0  # P1 poller: while the screen is dark it only waits for
 CONTROL_TIMEOUT = 5   # play/pause/next/prev hit the LOCAL daemon — if it
                       # can't answer in 5s the backend is wedged; fail fast
                       # so buttons keep working instead of freezing the UI
+PP_RECONCILE_S = 2.0  # after an optimistic play/pause flip, hold the local
+                      # icon state until a poll confirms it (or this expires)
 # The render loop is single-threaded: any daemon poll it makes blocks
 # every button until it returns. /system + /settings + /library used the
 # 10s default, so a daemon slowed by go-librespot's blocking API (a track
@@ -641,6 +643,8 @@ class App:
         self.bt_connecting_until = 0.0  # popup X pressed: full connect running
         self.wifi_connecting_until = 0.0  # X pressed: wifi reconnect running
         self.catch_up_until = 0.0   # repaint every tick until this time
+        self._pp_expect = None      # optimistic play/pause: expected playing
+        self._pp_until = 0.0        #   state, held until a poll confirms it
         self.last_status = 0.0
         self.last_system = 0.0
         self.last_input = time.monotonic()
@@ -665,6 +669,17 @@ class App:
         """Repaint only when the data actually changed — every repaint is
         a full PIL compose + a 115KB SPI push, and a paused now-view
         otherwise redraws an identical frame every STATUS_POLL_S."""
+        # Optimistic play/pause: the icon flips locally on press so it tracks
+        # the music (which responds at once). Until a poll CONFIRMS the new
+        # state (or the window expires) keep our value, so a stale go-librespot
+        # report on the next /status can't flicker the icon back and forth.
+        if attr == "status" and isinstance(value, dict) \
+                and self._pp_expect is not None:
+            if time.monotonic() >= self._pp_until \
+                    or value.get("playing") == self._pp_expect:
+                self._pp_expect = None  # confirmed or timed out -> accept
+            else:
+                value = {**value, "playing": self._pp_expect}
         if getattr(self, attr) != value:
             setattr(self, attr, value)
             self.dirty = True
@@ -707,18 +722,13 @@ class App:
         home->now snap and nav reconcile run on the main loop
         (_reconcile_view), so this is safe off the render thread."""
         now = time.monotonic()
-        if now - self.last_system > SYSTEM_POLL_S:
-            self.last_system = now
-            try:
-                self._set("system", api_get("/system",
-                                            timeout=RENDER_HTTP_TIMEOUT))
-                self._set("settings", api_get("/settings",
-                                              timeout=RENDER_HTTP_TIMEOUT))
-                # brightness may have changed from the PWA — apply live
-                self.display.set_brightness(
-                    self.settings.get("screen_brightness", 100))
-            except OSError:
-                pass
+        # /status FIRST — it carries the now-view album art + progress bar and
+        # the playing state. On a screen WAKE the run loop forces BOTH
+        # last_status and last_system to 0; if /system (battery nc forks, wifi
+        # read, bt check — the slow one) went first, the user-visible data
+        # would land seconds behind it (field 2026-07-22: wake -> art/progress
+        # only corrected after several seconds). Poll what the screen shows
+        # before the housekeeping polls.
         if (self.view == "home" and not self.user_touched
                 and now - self.last_status > 2.0):
             self.last_status = now
@@ -733,6 +743,18 @@ class App:
                 self._set("status", api_get("/status", timeout=2))
             except OSError:
                 self._set("status", {})
+        if now - self.last_system > SYSTEM_POLL_S:
+            self.last_system = now
+            try:
+                self._set("system", api_get("/system",
+                                            timeout=RENDER_HTTP_TIMEOUT))
+                self._set("settings", api_get("/settings",
+                                              timeout=RENDER_HTTP_TIMEOUT))
+                # brightness may have changed from the PWA — apply live
+                self.display.set_brightness(
+                    self.settings.get("screen_brightness", 100))
+            except OSError:
+                pass
         self.load_library()
 
     def _force_poll(self):
@@ -1021,7 +1043,7 @@ class App:
         showing the previous playlist's cover until the next change or a
         keypress."""
         self.push("now")
-        self.last_status = 0.0                     # poll now, not in ~1s
+        self._force_poll()                         # poll now, not in ~1s
         self.catch_up_until = time.monotonic() + 6
 
     def _no_internet(self):
@@ -1088,6 +1110,14 @@ class App:
         try:
             if ev == "a":
                 self._control_async("/playpause")
+                # optimistic: flip the icon NOW (see PP_RECONCILE_S) so it
+                # matches the music instead of waiting for the poller's next
+                # /status, which can be a second+ behind on a busy daemon
+                cur = bool((self.status or {}).get("playing"))
+                self._pp_expect = not cur
+                self._pp_until = time.monotonic() + PP_RECONCILE_S
+                self.status = {**(self.status or {}), "playing": self._pp_expect}
+                self.dirty = True
             elif ev == "b":
                 if in_vol:  # volume card open: B/Y are - / +
                     self._volume_mode(delta=-5)
@@ -1118,7 +1148,7 @@ class App:
                 api_post(path, timeout=CONTROL_TIMEOUT)
             except OSError as e:
                 log(f"control failed: {e}")
-            self.last_status = 0.0
+            self._force_poll()  # kick the poller so the icon confirms fast
         threading.Thread(target=go, daemon=True).start()
 
     def _open_episodes(self):
