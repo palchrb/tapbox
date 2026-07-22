@@ -730,6 +730,18 @@ class Orchestrator:
             with open(OUT_FILE + ".tmp", "w") as f:
                 json.dump({"output": device, "pcm": pcm}, f)
             os.replace(OUT_FILE + ".tmp", OUT_FILE)
+            # BT quiet marker: the USER explicitly choosing the built-in
+            # speaker (not btwatchd's drop fallback) tells btwatchd to stop
+            # blind reconnect pages; ANY transition to bt clears it so a later
+            # drop still recovers. (A drop -> fallback=True local -> marker
+            # untouched -> btwatchd keeps its full reconnect ladder.)
+            try:
+                if device == "bt":
+                    os.remove(_bt.BT_QUIET_FILE)
+                elif device == "local" and not fallback:
+                    open(_bt.BT_QUIET_FILE, "a").close()
+            except OSError:
+                pass
             if not fallback:
                 # The user asked for the speaker NOW (OUT_FILE already
                 # says bt, so the helper checks the right output)

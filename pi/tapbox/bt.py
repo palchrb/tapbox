@@ -62,6 +62,13 @@ MAC_FILE = os.environ.get("TAPBOX_BT_FILE", "/etc/tapbox/bt-headset")
 # instead of waiting out its blind-retry backoff (up to 300s)
 KICK_FILE = os.environ.get("TAPBOX_BT_KICK",
                            os.path.join(STATE_DIR, "bt-connect-kick"))
+# Set when the USER explicitly chose the built-in speaker (hold-X / PWA,
+# fallback=False). btwatchd parks its blind reconnect pages while it exists,
+# so the box stops chasing a speaker the user deliberately turned off. A
+# speaker DROP is btwatchd's own fallback=True, which never sets it — so
+# drop-recovery is unaffected. Any transition back to the bt output clears it.
+BT_QUIET_FILE = os.environ.get("TAPBOX_BT_QUIET",
+                               os.path.join(STATE_DIR, "bt-quiet"))
 ASOUND = os.environ.get("TAPBOX_ASOUND", "/etc/asound.conf")
 SCAN_SECS = int(os.environ.get("TAPBOX_SCAN_SECS", "20"))
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")

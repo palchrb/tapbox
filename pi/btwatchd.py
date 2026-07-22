@@ -72,7 +72,8 @@ except ImportError as _e:
 
 from tapbox import boxapi  # noqa: E402
 from tapbox import radio as _radio  # noqa: E402 — shared-radio yield
-from tapbox.bt import KICK_FILE, MAC_FILE, acquire_process_lock  # noqa: E402
+from tapbox.bt import (BT_QUIET_FILE, KICK_FILE, MAC_FILE,  # noqa: E402
+                       acquire_process_lock)
 
 # timings are env-tunable so the test harness can run in seconds
 BOOT_RETRY_S = float(os.environ.get("TAPBOX_RECON_BOOT_RETRY", "5"))
@@ -572,6 +573,16 @@ class Reconnector:
 
     def schedule(self, secs, why):
         self.cancel_timer()
+        if os.path.exists(BT_QUIET_FILE):
+            # The user explicitly chose the built-in speaker — park blind
+            # reconnect pages (they saturate the shared 2.4GHz radio and can
+            # provoke the controller). Event-driven revival still fires: the
+            # switch-to-bt kick, the speaker paging us, RSSI/appearance. A
+            # speaker DROP never sets the marker (btwatchd's own fallback),
+            # so drop-recovery keeps its full ladder.
+            if why:
+                log(f"{why} — parked (user chose the built-in speaker)")
+            return
         if why:
             log(f"{why} — retry in {int(secs)}s")
         self.timer = GLib.timeout_add(int(secs * 1000), self._timer_fire)
