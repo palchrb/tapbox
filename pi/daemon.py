@@ -1207,11 +1207,29 @@ class Orchestrator:
             except (OSError, ValueError):
                 pass
             out["position"] = self._settle_position(out["position"], now)
+            # Re-resolve the episode art to the LOCAL cached file if present:
+            # an episode that started while STREAMING baked the remote URL
+            # into now-playing.json for the whole session, so a later wake
+            # would re-fetch it over wifi (seconds). The sweep caches it under
+            # the target's dir; prefer that. Read-time only — never persisted
+            # (a dead local path can't fall back to a remote URL).
+            if out.get("episode_id") and out.get("artwork"):
+                _dir = content.cache_key_for(target)
+                if _dir:
+                    out["artwork"] = content._image_local_or_remote(
+                        _dir, out["episode_id"], out["artwork"])
         # short timeout: /status is polled ~1/s by the single-threaded
         # screen, and go-librespot is briefly unresponsive while it
         # restarts (output switch / transport rebuild) — the default 5s
-        # here froze the whole UI for ~5s on a BT drop (field 2026-07-17)
-        st = go_status(timeout=GO_STATUS_TIMEOUT)
+        # here froze the whole UI for ~5s on a BT drop (field 2026-07-17).
+        # mpv card: the now-view is served 100% from local state (mpv IPC +
+        # now-playing.json); go-librespot only fills out["spotify"] (PWA), so
+        # use a SHORT probe there — a screen wake's first /status shouldn't
+        # block ~1.5s on go-librespot. Fresh when go answers fast; the
+        # hold-cache below serves the last state when it doesn't.
+        gs_timeout = (GO_ST_MPV_TIMEOUT if (mpv_alive and source == "mpv"
+                      and out.get("title")) else GO_STATUS_TIMEOUT)
+        st = go_status(timeout=gs_timeout)
         if st.get("track"):
             self._go_st_cache = (time.monotonic(), st)
         elif not st:
@@ -2137,6 +2155,9 @@ BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
 # a few seconds mid-restart, so cap how long its status query may block
 GO_ST_HOLD_S = float(os.environ.get("TAPBOX_GO_ST_HOLD", "5"))
 GO_STATUS_TIMEOUT = float(os.environ.get("TAPBOX_GO_STATUS_TIMEOUT", "1.5"))
+# mpv now-view: go-librespot only fills the (PWA-only) spotify sub-dict, so
+# probe it with a short timeout instead of blocking the screen wake ~1.5s.
+GO_ST_MPV_TIMEOUT = float(os.environ.get("TAPBOX_GO_ST_MPV_TIMEOUT", "0.3"))
 BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
 # auto-resume window after an auto-stop. 150s (not 30): a speaker OFF/ON
 # cycle takes 20-60s to re-establish A2DP (own reconnect flaps during its
