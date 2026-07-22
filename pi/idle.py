@@ -19,7 +19,7 @@ While disabled NOTHING accumulates — flipping the setting back on
 starts a fresh countdown instead of powering off within the minute.
 The CLI argument is the fallback when no settings file exists.
 
-Usage: idle.py [minutes]   (default 30)
+Usage: idle.py [minutes]   (default 5)
 """
 
 import os
@@ -36,7 +36,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
 from tapbox import boxapi, mpv, spotify  # noqa: E402
 from tapbox.paths import last_activity, read_settings  # noqa: E402
 
-IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 CHECK_S = 60
 # A button press younger than this counts as 'in use'. Two check
 # periods: a press can land anywhere between samples, and one extra
