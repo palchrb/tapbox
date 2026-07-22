@@ -228,6 +228,23 @@ def recover():
         time.sleep(3)
         btbus.adapter_power_on()
         ok = controller_ok()
+    if not ok:
+        # Tier 3 (field 2026-07-22: two hard crashes where the serdev
+        # re-attach alone left the -110 reset loop running): a full driver
+        # module reload re-probes the serdev from scratch — stronger than
+        # unbind/bind when the DRIVER state itself is wedged. Best-effort:
+        # modprobe -r fails harmlessly if something still holds the module.
+        log("==> Still down — reloading the BT driver module (hci_uart)...")
+        _run(["systemctl", "stop", "bluetooth"], timeout=30)
+        _run(["modprobe", "-r", "hci_uart"], timeout=30)
+        time.sleep(1)
+        _run(["modprobe", "hci_uart"], timeout=30)
+        time.sleep(3)
+        _run(["systemctl", "start", "bluetooth"], timeout=30)
+        _run(["rfkill", "unblock", "bluetooth"], timeout=10)
+        time.sleep(2)
+        btbus.adapter_power_on()
+        ok = controller_ok()
     log("==> Controller is back." if ok
         else "==> Controller still down — a power cycle may be needed.")
     return ok

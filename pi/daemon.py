@@ -2220,11 +2220,39 @@ def _bt_transport_lost():
     # mpv branch stops the child under ORCH.lock and arms the wait
     # AFTER releasing it.
     stopped_mpv = False
+    kept_playing = False
     with ORCH.lock:
         if ORCH._mpv_alive():
-            log("bt transport lost mid-play — stopping (bookmark survives)")
-            ORCH._stop_child()
-            stopped_mpv = True
+            # Keep the kid's audio alive: with a built-in card, retarget
+            # mpv LIVE to the local device and keep playing — a stopped
+            # box mid-story reads as broken. Safe against the historical
+            # output-flap (episode-skip) because the transport is
+            # CONFIRMED dead here (btwatchd's notification), not guessed.
+            # btwatchd's own fallback announce (~20s) then converges
+            # OUT_FILE to local, and the speaker coming back flows
+            # through its reconnect -> announce(bt) -> deferred switch.
+            if _i2s_card_present():
+                try:
+                    kept_playing = mpv_ipc(
+                        ["set_property", "audio-device",
+                         f"alsa/{OUTPUT_PCMS['local']}"]
+                    ).get("error") == "success"
+                except OSError:
+                    kept_playing = False
+            if kept_playing:
+                log("bt transport lost mid-play — continuing on the "
+                    "built-in speaker")
+            else:
+                log("bt transport lost mid-play — stopping (bookmark "
+                    "survives)")
+                ORCH._stop_child()
+                stopped_mpv = True
+    if kept_playing:
+        # deliberately NOT arming _BT_WAIT['lost']: audio is still
+        # playing, so the blip auto-resume must not fire a second
+        # starter when the transport returns — btwatchd's announce
+        # path moves mpv back to bt by itself.
+        return {"stopped": False, "kept": "local"}
     if stopped_mpv:
         with _BT_WAIT_LOCK:
             _BT_WAIT["lost"] = time.monotonic()
