@@ -925,8 +925,16 @@ class App:
         for e in self.flat_entries():
             ref = e.get("image")
             if ref and not ref.startswith("http"):
-                for size in (176, 56):
-                    self.artwork(ref, size)
+                # match EXACTLY what each view reads, or the cache key's
+                # square flag makes the warm a miss (it warmed 176 fit while
+                # the views read square, so the warm decoded nothing useful):
+                #   now-playing reads 128 SQUARE (render_now)
+                #   carousel + category carousel read 176 SQUARE (render_
+                #     carousel / render_cats)
+                #   list rows read 56 fit (_row_art)
+                self.artwork(ref, 128, square=True)
+                self.artwork(ref, 176, square=True)
+                self.artwork(ref, 56)
                 time.sleep(0.05)
         self.dirty = True
 

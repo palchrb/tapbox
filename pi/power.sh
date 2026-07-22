@@ -47,13 +47,6 @@ write() {  # write <value> to <file>; skip silently if file is missing
   fi
 }
 
-set_cores() {  # 0 = offline cpu2+cpu3, 1 = online
-  local c
-  for c in 2 3; do
-    write "$1" "/sys/devices/system/cpu/cpu$c/online"
-  done
-}
-
 set_governor() {
   local g
   for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
@@ -112,10 +105,12 @@ status_report() {
 
 case "${1:-}" in
   save)
-    set_cores 0
+    # Core parking is NOT possible at runtime here: the Pi kernel has no CPU
+    # hotplug, so writing cpuN/online is a no-op (this used to call a dead
+    # set_cores). The real 2-core lever is maxcpus=2 in cmdline.txt + reboot.
     if [[ ! -e /sys/devices/system/cpu/cpu2/online ]]; then
-      echo "note: this kernel has no CPU hotplug — cores stay online (idle cores"
-      echo "      sleep deeply anyway; add maxcpus=2 to cmdline.txt if you must)"
+      echo "note: 4 cores stay online (no runtime hotplug); for 2-core"
+      echo "      operation add maxcpus=2 to cmdline.txt and reboot"
     fi
     set_governor powersave
     set_leds none 0
@@ -137,7 +132,6 @@ case "${1:-}" in
     fi
     ;;
   perf)
-    set_cores 1
     systemctl start tailscaled 2>/dev/null || true
     set_governor ondemand
     set_leds mmc0 1
