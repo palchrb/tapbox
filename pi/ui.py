@@ -94,6 +94,9 @@ FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
 SYSTEM_POLL_S = 30.0
+DARK_POLL_TICK_S = 5.0  # P1 poller: while the screen is dark it only waits for
+                        # a wake kick (no HTTP all night); TICK_S when the
+                        # screen is on.
 CONTROL_TIMEOUT = 5   # play/pause/next/prev hit the LOCAL daemon — if it
                       # can't answer in 5s the backend is wedged; fail fast
                       # so buttons keep working instead of freezing the UI
@@ -654,6 +657,7 @@ class App:
         self._art_fails = {}        # per-cover failure count -> retry backoff
         self._now_art_prev = (None, None)  # (target, last shown now-cover)
         self._lib_at = 0.0          # last /library fetch (TTL'd)
+        self._poll_wake = threading.Event()  # P1: kick the poller to refetch
 
     # -- data ---------------------------------------------------------------
 
@@ -671,11 +675,37 @@ class App:
             # popup instead of lagging (field 2026-07-20).
             if attr == "status" and isinstance(value, dict) \
                     and "bt_connected" in value:
-                if not isinstance(self.system, dict):
-                    self.system = {}
-                self.system["bt_ready"] = value["bt_connected"]
+                # whole-dict swap, NOT in-place mutation: with P1 the poller
+                # and the input thread both publish self.system, and an
+                # in-place write could be read half-updated by the render
+                # thread. An atomic reference swap can't be.
+                base = self.system if isinstance(self.system, dict) else {}
+                self.system = {**base, "bt_ready": value["bt_connected"]}
 
-    def refresh(self):
+    def _poller(self):
+        """P1: owns ALL daemon HTTP so the render/input loop never blocks on
+        the network (a slow /status behind a go-librespot track-load used to
+        stall the button->repaint path up to ~2s). Parks while the screen is
+        dark — no HTTP all night — and a _force_poll() kick un-parks it and
+        forces an immediate refetch."""
+        while True:
+            # Clear BEFORE fetching: a kick arriving DURING _poll_once leaves
+            # the event set, so the next wait() returns at once (one redundant
+            # poll) instead of swallowing the requested refetch.
+            self._poll_wake.clear()
+            if self.display.on:
+                try:
+                    self._poll_once()
+                except Exception as e:
+                    log(f"poller error: {e!r}")
+            self._poll_wake.wait(
+                TICK_S if self.display.on else DARK_POLL_TICK_S)
+
+    def _poll_once(self):
+        """Fetch /system, /settings, /status, /library into cached state via
+        _set (which repaints on change). Pure data — NO view mutation; the
+        home->now snap and nav reconcile run on the main loop
+        (_reconcile_view), so this is safe off the render thread."""
         now = time.monotonic()
         if now - self.last_system > SYSTEM_POLL_S:
             self.last_system = now
@@ -689,7 +719,6 @@ class App:
                     self.settings.get("screen_brightness", 100))
             except OSError:
                 pass
-        self._apply_nav_mode()
         if (self.view == "home" and not self.user_touched
                 and now - self.last_status > 2.0):
             self.last_status = now
@@ -697,17 +726,30 @@ class App:
                 self._set("status", api_get("/status", timeout=2))
             except (OSError, ValueError):
                 self._set("status", {})
-            if self.status.get("playing"):
-                self.stack = [("home", 0)]
-                self.view = "now"
-                self.dirty = True
-        if self.view in ("now", "episodes", "carousel", "cats") \
+        elif self.view in ("now", "episodes", "carousel", "cats") \
                 and now - self.last_status > STATUS_POLL_S:
             self.last_status = now
             try:
                 self._set("status", api_get("/status", timeout=2))
             except OSError:
                 self._set("status", {})
+        self.load_library()
+
+    def _force_poll(self):
+        """Make the poller refetch /status now (after a play/enter/wake)."""
+        self.last_status = 0.0
+        self._poll_wake.set()
+
+    def _reconcile_view(self):
+        """Main-thread view mutations that used to live in refresh(): the
+        nav-mode reconcile and the home->now snap. Reads cached self.status
+        (the poller keeps it fresh); never touches the network."""
+        self._apply_nav_mode()
+        if (self.view == "home" and not self.user_touched
+                and (self.status or {}).get("playing")):
+            self.stack = [("home", 0)]
+            self.view = "now"
+            self.dirty = True
 
     def _nav_mode(self):
         """0 = text menus, 1 = flat cover carousel, 2 = category carousel."""
@@ -761,17 +803,20 @@ class App:
             self.dirty = True
 
     def load_library(self, ttl=2.0):
-        """/library with a small TTL: render paths (home + carousel) call
-        this per frame, and marquee/progress repaints run a few frames a
-        second — one HTTP fetch per repaint was pointless load."""
+        """/library with a small TTL. P1: the background poller owns this now
+        (the render path no longer calls it), and it publishes through _set
+        so a changed library triggers a repaint. Always stores a dict with a
+        'sections' key so readers can subscript it safely."""
         now = time.monotonic()
-        if now - self._lib_at < ttl and self.library.get("sections"):
+        if now - self._lib_at < ttl and (self.library or {}).get("sections"):
             return
         self._lib_at = now
         try:
-            self.library = api_get("/library", timeout=RENDER_HTTP_TIMEOUT)
+            lib = api_get("/library", timeout=RENDER_HTTP_TIMEOUT)
+            self._set("library", lib if isinstance(lib, dict)
+                      and "sections" in lib else {"sections": []})
         except OSError:
-            self.library = {"sections": []}
+            self._set("library", {"sections": []})
 
     def flat_entries(self):
         """Every library entry in order — the kid-mode carousel is flat:
@@ -1278,7 +1323,8 @@ class App:
 
     def current_items(self):
         if self.view == "home":
-            return [s["name"] for s in self.library["sections"]] or ["(empty library)"]
+            return [s["name"] for s in (self.library or {}).get("sections", [])] \
+                or ["(empty library)"]
         if self.view == "entries":
             return [e["name"] for e in self.section["entries"]]
         if self.view == "episodes":
@@ -1333,7 +1379,7 @@ class App:
     def select(self):
         try:
             if self.view == "home":
-                secs = self.library["sections"]
+                secs = (self.library or {}).get("sections", [])
                 if not secs:
                     return
                 self.section = secs[self.sel]
@@ -1510,7 +1556,6 @@ class App:
         d = ImageDraw.Draw(img)
         rolls = False  # a too-long selected label is sliding -> keep painting
         if self.view == "home":
-            self.load_library()
             art = self.section_art()  # uploaded category logo (PWA)
             rolls = draw_list(d, "TapBox", self.current_items(), self.sel,
                               self.system,
@@ -1542,10 +1587,8 @@ class App:
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "carousel":
-            self.load_library()
             rolls = self.render_carousel(d, img)
         elif self.view == "cats":
-            self.load_library()
             rolls = self.render_cats(d, img)
         elif self.view == "now":
             rolls = self.render_now(d, img)
@@ -1936,8 +1979,10 @@ class App:
             return False
         self.cat_sel %= len(cats)
         s = cats[self.cat_sel]
-        art = self.artwork(s["image"], 176, square=True) if s.get("image") \
-            else None
+        # artwork_async: a local logo decodes inline, a remote one fetches
+        # off-thread (parity with render_carousel) so a category with an
+        # http image never blocks the render thread on urlopen (QA A3)
+        art = self.artwork_async(s.get("image"), 176, square=True)
         # a category tile lights up if ANYTHING inside it is new
         cat_new = any(e.get("new") for e in s.get("entries") or [])
         _label, rolls = self._cover_tile(d, img, art, s.get("name") or "?",
@@ -2076,6 +2121,7 @@ class App:
         if UI_WATCHDOG_S:
             threading.Thread(target=self._render_watchdog,
                              daemon=True).start()
+        threading.Thread(target=self._poller, daemon=True).start()  # P1
         while True:
             self._loop_beat = time.monotonic()
             self.inputs.gesture_mode = (self.view == "now")
@@ -2095,16 +2141,18 @@ class App:
                     self.display.set_backlight(True)
                     self.last_system = 0.0   # refetch battery/system now
                     self.last_status = 0.0
+                    self._poll_wake.set()    # un-park the poller (dark = 5s)
                     self.dirty = True  # the waking press is swallowed
                     self._wake_press(events)
                 else:
                     for ev in events:
                         self.handle(ev)
             if self.display.on:
-                # No data polling while the screen is dark — there is
-                # nothing to update, and 1/s status HTTP all night is
-                # pure battery waste.
-                self.refresh()
+                # P1: the background poller owns the HTTP; the loop only
+                # reconciles view state from the cached /status here, so a
+                # slow daemon can never stall a repaint. (No HTTP while dark:
+                # the poller itself parks on self.display.on.)
+                self._reconcile_view()
                 # Browsing went idle while something plays: snap back to
                 # now-playing. Only from the browse views — settings/BT
                 # flows have their own long waits (scan, pair) and must

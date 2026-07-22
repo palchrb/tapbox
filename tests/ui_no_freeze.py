@@ -31,7 +31,8 @@ def fake_get(path, timeout=10):
 ui.api_get = fake_get
 
 # load_library must ask with the short render timeout, not the 10s default
-lib_stub = type("S", (), {"_lib_at": 0.0, "library": {}})()
+lib_stub = type("S", (), {"_lib_at": 0.0, "library": {}, "dirty": False,
+                          "_set": lambda self, a, v: setattr(self, a, v)})()
 ui.App.load_library(lib_stub)
 paths = dict(CALLS)
 assert paths.get("/library") == ui.RENDER_HTTP_TIMEOUT, CALLS
@@ -42,16 +43,18 @@ print("1. /library uses the short render timeout OK")
 assert ui.RENDER_HTTP_TIMEOUT <= 3.0, ui.RENDER_HTTP_TIMEOUT
 print("2. render HTTP timeout is small (<=3s) OK")
 
-# refresh(): /system and /settings must carry the short timeout too
+# _poll_once() (P1: the background poller body): /system and /settings must
+# carry the short timeout too
 CALLS.clear()
 
 
-class RefreshStub:
+class PollStub:
     last_system = -1e9
     view = "carousel"
     last_status = 0.0
     status = {}
     settings = {}
+    user_touched = False
 
     def _set(self, attr, value):
         setattr(self, attr, value)
@@ -61,16 +64,16 @@ class RefreshStub:
         def set_brightness(_pct):
             pass
 
-    def _apply_nav_mode(self):
+    def load_library(self):
         pass
 
 
-rs = RefreshStub()
-ui.App.refresh(rs)
+ps = PollStub()
+ui.App._poll_once(ps)
 poll = {p: t for p, t in CALLS}
 assert poll.get("/system") == ui.RENDER_HTTP_TIMEOUT, CALLS
 assert poll.get("/settings") == ui.RENDER_HTTP_TIMEOUT, CALLS
-print("3. refresh() polls /system + /settings with the short timeout OK")
+print("3. the poller polls /system + /settings with the short timeout OK")
 
 
 # --- 2. the render-loop watchdog --------------------------------------------
