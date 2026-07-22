@@ -1367,7 +1367,15 @@ class Orchestrator:
                 _spk = f.read().strip()
         except OSError:
             _spk = ""
-        if _spk:
+        if _spk and out["output"] == "bt":
+            # Only probe the BT transport (a bluealsa-aplay fork / dbus
+            # enumerate, ~1/s) when the speaker is the ACTIVE output. On the
+            # built-in speaker it is pointless AND it hammers a wedged
+            # controller's bluealsa when the speaker is off/crashed. Omitting
+            # the field (not sending False) lets the BT icon keep its last
+            # value via /system's 30s poll — the UI fold is key-guarded on
+            # the field's presence, so this is a clean no-op there. The
+            # bt_lost/bt_waiting resume path below is untouched (QA).
             out["bt_connected"] = _bt_transport_ready()
         if out["bt_lost"] or out["bt_waiting"]:
             # both speaker popups offer the same escape — A plays on the

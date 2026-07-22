@@ -41,6 +41,11 @@ ACTIONS = {
     114: "voldown",    # KEY_VOLUMEDOWN
 }
 VOL_STEP = 5  # percent per volume key press
+# A flaky BT headset (e.g. the JBL AVRCP) can emit rapid self-cancelling
+# play/pause bursts; a sub-350ms playpause repeat carries no human intent
+# and just churns the A2DP transport (a firmware-crash trigger on the Zero
+# 2 W). next/prev/volume repeats ARE legitimate, so only playpause debounces.
+REPEAT_DEBOUNCE_S = 0.35
 MPV_CMDS = {
     "playpause": ["cycle", "pause"],
     "next": ["playlist-next"],
@@ -122,6 +127,7 @@ def main():
     from select import select
     devs = {}
     last_scan = 0.0
+    last_fired = {}          # action -> monotonic time, for repeat debounce
     log("started — waiting for media-key devices (AVRCP, keyboards, ...)")
     while True:
         if time.time() - last_scan > 5:
@@ -136,7 +142,17 @@ def main():
                 for ev in dev.read():
                     if (ev.type == ecodes.EV_KEY and ev.value == 1
                             and ev.code in ACTIONS):
-                        handle(ACTIONS[ev.code])
+                        action = ACTIONS[ev.code]
+                        # drop a flaky peer's sub-350ms play/pause repeat
+                        # (see REPEAT_DEBOUNCE_S) — no human intent, and it's
+                        # what churns the A2DP transport
+                        if action == "playpause":
+                            now = time.monotonic()
+                            if now - last_fired.get(action, 0.0) \
+                                    < REPEAT_DEBOUNCE_S:
+                                continue
+                            last_fired[action] = now
+                        handle(action)
             except OSError:  # device disconnected mid-read
                 devs.pop(dev.path, None)
 
