@@ -944,6 +944,23 @@ class Orchestrator:
             return False
 
     def command(self, action):
+        # v0.0.8 fast-path: spotify next/prev must reach go-librespot at
+        # the REAL press cadence — its skip debounce coalesces a burst
+        # into two track loads, but only if it SEES the burst. The busy-
+        # drop below serialized presses ~1s apart (each a fresh leading
+        # edge = a full load + key request), which both defeated the
+        # debounce and re-created the 429 storm (field 2026-07-23 21:52:
+        # 10 loads in 9s from a prev mash). The gate protected against
+        # SLOW queued controls; deferred skips are millisecond calls now,
+        # presses queued during the leading load dequeue with
+        # time-since-skip ~ 0 and defer, and ordering is the fork's
+        # pointer arithmetic. mpv and playpause keep the locked path —
+        # this only fires for a live spotify session.
+        if action in ("next", "prev") and self.source == "spotify" \
+                and not self._mpv_alive():
+            threading.Thread(target=self._spot_fast_skip, args=(action,),
+                             daemon=True).start()
+            return {"routed": "spotify", "fast": True}
         # Drop, don't queue, presses that arrive while a control is still
         # running. go-librespot's API can take seconds per next/prev while
         # it loads the new track; each queued press then held this lock
@@ -962,6 +979,32 @@ class Orchestrator:
             # a control may have moved the position (prev rewinds to 0,
             # next/seek jump) — wake the bookmarker so the in-memory
             # bookmark is fresh within a beat, not up to a 5s tick later
+            _bm_wake.set()
+
+    def _spot_fast_skip(self, action):
+        """Forward one next/prev to go-librespot immediately (no ORCH.lock
+        held across the HTTP round, no busy-drop) so the fork's skip
+        debounce sees the true press cadence. On failure — e.g. the
+        session died and /player/next 500s — fall back to the full locked
+        path, which owns the replay-last logic (next on a dead session
+        must still bring the music back)."""
+        _kick_bt_connect()  # any transport control = sound intent
+        try:
+            _radio.touch_busy()  # a settle load = an imminent CDN fetch
+            _PS_KICK.set()
+            spotify_command(action)
+            _bm_wake.set()
+            return
+        except OSError as e:
+            log(f"{action}: fast-path failed ({e.__class__.__name__}) — "
+                "falling back to the locked path")
+        if not self.lock.acquire(timeout=1.0):
+            log(f"{action}: control busy — dropped (fallback)")
+            return
+        try:
+            self._command_locked(action)
+        finally:
+            self.lock.release()
             _bm_wake.set()
 
     def _command_locked(self, action):
@@ -1253,7 +1296,12 @@ class Orchestrator:
                           "track": track.get("name") or None,
                           "artists": track.get("artist_names") or [],
                           "album": track.get("album_name") or None,
-                          "artwork": track.get("album_cover_url") or None}
+                          "artwork": track.get("album_cover_url") or None,
+                          # v0.0.8: the not-yet-settled skip target while a
+                          # debounced burst is in flight (None otherwise) —
+                          # lets the UI show a skipping indicator later
+                          "pending_track_uri":
+                              st.get("pending_track_uri") or None}
         # A paused Spotify track is still "what's on" — keep showing it
         # (title/artwork/position) with playing=False, like the mpv side does.
         # Gate on "mpv supplied nothing" rather than "child dead": while a

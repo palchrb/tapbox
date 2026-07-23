@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Gate the control path's behavior against a SLOW go-librespot. Field
-2026-07-18 15:43-15:44 (rapid next/prev on an album): each press held the
-control lock through multi-second API calls, queued presses fired late
-and out of order, a /next whose status probe timed out fell through to
-the replay fallback and RESTARTED the album from 0:00, and the
-supervisor parked the busy-but-alive daemon. Contract now:
-- presses arriving while a control runs are DROPPED (busy), not queued
-- an unreachable-but-running go-librespot drops the press, never replays
-- next/prev NEVER trigger the replay fallback — only playpause does"""
+"""Gate the spotify control path. Two eras of contract, both enforced:
+
+Old scars (field 2026-07-18 15:43-15:44): a /next whose status probe
+timed out fell through to the replay fallback and RESTARTED the album
+from 0:00, and queued slow controls fired late and out of order. Those
+protections live on in the LOCKED path (playpause + the fast-path
+fallback): an unreachable-but-running go-librespot never replays; only
+playpause (or a STABLY empty session) replays.
+
+New contract (go-librespot v0.0.8 fast-skip): next/prev on a live
+spotify session are forwarded IMMEDIATELY (no busy-drop, no lock held
+across the HTTP round) so the fork's debounce sees the true press
+cadence — the old busy-gate spaced presses ~1s apart, each a fresh full
+load, which defeated the debounce and re-created the 429 storm (field
+2026-07-23 21:52: 10 loads in 9s from a prev mash). A FAILING fast-path
+(dead session / unreachable api) falls back to the locked path, where
+all the old guards still decide."""
 import os
 import sys
 import tempfile
@@ -26,6 +34,7 @@ import daemon  # noqa: E402
 
 orch = daemon.ORCH
 daemon._kick_bt_connect = lambda: None
+daemon._radio.touch_busy = lambda: None
 orch._mpv_alive = lambda: False
 orch.source = "spotify"
 orch.target = "https://open.spotify.com/album/4rxfprnLYz3592ZGaeqcON"
@@ -40,74 +49,82 @@ def _unreachable(**_k):
     raise OSError("timed out")
 
 
-# 1. api unreachable + unit RUNNING: next/prev/playpause all drop as
-# busy — no replay, no spawn, no fallthrough
+def _cmd_unreachable(a):
+    raise OSError("timed out")
+
+
+def skip(action):
+    """Fire a control and wait out the async fast-path/fallback."""
+    r = orch.command(action)
+    time.sleep(0.4)
+    return r
+
+
+# 1. api unreachable + unit RUNNING: the fast-path fails, the locked
+# fallback sees busy-not-dead — no replay, no spawn. playpause (locked
+# path) drops as busy.
 daemon.go_status = _unreachable
 daemon._go_unit_active = lambda: True
-for a in ("next", "prev", "playpause"):
-    r = orch.command(a)
-    assert r.get("busy") is True, (a, r)
-assert SPAWNED == [] and CMDS == [], (SPAWNED, CMDS)
-print("1. busy api (unit running): presses dropped, never a replay OK")
+daemon.spotify_command = _cmd_unreachable
+for a in ("next", "prev"):
+    r = skip(a)
+    assert r.get("fast"), (a, r)
+r = orch.command("playpause")
+assert r.get("busy") is True, r
+assert SPAWNED == [], SPAWNED
+print("1. busy api (unit running): no replay from any press OK")
 
-# 2. api unreachable + unit DOWN: playpause replays the target (bring
-# the music back), next/prev do NOT (a skip must never restart an album)
+# 2. api unreachable + unit DOWN: next/prev fall back and stay dead
+# buttons (a skip must never restart an album); playpause replays.
 daemon._go_unit_active = lambda: False
-r = orch.command("next")
-assert r["routed"] is None and not SPAWNED, (r, SPAWNED)
-r = orch.command("prev")
-assert r["routed"] is None and not SPAWNED, (r, SPAWNED)
+orch._spot_cmd_timeout_at = -1e9
+skip("next")
+skip("prev")
+assert SPAWNED == [], SPAWNED
 r = orch.command("playpause")
 assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
 print("2. dead session: playpause replays, next/prev stay dead buttons OK")
 
-# 2b. album ran off its end: the API ANSWERS and says the session is
-# empty — TWICE (transient-empty recheck) — then next WRAPS (replays)
-# instead of going dead (field: next on the last Coco track did nothing)
+# 2b. album ran off its end: the api ANSWERS and says the session is
+# cleanly empty — the fast-path errors (nothing to skip in), and the
+# locked fallback WRAPS (replays) instead of going dead (field: next on
+# the last Coco track did nothing)
 SPAWNED.clear()
-orch._spot_cmd_timeout_at = 0.0
+orch._spot_cmd_timeout_at = -1e9
 daemon.go_status = lambda **k: {}          # reachable, cleanly empty
-r = orch.command("next")
-assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
+skip("next")
+assert SPAWNED == [orch.target], SPAWNED
 print("2b. stable empty session: next wraps (replays the target) OK")
 
-# 2b-ii. TRANSIENT empty: a slow track load reads empty for a beat (field
-# 2026-07-18 16:14: prev at :47 saw 'empty', Del 4 finished at :49). The
-# recheck sees the loaded track -> the skip routes to spotify, NO replay.
+# 2b-ii. mid-load: v0.0.8 accepts a skip during a load (it queues and
+# defers it) — the fast-path just forwards. No replay, no recheck dance.
 SPAWNED.clear()
 CMDS.clear()
-READS = [{}, {"track": {"uri": "spotify:track:d4"}, "paused": False,
-              "stopped": False}]
-daemon.go_status = lambda **k: READS.pop(0) if READS else READS
-r = orch.command("next")
-assert r["routed"] == "spotify" and CMDS == ["next"], (r, CMDS)
-assert SPAWNED == [], f"transient empty must never replay: {SPAWNED}"
-print("2b-ii. mid-load empty blip: recheck routes the skip, no replay OK")
+daemon.spotify_command = lambda a: CMDS.append(a)
+r = skip("next")
+assert r.get("fast") and CMDS == ["next"], (r, CMDS)
+assert SPAWNED == [], f"a forwarded skip must never replay: {SPAWNED}"
+print("2b-ii. mid-load skip: forwarded to the fork's debounce, no replay OK")
 
-# 2b-iii. a control TIMED OUT moments ago: an 'empty' session proves
-# nothing (the command is likely still executing) — skips drop as busy
+# 2b-iv. the control call itself timing out: the fallback stamps the
+# hold window (an 'empty' session right after proves nothing), no replay
 SPAWNED.clear()
-orch._spot_cmd_timeout_at = __import__("time").monotonic()
-daemon.go_status = lambda **k: {}
-r = orch.command("next")
-assert r.get("busy") is True and SPAWNED == [], (r, SPAWNED)
-orch._spot_cmd_timeout_at = 0.0
-print("2b-iii. empty right after a control timeout: dropped, no replay OK")
+orch._spot_cmd_timeout_at = -1e9
 
-# 2b-iv. the control call itself timing out returns a clean busy (no 500)
-# and stamps the hold window
+
 def _cmd_boom(a):
     raise TimeoutError("timed out")
+
 
 daemon.spotify_command = _cmd_boom
 daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:x"},
                                 "paused": False, "stopped": False}
-r = orch.command("next")
-assert r.get("busy") is True, r
+skip("next")
 assert orch._spot_cmd_timeout_at > 0, "timeout must stamp the hold window"
-orch._spot_cmd_timeout_at = 0.0
+assert SPAWNED == [], SPAWNED
+orch._spot_cmd_timeout_at = -1e9
 daemon.spotify_command = lambda a: CMDS.append(a)
-print("2b-iv. timed-out control -> clean busy drop + hold stamped OK")
+print("2b-iv. timed-out control -> hold stamped via fallback, no replay OK")
 
 # 2c. a finished mpv queue replays on next too (go-librespot state is
 # irrelevant for a podcast box — even unreachable must not block it)
@@ -119,19 +136,40 @@ assert r["routed"] == "resume" and SPAWNED == [orch.target], (r, SPAWNED)
 orch.source = "spotify"
 print("2c. finished podcast queue: next replays regardless of spotify OK")
 
-# 3. loaded session: everything routes to spotify as before
+# 3. live session: next takes the fast path straight to go-librespot
 SPAWNED.clear()
 CMDS.clear()
 daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:x"},
                                 "paused": False, "stopped": False,
                                 "play_origin": "go-librespot"}
-r = orch.command("next")
-assert r["routed"] == "spotify" and CMDS == ["next"], (r, CMDS)
-print("3. loaded session: next routes to spotify OK")
+r = skip("next")
+assert r.get("fast") and CMDS == ["next"], (r, CMDS)
+assert SPAWNED == [], SPAWNED
+print("3. live session: next fast-paths to spotify OK")
 
-# 4. a press while another control holds the lock is DROPPED fast (busy)
-# instead of queueing behind it
+# 4. THE POINT: a rapid burst reaches go-librespot in full — no drops,
+# no ~1s serialization — so the fork's debounce can coalesce it
 CMDS.clear()
+
+
+def _slow(a):
+    CMDS.append(a)
+    time.sleep(0.2)  # a leading-edge load in flight
+
+
+daemon.spotify_command = _slow
+for _ in range(5):
+    orch.command("next")
+    time.sleep(0.03)  # ~30Hz mash, well inside the old busy window
+time.sleep(1.5)
+assert len(CMDS) == 5, f"all burst presses must be forwarded, got {len(CMDS)}"
+assert SPAWNED == [], SPAWNED
+print("4. a 5-press burst is forwarded in full (debounce sees the burst) OK")
+
+# 5. playpause during a held lock still drops busy (the old protection
+# stands for the controls that stay on the locked path)
+CMDS.clear()
+daemon.spotify_command = lambda a: CMDS.append(a)
 release = threading.Event()
 grabbed = threading.Event()
 
@@ -146,14 +184,13 @@ t = threading.Thread(target=hog, daemon=True)
 t.start()
 grabbed.wait(5)
 t0 = time.monotonic()
-r = orch.command("next")
+r = orch.command("playpause")
 took = time.monotonic() - t0
 release.set()
 t.join(5)
 assert r.get("busy") is True, r
 assert took < 3, f"busy drop took {took:.1f}s — must not queue"
-assert CMDS == [], CMDS
-print(f"4. press during a running control: dropped in {took:.1f}s OK")
+print(f"5. playpause during a running control: dropped in {took:.1f}s OK")
 
-print("SPOTIFY CONTROLS OK — no queue pile-ups, busy is never dead, and "
-      "a skip can never restart the album.")
+print("\nSPOTIFY CONTROLS OK — the fast path forwards the burst, and the "
+      "locked fallback still owns replay safety.")
