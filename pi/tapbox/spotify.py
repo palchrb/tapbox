@@ -266,6 +266,21 @@ PREV_RESTART_MS = 5000  # >5s into the track: prev restarts it — the same
                         # semantics the mpv side uses (daemon command())
 
 
+def skip(action, timeout=10):
+    """One raw /player/next|prev call, nothing else — the v0.0.8 fast
+    path. The fork's skip debounce owns burst semantics now, and its own
+    rewind-vs-skip rule covers prev — command()'s dance below (status
+    probe + 0.4s sleep + compensating second prev) cost 3-4 serialized
+    API rounds PER PRESS, which clumped a mash into ~1s spaced leading
+    edges and starved the debounce (field 2026-07-23 22:16: 0ms/401ms
+    load pairs — coalescing worked, but only 1-2 presses/s arrived).
+    Generous timeout: the call rides a background thread and a leading-
+    edge load takes 1-1.5s through bluealsa; the 5s default produced
+    spurious TimeoutErrors mid-settle."""
+    go({"next": "/player/next", "prev": "/player/prev"}[action],
+       timeout=timeout)
+
+
 def command(action):
     """playpause/next/prev. prev follows standard player semantics, same
     as the mpv side: deep into the track it restarts it (seek 0); near

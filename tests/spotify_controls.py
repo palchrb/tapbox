@@ -42,7 +42,7 @@ SPAWNED = []
 orch._spawn = lambda target, **kw: SPAWNED.append(target)
 orch._ensure_spotify_backend = lambda: True
 CMDS = []
-daemon.spotify_command = lambda a: CMDS.append(a)
+daemon.spotify_command = daemon.spotify_skip = lambda a: CMDS.append(a)
 
 
 def _unreachable(**_k):
@@ -65,7 +65,7 @@ def skip(action):
 # path) drops as busy.
 daemon.go_status = _unreachable
 daemon._go_unit_active = lambda: True
-daemon.spotify_command = _cmd_unreachable
+daemon.spotify_command = daemon.spotify_skip = _cmd_unreachable
 for a in ("next", "prev"):
     r = skip(a)
     assert r.get("fast"), (a, r)
@@ -100,14 +100,17 @@ print("2b. stable empty session: next wraps (replays the target) OK")
 # defers it) — the fast-path just forwards. No replay, no recheck dance.
 SPAWNED.clear()
 CMDS.clear()
-daemon.spotify_command = lambda a: CMDS.append(a)
+daemon.spotify_command = daemon.spotify_skip = lambda a: CMDS.append(a)
 r = skip("next")
 assert r.get("fast") and CMDS == ["next"], (r, CMDS)
 assert SPAWNED == [], f"a forwarded skip must never replay: {SPAWNED}"
 print("2b-ii. mid-load skip: forwarded to the fork's debounce, no replay OK")
 
-# 2b-iv. the control call itself timing out: the fallback stamps the
-# hold window (an 'empty' session right after proves nothing), no replay
+# 2b-iv. the control call itself timing out: slow ≠ dead — the skip
+# usually still lands inside go-librespot, so the fast path stamps the
+# hold window and STOPS (no fallback, no re-send, no replay). Field
+# 2026-07-23 22:16:46: the old fallback read the mid-settle session as
+# 'empty' and replayed the whole playlist.
 SPAWNED.clear()
 orch._spot_cmd_timeout_at = -1e9
 
@@ -116,15 +119,36 @@ def _cmd_boom(a):
     raise TimeoutError("timed out")
 
 
-daemon.spotify_command = _cmd_boom
+daemon.spotify_command = daemon.spotify_skip = _cmd_boom
 daemon.go_status = lambda **k: {"track": {"uri": "spotify:track:x"},
                                 "paused": False, "stopped": False}
 skip("next")
 assert orch._spot_cmd_timeout_at > 0, "timeout must stamp the hold window"
 assert SPAWNED == [], SPAWNED
 orch._spot_cmd_timeout_at = -1e9
-daemon.spotify_command = lambda a: CMDS.append(a)
-print("2b-iv. timed-out control -> hold stamped via fallback, no replay OK")
+daemon.spotify_command = daemon.spotify_skip = lambda a: CMDS.append(a)
+print("2b-iv. timed-out control -> hold stamped, no fallback, no replay OK")
+
+# 2b-v. mid-settle emptiness: the api answers WITHOUT a track but WITH
+# v0.0.8's pending_track_uri — the session is alive mid-skip, so the
+# locked path (reached via a genuine connection failure) must treat it
+# as LIVE, never as empty-replay
+SPAWNED.clear()
+orch._spot_cmd_timeout_at = -1e9
+
+
+def _cmd_refused(a):
+    raise ConnectionRefusedError("refused")
+
+
+daemon.spotify_command = daemon.spotify_skip = _cmd_refused
+daemon.go_status = lambda **k: {"pending_track_uri": "spotify:track:y"}
+skip("next")
+assert SPAWNED == [], \
+    f"a pending skip means the session is alive — never replay: {SPAWNED}"
+orch._spot_cmd_timeout_at = -1e9
+daemon.spotify_command = daemon.spotify_skip = lambda a: CMDS.append(a)
+print("2b-v. trackless-with-pending session: treated as live, no replay OK")
 
 # 2c. a finished mpv queue replays on next too (go-librespot state is
 # irrelevant for a podcast box — even unreachable must not block it)
@@ -157,7 +181,7 @@ def _slow(a):
     time.sleep(0.2)  # a leading-edge load in flight
 
 
-daemon.spotify_command = _slow
+daemon.spotify_command = daemon.spotify_skip = _slow
 for _ in range(5):
     orch.command("next")
     time.sleep(0.03)  # ~30Hz mash, well inside the old busy window
@@ -169,7 +193,7 @@ print("4. a 5-press burst is forwarded in full (debounce sees the burst) OK")
 # 5. playpause during a held lock still drops busy (the old protection
 # stands for the controls that stay on the locked path)
 CMDS.clear()
-daemon.spotify_command = lambda a: CMDS.append(a)
+daemon.spotify_command = daemon.spotify_skip = lambda a: CMDS.append(a)
 release = threading.Event()
 grabbed = threading.Event()
 

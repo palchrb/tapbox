@@ -119,6 +119,7 @@ go = _spotify.go
 go_status = _spotify.status
 spotify_playing = _spotify.playing
 spotify_command = _spotify.command
+spotify_skip = _spotify.skip
 mpv_ipc = _mpv.ipc
 mpv_get = _mpv.get
 
@@ -992,8 +993,24 @@ class Orchestrator:
         try:
             _radio.touch_busy()  # a settle load = an imminent CDN fetch
             _PS_KICK.set()
-            spotify_command(action)
+            # ONE raw call — command()'s prev dance (status + sleep +
+            # second prev) serialized a mash into ~1s clumps and starved
+            # the fork's debounce; its semantics belong to the fork now
+            spotify_skip(action)
             _bm_wake.set()
+            return
+        except TimeoutError as e:
+            # slow ≠ dead: the command usually still lands inside
+            # go-librespot (it was busy settling a debounced burst / 429
+            # backoff). Falling back here re-sent the skip AND let the
+            # locked path read the mid-settle session as 'empty' and
+            # replay the whole target (field 2026-07-23 22:16:46: a prev
+            # TimeoutError -> fallback -> 'session is empty' -> replay
+            # while the fork was alive and loading). Stamp the hold
+            # window so emptiness is distrusted, and stop.
+            self._spot_cmd_timeout_at = time.monotonic()
+            log(f"{action}: fast-path slow ({e.__class__.__name__}) — it "
+                "likely still lands; give it a moment")
             return
         except OSError as e:
             log(f"{action}: fast-path failed ({e.__class__.__name__}) — "
@@ -1097,7 +1114,13 @@ class Orchestrator:
         # "succeeds" silently and the button feels dead. Fall through to
         # rule 4 instead: replay the target, which resumes exactly.
         if self.source == "spotify" and st is not None:
-            if (st.get("track") or {}) and not st.get("stopped"):
+            # v0.0.8: pending_track_uri = a debounced skip is mid-settle;
+            # the session may read trackless for that beat but it is very
+            # much alive — treat it as live, never as empty (field
+            # 2026-07-23 22:16: a mid-burst 'empty' read replayed the
+            # whole playlist)
+            if ((st.get("track") or {}) or st.get("pending_track_uri")) \
+                    and not st.get("stopped"):
                 if not self._spot_control(action):
                     return {"routed": None, "busy": True}
                 log(f"{action} -> spotify (last)")
@@ -1123,7 +1146,8 @@ class Orchestrator:
                 except OSError:
                     log(f"{action}: session state unclear — dropped")
                     return {"routed": None, "busy": True}
-                if (st2.get("track") or {}) and not st2.get("stopped"):
+                if ((st2.get("track") or {}) or st2.get(
+                        "pending_track_uri")) and not st2.get("stopped"):
                     if not self._spot_control(action):
                         return {"routed": None, "busy": True}
                     log(f"{action} -> spotify (loaded during recheck)")
@@ -1275,21 +1299,31 @@ class Orchestrator:
         st = go_status(timeout=gs_timeout)
         if st.get("track"):
             self._go_st_cache = (time.monotonic(), st)
-        elif not st:
-            at, cached = getattr(self, "_go_st_cache", (0.0, None))
+        else:
             # 5s covers a transient timeout — but a COLD track load
             # (first-listen playlist, api blocked 8-15s) outlived it and
             # the card fell to 'Nothing playing' mid-skip (field
-            # 2026-07-19). A fresh BUSY marker or a recent timed-out
-            # control proves a load is in flight: keep the card for the
-            # full load-hold window. Cached kid albums never hit this —
-            # their loads come off the disk cache in <1s.
-            hold = GO_ST_HOLD_S
-            if _radio.busy() or (time.monotonic() - self._spot_cmd_timeout_at
-                                 < SPOT_TIMEOUT_HOLD_S):
-                hold = SPOT_TIMEOUT_HOLD_S
-            if cached and time.monotonic() - at < hold:
-                st = cached  # a load is in flight — hold the good card
+            # 2026-07-19). A fresh BUSY marker, a recent timed-out
+            # control, or a v0.0.8 pending skip proves a load is in
+            # flight: keep the card for the full load-hold window. The
+            # trackless answer need not be EMPTY: mid-settle during a
+            # debounced burst the api answers with pending_track_uri and
+            # no track, and that flashed 'Nothing playing' on the screen
+            # (field 2026-07-23 22:16). A trackless answer WITHOUT any
+            # in-flight signal keeps the old behavior: only a fully
+            # empty response gets the short hold; a deliberate stop
+            # shows immediately.
+            in_flight = bool(st.get("pending_track_uri")) or _radio.busy() \
+                or (time.monotonic() - self._spot_cmd_timeout_at
+                    < SPOT_TIMEOUT_HOLD_S)
+            if not st or in_flight:
+                at, cached = getattr(self, "_go_st_cache", (0.0, None))
+                hold = SPOT_TIMEOUT_HOLD_S if in_flight else GO_ST_HOLD_S
+                if cached and time.monotonic() - at < hold:
+                    pend = st.get("pending_track_uri")
+                    st = dict(cached)  # a load is in flight — hold the card
+                    if pend:
+                        st["pending_track_uri"] = pend
         track = st.get("track") or {}
         sp_playing = spotify_playing(st)
         out["spotify"] = {"playing": sp_playing,

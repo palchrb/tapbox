@@ -40,7 +40,7 @@ def slow_command(action):
     time.sleep(0.3)  # a leading-edge load in flight
 
 
-daemon.spotify_command = slow_command
+daemon.spotify_command = daemon.spotify_skip = slow_command
 orch.source = "spotify"
 orch.target = "https://open.spotify.com/playlist/x"
 orch._mpv_alive = lambda: False
@@ -65,12 +65,35 @@ def dead_command(action):
     raise OSError("session gone")
 
 
-daemon.spotify_command = dead_command
+daemon.spotify_command = daemon.spotify_skip = dead_command
 orch._command_locked = lambda action: fallback.append(action)
 orch.command("next")
 time.sleep(0.5)
 assert sent == ["next"] and fallback == ["next"], (sent, fallback)
 print("2. dead session falls back to the locked replay path OK")
+
+# 2b. a TIMEOUT is not a dead session: the command usually still lands
+# inside go-librespot (mid-settle / 429 backoff). Falling back here
+# re-sent the skip and let the locked path read the mid-settle session
+# as 'empty' and replay the whole target (field 2026-07-23 22:16:46).
+# Contract: stamp the hold window, do NOT fall back.
+sent.clear()
+fallback.clear()
+orch._spot_cmd_timeout_at = -1e9
+
+
+def slow_to_death(action):
+    sent.append(action)
+    raise TimeoutError("timed out")
+
+
+daemon.spotify_command = daemon.spotify_skip = slow_to_death
+orch.command("prev")
+time.sleep(0.5)
+assert sent == ["prev"] and fallback == [], (sent, fallback)
+assert orch._spot_cmd_timeout_at > 0, \
+    "a fast-path timeout must stamp the hold window (emptiness distrusted)"
+print("2b. fast-path timeout: no fallback, no re-send, hold stamped OK")
 
 # 3. mpv playback keeps the locked path (no fast-path for mpv)
 orch.source = "mpv"
