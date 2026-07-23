@@ -730,6 +730,25 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
+# btsnoop ring (OPT-IN diagnostic, installed disabled): HCI capture into a
+# RAM ring so the next `hci0: hardware error 0x00` can be attributed to the
+# right layer — the kernel synthesizes that exact event on a dead UART link
+# (hci_reset_dev), so dmesg alone can't tell chip-fault from link-fault.
+# Enable during a crash hunt: sudo systemctl enable --now tapbox-btsnoop
+install_if_changed 755 "$SCRIPT_DIR/btsnoop.sh" /usr/local/bin/tapbox-btsnoop || true
+write_if_changed /etc/systemd/system/tapbox-btsnoop.service <<'EOF' || true
+[Unit]
+Description=TapBox btsnoop ring (BT crash diagnosis, RAM-only)
+After=bluetooth.service
+
+[Service]
+ExecStart=/usr/local/bin/tapbox-btsnoop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
 # Power save at boot: governor powersave + LEDs/HDMI off + wifi power save
 # (tapbox-power save) applied automatically at every boot. Runs after
 # multi-user so it never slows the boot itself. Invoked via the INSTALLED
