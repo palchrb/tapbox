@@ -113,7 +113,10 @@ fi
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
-GO_LIBRESPOT_VERSION="v0.0.7"
+GO_LIBRESPOT_VERSION="v0.0.8"  # Fast skip: debounced next/prev (a burst of N
+# presses costs 2 audio-key requests instead of N) + a circuit breaker on
+# throttled keys (aes code 2 -> one retry + stop, never the 51-track walk
+# that kept the account rate-limited). /status gains pending_track_uri.
 GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
 
 if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \
