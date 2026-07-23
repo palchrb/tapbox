@@ -627,6 +627,19 @@ def _download_image(url, dest, size=300):
     except Exception:
         with open(dest + ".part", "wb") as f:
             f.write(raw)
+    # fsync before the rename: os.replace alone is atomic against crashes of
+    # THIS process, but a hard power cut can replay ext4 with the rename
+    # durable and the data blocks empty — a corrupt jpg that then blocks
+    # refetch forever because it exists (field 2026-07-23, RuntimeError on
+    # every decode of an episode jpg).
+    try:
+        fd = os.open(dest + ".part", os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
     os.replace(dest + ".part", dest)
 
 

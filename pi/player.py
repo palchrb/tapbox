@@ -645,9 +645,16 @@ def main():
                 healed = True
                 log("audio still gone — running bluetooth recovery")
                 try:
-                    subprocess.run([sys.executable, _bt.__file__, "ensure"],
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=240)
+                    # capture, don't devnull: recover()'s diagnostics (the
+                    # throttled/power state, 'Re-probed BT serdev',
+                    # 'Controller is back') were swallowed here — every
+                    # crash lost its evidence (field 2026-07-23)
+                    r = subprocess.run(
+                        [sys.executable, _bt.__file__, "ensure"],
+                        capture_output=True, text=True, timeout=240)
+                    for line in (r.stdout or "").splitlines():
+                        if line.strip():
+                            log(f"bt-recovery: {line.strip()}")
                 except (OSError, subprocess.TimeoutExpired) as e:
                     log(f"bluetooth recovery attempt failed: {e!r}")
             time.sleep(5)

@@ -942,6 +942,19 @@ class App:
             # instead: retry in 5s, then 10, 20, 40, capped at 60 — the
             # boot race costs one short beat, a truly dead network still
             # backs off to the old cadence.
+            # A corrupt LOCAL cache file (hard power cut mid-write, field
+            # 2026-07-23: episode jpg failing every decode) never heals by
+            # retrying — and the sync skips it forever because it exists.
+            # Delete it so the next sweep refetches; scoped to CACHE_DIR
+            # only (PWA-uploaded logos etc. must never be auto-deleted).
+            cache_root = os.path.dirname(UI_ART_DIR)  # TAPBOX_CACHE root
+            if (not ref.startswith("http") and os.path.exists(ref)
+                    and os.path.abspath(ref).startswith(cache_root + os.sep)):
+                try:
+                    os.remove(ref)
+                    log(f"artwork corrupt — deleted for refetch: {ref[:80]}")
+                except OSError:
+                    pass
             fails = self._art_fails.get(key, 0) + 1
             self._art_fails[key] = fails
             backoff = min(60.0, 5.0 * (2 ** (fails - 1)))
@@ -2195,6 +2208,13 @@ class App:
                     self.push("now")
             if self.display.on and self.screen_should_sleep():
                 self.display.set_backlight(False)
+                # Release the browse latch: user_touched suppresses home's
+                # auto-refresh + auto-snap-to-now while someone is actively
+                # navigating — but it was never reset, so after the FIRST
+                # press ever the home view stayed frozen for the whole
+                # session (QA A6). Screen sleep = the session is over; the
+                # next wake starts fresh.
+                self.user_touched = False
                 if PNG_PATH:  # dev: make the blanking visible
                     self.display.show(Image.new("RGB", (W, H), (0, 0, 0)))
             elif self.display.on and (self.dirty

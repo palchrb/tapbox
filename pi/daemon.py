@@ -2076,9 +2076,14 @@ def _bt_recover(verb):
     subprocess — it takes the cross-process radio lock there, so a
     btwatchd retry can't race the recovery mid-flight."""
     try:
-        subprocess.run([sys.executable, _bt.__file__, verb],
-                       stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=240)
+        # capture, don't devnull: recover()'s diagnostics (throttled/power
+        # state, 'Re-probed BT serdev', 'Controller is back') must reach
+        # the journal — they are the crash evidence (field 2026-07-23)
+        r = subprocess.run([sys.executable, _bt.__file__, verb],
+                           capture_output=True, text=True, timeout=240)
+        for line in (r.stdout or "").splitlines():
+            if line.strip():
+                log(f"bt-recovery: {line.strip()}")
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"bluetooth recovery ({verb}) failed: {e!r}")
 
