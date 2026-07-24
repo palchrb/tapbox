@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate the spotify song picker (fork v0.1.1 GET /playlist/tracks).
+"""Gate the spotify song picker (fork v0.1.2 GET /context/tracks).
 
 Hold-Y in now-playing lists a playing playlist's songs — same picker as
 podcasts — and picking one starts it via /play {id, episode:<track uri>}
@@ -10,8 +10,9 @@ podcasts — and picking one starts it via /play {id, episode:<track uri>}
   sweep-pending entries (track: null) are skipped, not rendered blank.
 - tracks stays OPT-IN: without it a spotify entry expands to the same
   leaf card as before — a browse tap must PLAY, never open a list.
-- albums (HTTP 400) and a pre-v0.1.1 fork (404) degrade to the leaf
-  card, no crash.
+- albums list too (v0.1.2; snapshot_id null, complete first call);
+  artist/show (HTTP 400) and a pre-v0.1.2 fork (404) degrade to the
+  leaf card, no crash.
 - play_spotify(start_uri=...) plays {uri, skip_to_uri=<pick>} from the
   top: no position, and the bookmark is neither read nor cleared."""
 import io
@@ -44,9 +45,9 @@ LISTING = {"uri": "spotify:playlist:0hgSZmY9xhzx51hlLB2arI",
            ]}
 
 asked = []
-spotify.playlist_tracks = lambda uri, timeout=5: (asked.append(uri),
+spotify.context_tracks = lambda uri, timeout=5: (asked.append(uri),
                                                   LISTING)[1]
-library.spotify.playlist_tracks = spotify.playlist_tracks
+library.spotify.context_tracks = spotify.context_tracks
 
 # 1. tracks=True: fork listing -> picker rows; null-track rows skipped
 r = library.expand_target(PL, name="80s", tracks=True)
@@ -59,6 +60,20 @@ assert eps[0]["image"] == "https://i.scdn.co/a"
 assert eps[1]["title"] == "Shout", eps[1]  # no artists: bare name
 print("1. tracks=True: fork listing mapped to picker rows OK")
 
+# 1b. albums (v0.1.2): same mapping — complete first call, null snapshot
+AL = "https://open.spotify.com/album/4rxfprnLYz3592ZGaeqcON"
+ALBUM = {"uri": "spotify:album:4rxfprnLYz3592ZGaeqcON",
+         "snapshot_id": None, "length": 1, "cached": 1,
+         "tracks": [{"uri": "spotify:track:d",
+                     "track": {"name": "Un poco loco",
+                               "artist_names": ["Coco"],
+                               "album_cover_url": "https://i.scdn.co/d"}}]}
+library.spotify.context_tracks = lambda uri, timeout=5: ALBUM
+r = library.expand_target(AL, name="Coco", tracks=True)
+assert [e["id"] for e in r["episodes"]] == ["spotify:track:d"], r["episodes"]
+library.spotify.context_tracks = spotify.context_tracks
+print("1b. album listing maps the same way OK")
+
 # 2. default (browse) expansion: unchanged leaf card, fork NOT queried
 asked.clear()
 r = library.expand_target(PL, name="80s")
@@ -69,18 +84,18 @@ print("2. tracks omitted: leaf card, fork not queried OK")
 
 
 def _boom(uri, timeout=5):
-    raise urllib.error.HTTPError("u", 400, "not a playlist", {},
+    raise urllib.error.HTTPError("u", 400, "not listable", {},
                                  io.BytesIO(b""))
 
 
-library.spotify.playlist_tracks = _boom
+library.spotify.context_tracks = _boom
 r = library.expand_target(PL, tracks=True)
 assert r["episodes"] == [], r["episodes"]
-library.spotify.playlist_tracks = \
+library.spotify.context_tracks = \
     lambda uri, timeout=5: (_ for _ in ()).throw(OSError("down"))
 r = library.expand_target(PL, tracks=True)
 assert r["episodes"] == [], r["episodes"]
-print("3. album/old-fork/down: degrades to the leaf card OK")
+print("3. artist/old-fork/down: degrades to the leaf card OK")
 
 # 4. play_spotify(start_uri): {uri, skip_to_uri}, from the top, bookmark
 #    untouched

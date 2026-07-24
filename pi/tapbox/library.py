@@ -615,8 +615,8 @@ def expand_target(target, order="auto", name=None, tracks=False):
             image = None
         episodes = []
         if tracks:
-            # Fork v0.1.1: playlists ARE expandable — go-librespot's
-            # metadata cache lists the tracks (no Web API). Opt-in via
+            # Fork v0.1.2: playlists AND albums are expandable —
+            # go-librespot lists the tracks (no Web API). Opt-in via
             # tracks=True: only the now-view song picker asks for it;
             # the browse flows keep treating spotify entries as leaf
             # "play all" cards (a menu tap must PLAY, not open a list).
@@ -625,7 +625,7 @@ def expand_target(target, order="auto", name=None, tracks=False):
             # skip_to_uri.
             try:
                 uri = spotify.to_uri(target)
-                listing = spotify.playlist_tracks(uri) if uri else {}
+                listing = spotify.context_tracks(uri) if uri else {}
                 for t in listing.get("tracks") or []:
                     meta = t.get("track")
                     if not meta:
@@ -640,7 +640,7 @@ def expand_target(target, order="auto", name=None, tracks=False):
                          "image": meta.get("album_cover_url"),
                          "cached": False})
             except OSError:
-                episodes = []  # albums (400), pre-v0.1.1 fork (404), down
+                episodes = []  # artist/show (400), pre-v0.1.2 fork, down
         return {"kind": "spotify", "name": name, "target": target,
                 "order": "auto", "image": image, "episodes": episodes}
     key = (target, order, name)

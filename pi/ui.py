@@ -1044,6 +1044,28 @@ class App:
     def entry_art(self):
         return self._row_art(self.section.get("entries") or [])
 
+    def episode_art(self):
+        """Cover of the highlighted episode/track row (56px, top-right) —
+        the same affordance the entries menus have. Row 0 ("Play all")
+        and rows without their own art show the collection cover.
+        Spotify picker rows carry REMOTE cover urls, so the fetch goes
+        through artwork_async — a list scroll must never block the
+        render thread on the network (the carousel's A3 rule); the view
+        repaints when the cover lands."""
+        exp = self.expanded or {}
+        eps = exp.get("episodes") or []
+        if 0 < self.sel <= len(eps):
+            ref = eps[self.sel - 1].get("image") or exp.get("image")
+        else:
+            ref = exp.get("image")
+        if not ref:
+            return None
+        if (self._art_key(ref, 56) not in self.artwork_cache
+                and time.monotonic() - self.last_input < 0.4):
+            self.dirty = True  # let scrolling settle; retry next tick
+            return None
+        return self.artwork_async(ref, 56)
+
     def section_art(self):
         """The highlighted category's uploaded logo on the home screen."""
         return self._row_art((self.library or {}).get("sections") or [])
@@ -1628,9 +1650,13 @@ class App:
             if art:
                 img.paste(art, (W - art.width - 6, 26))
         elif self.view == "episodes":
+            art = self.episode_art()
             rolls = draw_list(d, self.expanded.get("name") or "Episoder",
                               self.current_items(), self.sel, self.system,
-                              hint="✓ = downloaded (plays offline)")
+                              hint="✓ = downloaded (plays offline)",
+                              maxlen=17 if art else 24)
+            if art:
+                img.paste(art, (W - art.width - 6, 26))
         elif self.view == "settings":
             rolls = draw_list(d, "Settings", self.current_items(), self.sel,
                               self.system, hint="A: change   B: back")
