@@ -54,6 +54,27 @@ assert st["title"] == "Blue Monday '88", \
     f"the screen card must not read 'Nothing playing' mid-burst: {st['title']}"
 print("1. trackless + pending skip: card held, pending passed through OK")
 
+# 1b. v0.1.0: the fork KNOWS the pending target's metadata — the card
+#     shows where the kid is GOING (name + cover + fresh progress), and
+#     next_track's cover is exposed for the UI's art prewarm
+daemon.go_status = lambda **_k: {
+    "pending_track_uri": "spotify:track:c",
+    "pending_track": {"name": "True Faith", "artist_names": ["New Order"],
+                      "album_name": "Substance", "duration": 353000,
+                      "album_cover_url": "https://i.scdn.co/pending"},
+    "next_track": {"name": "1963", "album_cover_url":
+                   "https://i.scdn.co/next"}}
+st = orch.status()
+assert st["title"] == "True Faith", \
+    f"the card must show the skip TARGET during a burst: {st['title']}"
+assert st["artwork"] == "https://i.scdn.co/pending", st["artwork"]
+assert st["position"] == 0 and st["playing"] is True, \
+    (st["position"], st["playing"])
+assert st["spotify"]["track"] == "True Faith", st["spotify"]
+assert st["spotify"]["next_artwork"] == "https://i.scdn.co/next", \
+    "next_track cover must be exposed for the UI art prewarm"
+print("1b. pending_track metadata: card shows the target + next cover OK")
+
 # 2. fully empty answer (transient timeout) still holds briefly (old rule)
 daemon.go_status = lambda **_k: {}
 st = orch.status()

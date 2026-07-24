@@ -1320,22 +1320,34 @@ class Orchestrator:
                 at, cached = getattr(self, "_go_st_cache", (0.0, None))
                 hold = SPOT_TIMEOUT_HOLD_S if in_flight else GO_ST_HOLD_S
                 if cached and time.monotonic() - at < hold:
-                    pend = st.get("pending_track_uri")
+                    fresh = st
                     st = dict(cached)  # a load is in flight — hold the card
-                    if pend:
-                        st["pending_track_uri"] = pend
+                    # v0.1.0: the fresh answer's pending/next metadata is
+                    # newer than the cached card — carry it over
+                    for k in ("pending_track_uri", "pending_track",
+                              "next_track"):
+                        if fresh.get(k):
+                            st[k] = fresh[k]
         track = st.get("track") or {}
         sp_playing = spotify_playing(st)
+        # v0.1.0: the fork's metadata cache (whole-playlist sweep at context
+        # load) describes the debounced skip target and the upcoming track
+        # before any stream is loaded
+        pend_t = st.get("pending_track") or {}
+        next_t = st.get("next_track") or {}
         out["spotify"] = {"playing": sp_playing,
                           "track": track.get("name") or None,
                           "artists": track.get("artist_names") or [],
                           "album": track.get("album_name") or None,
                           "artwork": track.get("album_cover_url") or None,
                           # v0.0.8: the not-yet-settled skip target while a
-                          # debounced burst is in flight (None otherwise) —
-                          # lets the UI show a skipping indicator later
+                          # debounced burst is in flight (None otherwise)
                           "pending_track_uri":
-                              st.get("pending_track_uri") or None}
+                              st.get("pending_track_uri") or None,
+                          # v0.1.0: upcoming track's cover — the UI prewarms
+                          # its art cache so the NEXT skip shows art instantly
+                          "next_artwork":
+                              next_t.get("album_cover_url") or None}
         # A paused Spotify track is still "what's on" — keep showing it
         # (title/artwork/position) with playing=False, like the mpv side does.
         # Gate on "mpv supplied nothing" rather than "child dead": while a
@@ -1355,6 +1367,27 @@ class Orchestrator:
             # position lives on the track object (ms, live-extrapolated)
             out["position"] = (track.get("position") or 0) / 1000
             out["artwork"] = out["spotify"]["artwork"]
+        # v0.1.0: a debounced skip is in flight and the fork's metadata
+        # cache KNOWS the target — show where the kid is GOING (name +
+        # cover), not the track being left behind. The screen then reads
+        # correctly during the whole burst instead of trailing one track
+        # behind ("tekst men ikke art", field 2026-07-23 mash test), and
+        # the cover fetch overlaps the settle load instead of starting
+        # after it.
+        if pend_t and source == "spotify" and out.get("source") != "mpv":
+            out["source"] = "spotify"
+            out["playing"] = True
+            out["title"] = pend_t.get("name") or out["title"]
+            out["duration"] = (pend_t.get("duration") or 0) / 1000 or None
+            out["position"] = 0
+            art = pend_t.get("album_cover_url")
+            if art:
+                out["artwork"] = art
+            out["spotify"]["track"] = pend_t.get("name") or None
+            out["spotify"]["artists"] = pend_t.get("artist_names") or []
+            out["spotify"]["album"] = pend_t.get("album_name") or None
+            if art:
+                out["spotify"]["artwork"] = art
         # A freshly tapped spotify target is still loading: go-librespot's
         # /status keeps describing the PREVIOUS context for a few seconds,
         # which put another playlist's cover and title on the card (kids:

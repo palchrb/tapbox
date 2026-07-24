@@ -743,6 +743,14 @@ class App:
                 self._set("status", api_get("/status", timeout=2))
             except OSError:
                 self._set("status", {})
+        # v0.1.0: the fork's metadata cache names the UPCOMING track's
+        # cover — fetch it into the art disk cache now, while nothing is
+        # being skipped, so the next press paints its art instantly (the
+        # now-card renders 128px square). artwork_async dedupes: one
+        # background fetch per cover ever, backoff respected.
+        nxt = ((self.status or {}).get("spotify") or {}).get("next_artwork")
+        if nxt:
+            self.artwork_async(nxt, 128, square=True)
         if now - self.last_system > SYSTEM_POLL_S:
             self.last_system = now
             try:

@@ -113,12 +113,14 @@ fi
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
-GO_LIBRESPOT_VERSION="v0.0.9"  # v0.0.8 Fast skip: debounced next/prev (a
+GO_LIBRESPOT_VERSION="v0.1.0"  # v0.0.8 Fast skip: debounced next/prev (a
 # burst of N presses costs 2 audio-key requests instead of N) + a circuit
 # breaker on throttled keys (aes code 2 -> one retry + stop, never the
 # 51-track walk that kept the account rate-limited); /status gains
 # pending_track_uri. v0.0.9: the settle wait no longer counts as playback
-# position (settled tracks started ~401ms in instead of 0:00).
+# position (settled tracks started ~401ms in instead of 0:00). v0.1.0:
+# metadata batch+cache — /status gains pending_track and next_track (full
+# name/artists/cover), backed by a whole-context metadata sweep at load.
 GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
 
 if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \
