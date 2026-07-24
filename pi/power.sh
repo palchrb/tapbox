@@ -21,6 +21,9 @@
 #   sudo tapbox-power hat-audio-off  remove the overlay again
 #   sudo tapbox-power curve     apply the calibrated TapBox battery curve
 #                               (percent = remaining playtime; see pi/sugar-config.txt)
+#   sudo tapbox-power btsnoop-on   btmon RAM-ring capture (hci0 crash evidence);
+#                                  copy /run/tapbox-btsnoop off BEFORE rebooting
+#   sudo tapbox-power btsnoop-off  stop the capture
 #
 # Bluetooth is deliberately left alone — it drives the speaker.
 # If Spotify playback stutters in save mode, set WIFI_POWERSAVE=0 below:
@@ -319,8 +322,24 @@ PY
       sleep 60
     done
     ;;
+  btsnoop-on)
+    # RAM-ring btmon capture (tapbox-btsnoop.service, installed disabled
+    # by install.sh) — the layer-attribution evidence for hci0 crashes
+    if [[ ! -e /etc/systemd/system/tapbox-btsnoop.service ]]; then
+      echo "tapbox-btsnoop.service missing — run pi/install.sh first"
+      exit 1
+    fi
+    systemctl enable --now tapbox-btsnoop
+    echo "btmon capture ON — ring segments in /run/tapbox-btsnoop (RAM!)"
+    echo "NOTE: copy segments OFF the box before rebooting — a reboot"
+    echo "      (the instinctive crash response) evaporates the evidence"
+    ;;
+  btsnoop-off)
+    systemctl disable --now tapbox-btsnoop 2>/dev/null || true
+    echo "btmon capture OFF (any saved segments in /run are kept until reboot)"
+    ;;
   *)
-    sed -n '4,22p' "$0"
+    sed -n '4,24p' "$0"
     exit 1
     ;;
 esac

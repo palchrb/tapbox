@@ -226,6 +226,14 @@ class Reconnector:
         if not self.target:
             return
         self.backoff = BACKOFF_MIN_S  # a fresh user intent resets the ladder
+        # Re-base the RECENT_DROP fast window on the kick: after a
+        # controller heal (the daemon kicks when recovery completes) the
+        # retries should run the 15s cadence for the full 150s from NOW —
+        # a slow heal otherwise burns the window that started at the
+        # original drop and lands in the patient ladder. Side effects are
+        # benign: the ABSENT parking clock resets (a kick IS fresh
+        # intent), and enter_steady clears the stamp as always.
+        self.disconnected_since = time.monotonic()
         self.attempt("output switched to bt", debounce=True)
 
     def _mac_file_changed(self, *_args):

@@ -2207,8 +2207,10 @@ def _bt_recover(verb):
         for line in (r.stdout or "").splitlines():
             if line.strip():
                 log(f"bt-recovery: {line.strip()}")
+        return r.returncode == 0
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"bluetooth recovery ({verb}) failed: {e!r}")
+        return False
 
 
 def _bt_transport_ready():
@@ -2246,8 +2248,26 @@ def _heal_crashed_controller():
         if not _bt._hci_crashed():
             return  # plain speaker-away: btwatchd's job, not ours
         _BT_HEAL["last"] = time.monotonic()
-        log("play intent found a crashed BT controller — recovering")
-        _bt_recover("recover")
+        log("bt heal: crashed controller found — recovering")
+        if _bt_recover("recover"):
+            # A recovery that RAN CLEAN must not park the healer for 5
+            # minutes: flappy evenings re-crash inside the cooldown
+            # (field 2026-07-22: two crashes in one evening) and the
+            # second crash would otherwise sit dead until a button press
+            # after expiry. The cooldown's job is only to stop a FAILING
+            # recovery from looping bluetooth restarts — failures keep it.
+            _BT_HEAL["last"] = 0.0
+        # Re-base the auto-resume window at recovery completion — a slow
+        # heal must not eat BT_RESUME_S. Compare-and-set, NOT a bare
+        # write (QA 2026-07-24): re-stamp only while 'lost' is STILL
+        # armed. If the transport blipped back mid-heal the consumer
+        # already cleared it (and may be playing) — a bare re-stamp
+        # would then fire a spurious second resume/output-rebuild under
+        # live audio. Also correct on the play-intent spawn path, where
+        # 'lost' never was armed. Leaf lock, taken bare.
+        with _BT_WAIT_LOCK:
+            if _BT_WAIT["lost"]:
+                _BT_WAIT["lost"] = time.monotonic()
         try:
             with open(_bt.KICK_FILE + ".tmp", "w") as f:
                 f.write(str(time.time()))
@@ -2334,11 +2354,32 @@ def _bt_transport_lost():
     plays via go-librespot, not an mpv child: there its ALSA output just
     died under it ('output device failed' in its log, the track burning
     on silently) — pause it instead, same popup, and the spotify
-    bookmarker keeps the position. Guarded: a drop for a speaker we're
-    not playing into is a no-op, so a stale or duplicate notification
-    can never kill local playback."""
+    bookmarker keeps the position.
+
+    NO local fail-over (e81a53b's keep-playing branch reverted, owner
+    decision 2026-07-23): when the headset is the chosen output, the
+    right behavior is pause + the fastest possible automatic reconnect
+    + auto-resume, zero child interaction — the box speaker suddenly
+    blasting next to a kid wearing dead headphones is worse than a
+    short gap in them.
+
+    A heal probe spawns UNCONDITIONALLY on every bt-output transport
+    loss — even at idle — and self-discriminates: the heal checks the
+    crash signature itself (one cheap ioctl when healthy; journal only
+    read when the controller is down) and exits quietly for a plain
+    headset power-off, which is btwatchd's job. Discriminating HERE
+    would block btwatchd's 3s notify timeout on journalctl I/O. With
+    the child stopped the stall watchdog never runs again, so this
+    spawn is what turns a controller crash into an automatic recovery
+    (~5s trigger) instead of a dead box until the next button press.
+
+    Guarded: a drop for a speaker we're not playing into is a no-op, so
+    a stale or duplicate notification can never kill local playback —
+    and the hold-X park is covered by the same guard, because
+    set_output couples the quiet marker to output=local."""
     if current_output()["output"] != "bt":
         return {"stopped": False}
+    threading.Thread(target=_heal_crashed_controller, daemon=True).start()
     # _BT_WAIT writes go under _BT_WAIT_LOCK (a bare write can be
     # consumed by a stale transport-up event in _bt_wait_advance, review
     # R7) — but NEVER while holding ORCH.lock: the established order is
@@ -2348,39 +2389,12 @@ def _bt_transport_lost():
     # mpv branch stops the child under ORCH.lock and arms the wait
     # AFTER releasing it.
     stopped_mpv = False
-    kept_playing = False
     with ORCH.lock:
         if ORCH._mpv_alive():
-            # Keep the kid's audio alive: with a built-in card, retarget
-            # mpv LIVE to the local device and keep playing — a stopped
-            # box mid-story reads as broken. Safe against the historical
-            # output-flap (episode-skip) because the transport is
-            # CONFIRMED dead here (btwatchd's notification), not guessed.
-            # btwatchd's own fallback announce (~20s) then converges
-            # OUT_FILE to local, and the speaker coming back flows
-            # through its reconnect -> announce(bt) -> deferred switch.
-            if _i2s_card_present():
-                try:
-                    kept_playing = mpv_ipc(
-                        ["set_property", "audio-device",
-                         f"alsa/{OUTPUT_PCMS['local']}"]
-                    ).get("error") == "success"
-                except OSError:
-                    kept_playing = False
-            if kept_playing:
-                log("bt transport lost mid-play — continuing on the "
-                    "built-in speaker")
-            else:
-                log("bt transport lost mid-play — stopping (bookmark "
-                    "survives)")
-                ORCH._stop_child()
-                stopped_mpv = True
-    if kept_playing:
-        # deliberately NOT arming _BT_WAIT['lost']: audio is still
-        # playing, so the blip auto-resume must not fire a second
-        # starter when the transport returns — btwatchd's announce
-        # path moves mpv back to bt by itself.
-        return {"stopped": False, "kept": "local"}
+            log("bt transport lost mid-play — stopping (bookmark "
+                "survives)")
+            ORCH._stop_child()
+            stopped_mpv = True
     if stopped_mpv:
         with _BT_WAIT_LOCK:
             _BT_WAIT["lost"] = time.monotonic()
