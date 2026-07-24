@@ -1337,6 +1337,9 @@ class Orchestrator:
         next_t = st.get("next_track") or {}
         out["spotify"] = {"playing": sp_playing,
                           "track": track.get("name") or None,
+                          # uri of the loaded track — the song picker
+                          # marks the playing row with it (v0.1.1)
+                          "track_uri": track.get("uri") or None,
                           "artists": track.get("artist_names") or [],
                           "album": track.get("album_name") or None,
                           "artwork": track.get("album_cover_url") or None,
@@ -1753,8 +1756,13 @@ class Handler(BaseHTTPRequestHandler):
             if not target:
                 self._send(400, {"error": "id or target required"})
                 return
+            # tracks=1 (fork v0.1.1): include a spotify playlist's track
+            # list as episode rows — opt-in, used by the now-view song
+            # picker only, so browse taps keep playing directly
+            want_tracks = (q.get("tracks") or ["0"])[0] not in ("0", "")
             try:
-                self._send(200, expand_target(target, order, name))
+                self._send(200, expand_target(target, order, name,
+                                              tracks=want_tracks))
             except Exception as e:  # expansion hits the network; stay alive
                 log(f"expand failed for {target}: {e!r}")
                 self._send(502, {"error": str(e)})

@@ -266,6 +266,19 @@ PREV_RESTART_MS = 5000  # >5s into the track: prev restarts it — the same
                         # semantics the mpv side uses (daemon command())
 
 
+def playlist_tracks(uri, timeout=5):
+    """Fork v0.1.1: the playlist's track listing straight from
+    go-librespot's metadata cache (GET /playlist/tracks) — names, artists
+    and cover urls with NO Web API involved. Entries the cache doesn't
+    know yet come back with track=null and the request itself kicks a
+    background sweep, so a re-open shortly after is complete. Raises
+    OSError when unreachable; HTTPError 400 = not a playlist (albums),
+    404 = a pre-v0.1.1 fork."""
+    url = API + "/playlist/tracks?uri=" + urllib.parse.quote(uri, safe="")
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
 def skip(action, timeout=10):
     """One raw /player/next|prev call, nothing else — the v0.0.8 fast
     path. The fork's skip debounce owns burst semantics now, and its own

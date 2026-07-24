@@ -606,16 +606,43 @@ _EXPAND_CACHE = {}  # (target, order, name) -> (monotonic, result)
 EXPAND_TTL_S = 300  # menus re-open constantly; feeds change hourly at most
 
 
-def expand_target(target, order="auto", name=None):
+def expand_target(target, order="auto", name=None, tracks=False):
     if is_spotify(target):
-        # Not expandable without the Web API: a leaf "play all" entry.
         # The cover (oEmbed, fetched by the sweeper) still shows.
         try:
             image = content.collection_image(target)
         except Exception:
             image = None
+        episodes = []
+        if tracks:
+            # Fork v0.1.1: playlists ARE expandable — go-librespot's
+            # metadata cache lists the tracks (no Web API). Opt-in via
+            # tracks=True: only the now-view song picker asks for it;
+            # the browse flows keep treating spotify entries as leaf
+            # "play all" cards (a menu tap must PLAY, not open a list).
+            # Row shape matches the episode picker: id doubles as the
+            # /play episode param, which player.py routes to
+            # skip_to_uri.
+            try:
+                uri = spotify.to_uri(target)
+                listing = spotify.playlist_tracks(uri) if uri else {}
+                for t in listing.get("tracks") or []:
+                    meta = t.get("track")
+                    if not meta:
+                        continue  # sweep still filling — next open has it
+                    artists = ", ".join(meta.get("artist_names") or [])
+                    title = meta.get("name") or t.get("uri")
+                    episodes.append(
+                        {"id": t.get("uri"),
+                         "title": f"{title} — {artists}" if artists
+                                  else title,
+                         "url": t.get("uri"),
+                         "image": meta.get("album_cover_url"),
+                         "cached": False})
+            except OSError:
+                episodes = []  # albums (400), pre-v0.1.1 fork (404), down
         return {"kind": "spotify", "name": name, "target": target,
-                "order": "auto", "image": image, "episodes": []}
+                "order": "auto", "image": image, "episodes": episodes}
     key = (target, order, name)
     hit = _EXPAND_CACHE.get(key)
     if hit and time.monotonic() - hit[0] < EXPAND_TTL_S:

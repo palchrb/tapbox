@@ -266,7 +266,7 @@ def accept_spot_bookmark(bm, uri, exact=False):
 PLAY_TIMEOUT_S = float(os.environ.get("TAPBOX_SPOT_PLAY_TIMEOUT", "8"))
 
 
-def play_spotify(target, fresh=False, exact=False):
+def play_spotify(target, fresh=False, exact=False, start_uri=None):
     uri = spotify.to_uri(target)
     if not uri:
         log(f"could not parse spotify link: {target}")
@@ -284,7 +284,12 @@ def play_spotify(target, fresh=False, exact=False):
     # play {uri, skip_to_uri, position} keeps the queue intact and lands
     # exactly where we left off in ONE atomic call (fork v0.0.5).
     bm = None
-    if fresh:
+    if start_uri:
+        # An explicit track pick from the song picker (v0.1.1): start
+        # THERE, from the top — the bookmark's "where we left off" is
+        # exactly what the kid is navigating away from
+        pass
+    elif fresh:
         spotify.clear_bookmark(uri)
     else:
         bm = accept_spot_bookmark(spotify.read_bookmark(uri), uri, exact)
@@ -301,7 +306,9 @@ def play_spotify(target, fresh=False, exact=False):
         sys.exit(1)
 
     body = {"uri": uri}
-    if bm:
+    if start_uri:
+        body["skip_to_uri"] = start_uri
+    elif bm:
         body["skip_to_uri"] = bm["uri"]
         # fork v0.0.5: go-librespot loads the track PAUSED, seeks to
         # `position`, then resumes — atomically, server-side. That
@@ -406,7 +413,9 @@ def main():
     target, urls = args[0], args[1:]
 
     if is_spotify(target):
-        play_spotify(target, fresh=fresh, exact=exact)
+        # --episode on a spotify target = a track pick from the song
+        # picker: the id IS the track uri, played via skip_to_uri
+        play_spotify(target, fresh=fresh, exact=exact, start_uri=episode)
         return
 
     titles, ids, images = {}, {}, {}

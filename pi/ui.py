@@ -1187,16 +1187,22 @@ class App:
                     continue
                 self.draw_message("Fetching episodes ...")
                 try:
-                    self.expanded = api_get(f"/expand?id={e['id']}")
+                    # tracks=1: spotify playlists list their songs too
+                    # (fork v0.1.1 metadata cache) — same picker as
+                    # podcasts. Browse taps never pass it, so tapping a
+                    # playlist card still just plays.
+                    self.expanded = api_get(f"/expand?id={e['id']}&tracks=1")
                 except (OSError, ValueError):
                     self.draw_message("Network error — try again")
                     time.sleep(1)
                     return
                 if not self.expanded.get("episodes"):
-                    return  # spotify etc: no episode list exists
+                    return  # albums / pre-v0.1.1 fork: no list exists
                 self.section, self.entry = sec, e
                 self.push("episodes")
-                now_id = (self.status or {}).get("episode_id")
+                now_id = (self.status or {}).get("episode_id") \
+                    or ((self.status or {}).get("spotify")
+                        or {}).get("track_uri")
                 if now_id:  # land on the playing episode
                     for i, ep in enumerate(self.expanded["episodes"]):
                         if ep.get("id") == now_id:
@@ -1380,7 +1386,8 @@ class App:
             return [e["name"] for e in self.section["entries"]]
         if self.view == "episodes":
             eps = self.expanded["episodes"]
-            now_id = (self.status or {}).get("episode_id")
+            now_id = (self.status or {}).get("episode_id") \
+                or ((self.status or {}).get("spotify") or {}).get("track_uri")
             rows = []
             for e in eps:
                 playing = now_id is not None and e.get("id") == now_id
