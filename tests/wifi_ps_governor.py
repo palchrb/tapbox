@@ -188,6 +188,18 @@ sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], f"unknown must hold, not flip: {sets}"
 print("9. mid-load unknown holds the PS state OK")
 
+# 9b. UNKNOWN that PERSISTS past the bound (a wedged go-librespot: api
+# up but never answering) must NOT hold PS off forever — it falls
+# through to the idle path and flips PS back on (+30-50mA-all-night leak,
+# energy audit 2026-07-24 #1). NONE_BOUND=0 => the second tick's None is
+# already 'too long'.
+os.environ["TAPBOX_WIFI_PS_NONE_BOUND"] = "0"
+calls = run_governor(["Power save: on\n"], [True, None])
+os.environ["TAPBOX_WIFI_PS_NONE_BOUND"] = "300"
+sets = [c[-1] for c in calls]
+assert sets == ["off", "on"], f"wedged-api unknown must not pin PS off: {sets}"
+print("9b. unknown past the bound (wedged api) flips PS back on OK")
+
 # 10. hysteresis: after streaming stops, PS stays OFF through short
 # idle — flipping ON 10s after a pause silently killed the Spotify AP
 # TCP ('did not receive last pong ack', field 2026-07-18 20:24) and a

@@ -114,14 +114,32 @@ assert os.path.exists(daemon._bt.KICK_FILE), "recovery must kick btwatchd"
 with daemon._BT_WAIT_LOCK:
     assert daemon._BT_WAIT["lost"] > armed_at + 50, \
         "the resume window must re-base at recovery completion"
-assert daemon._BT_HEAL["last"] == 0.0, \
-    "a CLEAN recovery must reset the cooldown (flappy-evening re-crash)"
-print("5. heal on crash: recover + kick + window re-based + cooldown reset OK")
+# a CLEAN recovery backs off to the SHORT success cooldown (not the full
+# 5min, not zero): the second crash of a flappy evening heals soon, but a
+# re-crash can't loop driver reloads back-to-back
+since_last = time.monotonic() - daemon._BT_HEAL["last"]
+remaining = daemon.BT_HEAL_COOLDOWN_S - since_last
+assert 0 < remaining <= daemon.BT_HEAL_SUCCESS_COOLDOWN_S + 5, \
+    f"clean recovery must leave only the short cooldown, {remaining}s left"
+print("5. heal on crash: recover + kick + window re-based + short cooldown OK")
+
+# 5a. within the short success cooldown a re-crash is gated (no back-to-
+#     back driver reloads); past it, it heals
+RECOVERS.clear()
+REAL_HEAL()  # immediately again — still inside the success cooldown
+assert RECOVERS == [], "a re-crash inside the success cooldown must gate"
+daemon._BT_HEAL["last"] = time.monotonic() - daemon.BT_HEAL_COOLDOWN_S - 1
+with daemon._BT_WAIT_LOCK:
+    daemon._BT_WAIT["lost"] = time.monotonic() - 10
+REAL_HEAL()
+assert RECOVERS == ["recover"], "past the success cooldown it heals again"
+print("5a. success cooldown gates a re-crash, then heals OK")
 
 # 5b. a consumed 'lost' (transport blipped back mid-heal) is NEVER
 #     re-stamped — a phantom re-arm would fire a second resume/rebuild
 #     under live audio
 RECOVERS.clear()
+daemon._BT_HEAL["last"] = 0.0
 with daemon._BT_WAIT_LOCK:
     daemon._BT_WAIT["lost"] = 0.0
 REAL_HEAL()

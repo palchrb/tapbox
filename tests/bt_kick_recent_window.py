@@ -57,16 +57,39 @@ rec.target = "2C:FD:B3:FA:DA:04"
 attempts = []
 rec.attempt = lambda reason, **k: attempts.append(reason)
 
-# 1. a kick stamps disconnected_since = now (re-bases the fast window)
-rec.disconnected_since = time.monotonic() - 500  # old drop, window burnt
+# 1. a kick from OUTSIDE the fast window (an old drop / a heal after a
+#    long absence) re-bases disconnected_since to NOW — the post-heal
+#    retry then runs the 15s cadence for a fresh 150s
+rec.disconnected_since = time.monotonic() - (btwatchd.RECENT_DROP_S + 350)
 rec.backoff = 300
 rec._kicked()
 assert attempts == ["output switched to bt"], attempts
 away = time.monotonic() - rec.disconnected_since
-assert away < 5, f"kick must re-base disconnected_since to NOW, away={away}"
+assert away < 5, f"a kick past the window must re-base to NOW, away={away}"
 assert rec.backoff == btwatchd.BACKOFF_MIN_S, "kick resets the ladder"
-assert away < btwatchd.RECENT_DROP_S, "re-based => back in the 15s cadence"
-print("1. kick re-bases disconnected_since (fresh RECENT window) OK")
+print("1. kick past the window re-bases disconnected_since OK")
+
+# 1b. a kick INSIDE the fast window must NOT re-base — else every button
+#     press with the headset off restarts the 150s×15s paging and resets
+#     the 1h ABSENT clock, so a kid mashing buttons pages ~4/min forever
+#     (energy/RF audit 2026-07-24 #3). The immediate attempt() still runs.
+attempts.clear()
+stamp = time.monotonic() - 30  # 30s into the window
+rec.disconnected_since = stamp
+rec._kicked()
+assert attempts == ["output switched to bt"], "the immediate attempt must run"
+assert rec.disconnected_since == stamp, \
+    "a kick inside the window must NOT restart it"
+print("1b. kick inside the window keeps the stamp (no endless paging) OK")
+
+# 1c. a kick with NO drop recorded (fresh intent, never disconnected)
+#     stamps NOW so the window is defined
+attempts.clear()
+rec.disconnected_since = None
+rec._kicked()
+assert rec.disconnected_since is not None and \
+    time.monotonic() - rec.disconnected_since < 5
+print("1c. kick with no prior drop stamps the window OK")
 
 # 2. no target: the kick is a no-op (no stamp, no attempt)
 attempts.clear()

@@ -226,14 +226,20 @@ class Reconnector:
         if not self.target:
             return
         self.backoff = BACKOFF_MIN_S  # a fresh user intent resets the ladder
-        # Re-base the RECENT_DROP fast window on the kick: after a
-        # controller heal (the daemon kicks when recovery completes) the
-        # retries should run the 15s cadence for the full 150s from NOW —
-        # a slow heal otherwise burns the window that started at the
-        # original drop and lands in the patient ladder. Side effects are
-        # benign: the ABSENT parking clock resets (a kick IS fresh
-        # intent), and enter_steady clears the stamp as always.
-        self.disconnected_since = time.monotonic()
+        # Re-base the RECENT_DROP fast window on the kick so a post-heal
+        # retry runs the 15s cadence for the full 150s from NOW (a slow
+        # heal otherwise burns the window that started at the original
+        # drop and lands in the patient ladder). But only when we're
+        # ALREADY OUTSIDE that window: an unconditional re-base let every
+        # button press with the headset off restart the 150s×15s paging
+        # AND reset the 1h ABSENT parking clock, so a kid mashing buttons
+        # kept the box paging ~4/min forever (energy/RF audit 2026-07-24
+        # #3). Inside the window a kick's immediate attempt() below is
+        # enough; the stamp stays where it was.
+        now = time.monotonic()
+        if self.disconnected_since is None \
+                or now - self.disconnected_since > RECENT_DROP_S:
+            self.disconnected_since = now
         self.attempt("output switched to bt", debounce=True)
 
     def _mac_file_changed(self, *_args):

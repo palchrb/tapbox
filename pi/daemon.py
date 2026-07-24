@@ -2224,6 +2224,15 @@ def _bt_transport_ready():
 
 
 _BT_HEAL = {"lock": threading.Lock(), "last": 0.0}
+# After a CLEAN recovery the full 5-min cooldown is too long (the second
+# crash of a flappy evening would sit dead until it expired), but ZERO is
+# too short: recovery itself restarts bluetooth + kicks a 150s page
+# window, and if the controller re-crashes immediately that would loop
+# back-to-back driver reloads with no breathing room (energy/RF audit
+# 2026-07-24 #2). A short success cooldown heals the second crash fast
+# while capping the loop rate.
+BT_HEAL_SUCCESS_COOLDOWN_S = float(
+    os.environ.get("TAPBOX_BT_HEAL_OK_COOLDOWN", "45"))
 BT_HEAL_COOLDOWN_S = float(os.environ.get("TAPBOX_BT_HEAL_COOLDOWN", "300"))
 
 
@@ -2250,13 +2259,16 @@ def _heal_crashed_controller():
         _BT_HEAL["last"] = time.monotonic()
         log("bt heal: crashed controller found — recovering")
         if _bt_recover("recover"):
-            # A recovery that RAN CLEAN must not park the healer for 5
-            # minutes: flappy evenings re-crash inside the cooldown
-            # (field 2026-07-22: two crashes in one evening) and the
-            # second crash would otherwise sit dead until a button press
-            # after expiry. The cooldown's job is only to stop a FAILING
-            # recovery from looping bluetooth restarts — failures keep it.
-            _BT_HEAL["last"] = 0.0
+            # A recovery that RAN CLEAN must not park the healer for the
+            # full 5 minutes: flappy evenings re-crash sooner (field
+            # 2026-07-22: two crashes in one evening) and the second
+            # crash would otherwise sit dead until expiry. But not ZERO
+            # either — back off just enough that a re-crash can't loop
+            # driver reloads. Rewind 'last' to leave only the short
+            # success cooldown; a FAILING recovery keeps the full one
+            # (the bluetooth-restart-loop guard).
+            _BT_HEAL["last"] = (time.monotonic() - BT_HEAL_COOLDOWN_S
+                                + BT_HEAL_SUCCESS_COOLDOWN_S)
         # Re-base the auto-resume window at recovery completion — a slow
         # heal must not eat BT_RESUME_S. Compare-and-set, NOT a bare
         # write (QA 2026-07-24): re-stamp only while 'lost' is STILL
@@ -3081,14 +3093,36 @@ def _ps_govern():
     log("wifi ps governor: managing (ps off while streaming, on when idle)")
     ps_off = False  # current state we set (baseline = on)
     idle_since = None  # when continuous not-streaming began (PS still off)
+    none_since = None  # when the 'unknown' verdict began (PS still off)
     hyst_s = float(os.environ.get("TAPBOX_WIFI_PS_HYST", "180"))
+    # A wedged go-librespot (api up but never answering — a documented
+    # failure mode) makes _streaming_now() return None forever, and the
+    # loop below used to hold PS OFF indefinitely on that (+30-50mA all
+    # night, energy audit 2026-07-24 #1). Bound it: 'unknown' for longer
+    # than a real track load could take means the api is stuck, not
+    # loading — fall through to the idle path and let PS come back on.
+    none_bound_s = float(os.environ.get("TAPBOX_WIFI_PS_NONE_BOUND", "300"))
     while True:
         _PS_KICK.wait(WIFI_PS_TICK_S)  # play intent ends the wait early
         _PS_KICK.clear()
         try:
             want_off = _ps_want_off()
-            if want_off is None:  # api mid-load: never flip PS blindly
-                continue
+            if want_off is None:  # api mid-load: never flip PS blindly...
+                if not ps_off:
+                    none_since = None
+                    continue
+                # ...unless PS has been stuck off under 'unknown' too long
+                # to be a genuine load — then treat it as idle (below).
+                if none_since is None:
+                    none_since = time.monotonic()
+                if time.monotonic() - none_since < none_bound_s:
+                    continue
+                log("wifi ps governor: 'streaming?' unknown for "
+                    f"{int(none_bound_s)}s (go-librespot wedged?) — "
+                    "treating as idle")
+                want_off = False
+            else:
+                none_since = None
             if want_off:
                 idle_since = None
             elif ps_off:
