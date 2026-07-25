@@ -28,6 +28,7 @@ persistent overlay costs battery.
 | **Caddy + Cloudflare DNS-01** | yes, real cert | no (LAN only) | ~none (idle Caddy = no wakeups) | anyone on home Wi-Fi | Caddy + a scoped CF token; local DNS override |
 | **Tailscale (managed WG)** | yes, auto | yes | **keepalives** (tailscaled resident) | only tailnet devices | trivial setup, 3rd-party control plane |
 | **VPS + WireGuard front** | yes, cert on VPS | yes | **WG keepalive (~25s)**, lighter than TS | anyone (public front) → token MANDATORY | you run a VPS |
+| **IPv6 dynamic DNS (direct)** | yes (needs real cert) | yes | **~none (no tunnel/keepalive)** | anyone (internet-facing) → token MANDATORY | DDNS updater; router IPv6 pinhole |
 
 Notes:
 - **Caddy + Cloudflare** is the battery winner *if* off-LAN access isn't
@@ -119,6 +120,54 @@ plane and are happy running a VPS; pick Tailscale when you want zero
 infra. Both share the keepalive battery cost and therefore both want the
 on-demand toggle.
 
+## IDEA 3 — IPv6 dynamic DNS (direct, no tunnel)
+
+**Status:** backlog. **Feasibility:** works *if* three network legs
+line up (below). **Battery: the best of the reach-from-anywhere
+options — no tunnel, no keepalive.**
+
+Concept: IPv6 gives every device a globally routable address (no NAT), so
+the box can be reached *directly* — no relay. The box publishes its
+current global IPv6 as an AAAA record (to self-hosted CoreDNS via RFC 2136
+dynamic-update / an etcd backend, or — simpler, since we already use
+Cloudflare — a tiny DDNS updater against the Cloudflare API). The phone
+resolves `tapbox.vibb.me AAAA` → connects directly from anywhere.
+
+Why it's the battery winner: **no persistent tunnel → no keepalives.**
+The box only touches the network to *update DNS when its address
+changes*, which it can watch event-driven via netlink (≈ free at idle).
+Inbound packets arrive fine even with Wi-Fi power save (AP buffers to the
+DTIM interval). This is why IPv6 is the right angle — IPv4 at home is
+NAT/CGNAT with no inbound path without a relay.
+
+Three hard dependencies (all outside our code, often not all satisfiable):
+1. **Working global IPv6 on the box's network** — ISP-dependent (the rig
+   is on Telenor; not guaranteed).
+2. **An inbound IPv6 firewall pinhole on the home router** for 443 → the
+   box. IPv6 has no NAT, but home routers block unsolicited inbound by
+   default; without a rule the phone's SYN dies at the router. Not every
+   router exposes this, and it must track the box's address. This is the
+   real blocker.
+3. **IPv6 on the phone's *current* network.** Cellular usually yes (often
+   IPv6-only); random Wi-Fi may be IPv4-only → then it literally cannot
+   reach an IPv6 literal. Reachability becomes "most places", not
+   "always".
+
+Also required:
+- Publish a **stable** IPv6 (disable RFC 4941 privacy temp addresses, or
+  use an RFC 7217 stable-privacy / token address) — otherwise it rotates
+  daily; low AAAA TTL so prefix/address changes propagate fast.
+- **Internet-facing surface**, same as IDEA 2: the token gate becomes
+  **mandatory** and real HTTPS a requirement; the box's 443 is now
+  world-scannable (token-protected, but open).
+
+Tradeoff vs the tunnels: IPv6-DDNS trades **robustness for battery** —
+idle-free, but reachability depends on three legs and it's internet-
+facing. The tunnels are robust through any NAT / IPv4-only network but
+cost keepalives. Natural hybrid: **IPv6-DDNS as the primary idle-free
+path, the on-demand tunnel (IDEA 1) as the fallback** for IPv4-only
+networks.
+
 ## Recommendation snapshot
 
 - **Battery is the priority + access is home-LAN only** → Caddy +
@@ -128,3 +177,6 @@ on-demand toggle.
   moments. Best of both: zero idle cost, remote access one toggle away.
 - **Want a fully self-owned public front** → **IDEA 2** (VPS + WG), also
   on-demand, and ship the token gate first (it becomes mandatory).
+- **Battery is sacred AND your ISP/router/phone all do IPv6 reliably** →
+  **IDEA 3** (IPv6 DDNS): idle-free direct reach, no tunnel. Ship the
+  token gate first; pair with IDEA 1 as the IPv4-only fallback.
