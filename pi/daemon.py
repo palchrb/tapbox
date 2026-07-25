@@ -86,6 +86,7 @@ The daemon stays a thin, state-owning router.
 """
 
 import base64
+import functools
 import json
 import mimetypes
 import os
@@ -217,6 +218,7 @@ def player_path():
 # --- tests' daemon.<name> monkeypatching working unchanged ----------------------
 
 from tapbox import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
+from tapbox import token as _token  # noqa: E402 — privileged-endpoint gate
 from tapbox import library as _library  # noqa: E402 — BUSY_CHECK wiring
 from tapbox import radio as _radio  # noqa: E402 — shared-radio yield markers
 from tapbox.library import (  # noqa: E402
@@ -1782,6 +1784,56 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
+    def _token_ok(self):
+        return _token.verify(self.headers.get("X-TapBox-Token"))
+
+    def _path_is_safe(self):
+        allow = SAFE.get(self.command)
+        if allow is True:
+            return True
+        if not allow:
+            return False  # unknown method -> privileged
+        path = urllib.parse.urlparse(self.path).path
+        return (path.rstrip("/") or "/") in allow
+
+    def _deny(self, code):
+        # Drain a bounded body first, or the close becomes an RST and the
+        # client sees a connection reset instead of our 401 (this hits
+        # the big privileged bodies: PUT /library, section-logo uploads).
+        # Only when it hasn't been read yet: a body-dependent denial
+        # (/play with a raw target) happens AFTER the handler consumed
+        # it, and reading again would block until the client times out.
+        if not getattr(self, "_body_consumed", False):
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            if 0 < n <= 65536:
+                try:
+                    self.rfile.read(n)
+                except OSError:
+                    pass
+        _log_denial(self.command, self.path)
+        self._send(401, {"error": "this phone is not linked to the box",
+                         "code": code})
+
+    def _require_token(self):
+        """Demand the box token regardless of the path — for a request
+        that is privileged because of its BODY (see /play with a raw
+        target). False means a 401 has already been sent."""
+        if not REQUIRE_TOKEN or self._token_ok():
+            return True
+        self._deny("token_invalid" if self.headers.get("X-TapBox-Token")
+                   else "token_required")
+        return False
+
+    def _authorized(self):
+        """False (and a 401 already sent) when this request may not
+        proceed. SAFE-listed paths pass without a token."""
+        if self._path_is_safe():
+            return True
+        return self._require_token()
+
     def _json_ct(self):
         """Cross-origin CSRF guard for every state-changing request.
 
@@ -1827,6 +1879,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._json_ct():
             return
         n = int(self.headers.get("Content-Length") or 0)
+        self._body_consumed = True  # _deny must not try to drain it again
         try:
             body = json.loads(self.rfile.read(n)) if n else {}
         except ValueError:
@@ -1867,6 +1920,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._json_ct():
             return
         n = int(self.headers.get("Content-Length") or 0)
+        self._body_consumed = True  # _deny must not try to drain it again
         try:
             body = json.loads(self.rfile.read(n)) if n else {}
         except ValueError:
@@ -1874,6 +1928,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/play":
                 target = body.get("target")
+                # A RAW target plays whatever URL the caller names — the
+                # one open endpoint that can put NEW, uncurated content
+                # into a kid's room (and makes the box fetch an
+                # attacker-chosen URL). The {"id": ...} form can only
+                # ever play something a parent already put in the
+                # library, so it stays open for RFID cards, buttons and
+                # the phone shortcut.
+                if target and not self._require_token():
+                    return
                 reverse = False
                 cache = None  # None = legacy behaviour for raw targets
                 resume = True  # 'from start' entries turn this off
@@ -2099,6 +2162,78 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # never let one request kill the daemon
             log(f"error on {self.path}: {e!r}")
             self._send(500, {"error": str(e)})
+
+
+# --- privileged-endpoint gate (SECURITY.md Model A+B) ----------------
+# DEFAULT DENY. SAFE lists what may be reached WITHOUT the box token;
+# every other path, and every method not named here, needs it. The
+# direction is the whole point: an endpoint someone forgets to classify
+# fails CLOSED, so anything added later is privileged until a human
+# deliberately puts it in this table.
+#
+# GET/HEAD being blanket-safe is STRUCTURAL, not laziness: the browser
+# fetches index.html, app.js, the manifest, the icons and every <img>
+# artwork URL by itself and cannot attach a custom header to any of them.
+# The obligation that buys must hold forever:
+#
+#     NEVER serve a state-changing or secret-revealing endpoint via GET.
+#
+# (True today: every GET is a read, and no endpoint ever returns the
+# token — rotation happens on the box screen, not over HTTP.)
+SAFE = {
+    "GET": True,
+    "HEAD": True,
+    # Playback only. The worst a LAN prankster can do with these is annoy
+    # somebody, and keeping them open is what lets the phone shortcut
+    # ("Hey Siri, pause TapBox") work with no setup at all.
+    # /play is here for its {"id": ...} form; a RAW target is checked
+    # separately inside the handler (it can put arbitrary content in a
+    # kid's room, so it needs the token).
+    "POST": frozenset({"/play", "/playpause", "/next", "/prev", "/pause",
+                       "/shuffle", "/volume", "/stop"}),
+    # PUT /library replaces the entire library and PUT /settings rewrites
+    # config — both privileged.
+    "PUT": frozenset(),
+}
+# Recovery valve for a box whose screen is broken. Documented in
+# SECURITY.md, never shipped enabled.
+REQUIRE_TOKEN = os.environ.get("TAPBOX_REQUIRE_TOKEN", "1") != "0"
+
+_DENY_LOG = {"at": 0.0, "n": 0}
+
+
+def _log_denial(method, path):
+    """One line a minute with a count — a LAN scanner must not be able to
+    flood the journal (and SD card) with rejections."""
+    now = time.monotonic()
+    _DENY_LOG["n"] += 1
+    if now - _DENY_LOG["at"] < 60:
+        return
+    n = _DENY_LOG["n"]
+    _DENY_LOG["at"], _DENY_LOG["n"] = now, 0
+    extra = f" (+{n - 1} more)" if n > 1 else ""
+    log(f"unauthorized {method} {path} — no valid box token{extra}")
+
+
+def _gate(fn):
+    @functools.wraps(fn)
+    def wrapper(self):
+        if not self._authorized():
+            return
+        return fn(self)
+    wrapper._tapbox_gated = True
+    return wrapper
+
+
+# Wrap EVERY request method the class defines. Doing it here, rather than
+# by editing each do_* by hand, is what makes the default-deny real: a
+# do_DELETE added in a year is gated the day it is written, without
+# anyone remembering this file. (Snapshot the names — we mutate the class
+# while looking at it.)
+for _name in [n for n in list(vars(Handler)) if n.startswith("do_")]:
+    setattr(Handler, _name, _gate(vars(Handler)[_name]))
+# PortalHandler (:80) is deliberately NOT gated: it only ever answers a
+# 302 to its own captive-portal page and serves no API.
 
 
 def _clean_bt_name(raw):
@@ -3240,6 +3375,17 @@ def main():
     threading.Thread(target=_spotify_supervisor, daemon=True).start()
     threading.Thread(target=_ip_watchdog, daemon=True).start()
     threading.Thread(target=_portal_server, daemon=True).start()
+    # Self-heal: install.sh normally creates this, but a deleted or
+    # corrupt file must produce a NEW token rather than a box where every
+    # privileged endpoint is permanently unreachable. ensure() never
+    # rewrites a valid token, so linked phones survive a restart.
+    try:
+        if _token.ensure() and not REQUIRE_TOKEN:
+            log("WARNING: TAPBOX_REQUIRE_TOKEN=0 — privileged endpoints "
+                "are UNPROTECTED (recovery mode)")
+    except OSError as e:
+        log(f"WARNING: no API token ({e!r}) — privileged endpoints will "
+            "refuse every request until this is fixed")
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")
     server.serve_forever()

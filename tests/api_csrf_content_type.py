@@ -28,9 +28,13 @@ os.environ["TAPBOX_STATE"] = TMP
 os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
 os.environ["TAPBOX_RUN"] = TMP
 os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
+from tapbox import token  # noqa: E402
+
+TOKEN = token.ensure()
 
 FIRED = []
 daemon.shutdown = lambda restart=False: (FIRED.append("shutdown"),
@@ -42,11 +46,13 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{srv.server_address[1]}"
 
 
-def post(path, ctype, data=b"", method="POST"):
-    """Returns (status, body_text). Errors are statuses too, not raises."""
+def post(path, ctype, data=b"", method="POST", tok=None):
+    """Returns (status, body_text, headers). Errors are statuses too."""
     req = urllib.request.Request(BASE + path, data=data, method=method)
     if ctype:
         req.add_header("Content-Type", ctype)
+    if tok:
+        req.add_header("X-TapBox-Token", tok)
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, r.read().decode(), dict(r.headers)
@@ -56,26 +62,32 @@ def post(path, ctype, data=b"", method="POST"):
 
 # 1. THE ATTACK: a plain cross-origin <form> POST (what a browser sends
 #    without any preflight) must be refused — and must NOT power off the
-#    box. This exact request used to reach shutdown().
-st, body, _ = post("/system/shutdown", "application/x-www-form-urlencoded",
-                   b"a=1")
-assert st == 415, f"form-encoded POST must be refused, got {st}"
-assert FIRED == [], f"the box must NOT have acted on it: {FIRED}"
-print("1. cross-origin form POST to /system/shutdown: 415, never ran OK")
+#    box. This exact request used to reach shutdown(). There are two
+#    layers now (the token gate answers 401 for privileged paths, this
+#    guard answers 415); either refusal is fine, ACTING is not.
+for ctype, data in (("application/x-www-form-urlencoded", b"a=1"),
+                    ("text/plain", b'{"restart": false}'),  # smuggled JSON
+                    (None, b"")):                            # no type at all
+    st, _, _ = post("/system/shutdown", ctype, data)
+    assert st in (401, 415), f"form POST must be refused, got {st}"
+    assert FIRED == [], f"the box must NOT have acted on it: {FIRED}"
+print("1. cross-origin form POST to /system/shutdown: refused, never ran OK")
 
-# 1b. the text/plain smuggling variant (valid JSON in a form body) too
-st, _, _ = post("/system/shutdown", "text/plain", b'{"restart": false}')
-assert st == 415 and FIRED == [], (st, FIRED)
-print("1b. text/plain JSON smuggling: 415, never ran OK")
-
-# 1c. no Content-Type at all
-st, _, _ = post("/system/shutdown", None, b"")
-assert st == 415 and FIRED == [], (st, FIRED)
-print("1c. missing Content-Type: 415, never ran OK")
+# 1b. the guard is what protects the SAFE endpoints, where the token
+#     gate deliberately lets everyone through — so a drive-by page can't
+#     touch playback either. This is the layer under test here.
+for ctype, data in (("application/x-www-form-urlencoded", b"a=1"),
+                    ("text/plain", b'{"x": 1}'),
+                    (None, b"")):
+    st, _, _ = post("/playpause", ctype, data)
+    assert st == 415, f"a form POST to a SAFE endpoint must 415, got {st}"
+    assert FIRED == [], f"playback must not have run: {FIRED}"
+print("1b. form POST to a SAFE endpoint (/playpause): 415, never ran OK")
 
 # 2. the legitimate call still works (the header every internal caller
 #    already sends: boxapi.py, app.js, play.sh)
-st, _, _ = post("/system/shutdown", "application/json", b"{}")
+st, _, _ = post("/system/shutdown", "application/json", b"{}",
+                tok=TOKEN)
 assert st == 200 and FIRED == ["shutdown"], (st, FIRED)
 print("2. proper application/json POST still works OK")
 
@@ -86,13 +98,15 @@ assert st == 200 and FIRED == ["playpause"], (st, FIRED)
 print("2b. 'application/json; charset=utf-8' accepted OK")
 
 # 3. PUT is gated the same way (PUT /library replaces the whole library)
-st, _, _ = post("/library", "text/plain", b'{"sections": []}', method="PUT")
+st, _, _ = post("/library", "text/plain", b'{"sections": []}',
+                method="PUT", tok=TOKEN)
 assert st == 415, f"PUT must be gated too, got {st}"
 print("3. PUT /library with a non-JSON content type: 415 OK")
 
 # 4. a LARGE rejected body is drained, so the client reads the 415
 #    instead of a connection reset (an unread body makes the close an RST)
-st, _, _ = post("/library/section-logo", "text/plain", b"x" * 40000)
+st, _, _ = post("/library/section-logo", "text/plain", b"x" * 40000,
+                tok=TOKEN)
 assert st == 415, f"large rejected body must still return 415, got {st}"
 print("4. large rejected body: client gets the 415, no RST OK")
 

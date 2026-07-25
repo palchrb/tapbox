@@ -22,6 +22,7 @@ from http.server import ThreadingHTTPServer
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
 os.environ["TAPBOX_STATE"] = os.path.join(TMP, "state")
+os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
 os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
 os.environ.setdefault("TAPBOX_CACHE", os.path.join(TMP, "cache"))
 os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
@@ -110,10 +111,18 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 PORT = srv.server_address[1]
 
 
+def _box_token():
+    """Privileged endpoints need the box token since the API gate landed.
+    ensure() returns the daemon's existing one, or creates it when the
+    daemon runs in-process here and never went through main()."""
+    from tapbox import token
+    return token.ensure()
+
 def post(path, body):
     req = urllib.request.Request(
         f"http://127.0.0.1:{PORT}{path}", data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers={"Content-Type": "application/json",
+                 "X-TapBox-Token": _box_token()}, method="POST")
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.status, json.loads(r.read())
 
