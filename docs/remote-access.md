@@ -81,6 +81,27 @@ Battery rationale: OFF at boot = the `STOP_TAILSCALE`-in-save-mode cost
 never applies unless you asked for it. This is strictly better than
 "tailscaled always up."
 
+### Trigger surfaces
+
+- **PWA settings + on-box settings menu (recommended, primary).** The
+  right home for a rare, deliberate, parent-only action: discoverable,
+  confirmable, and shows the resulting state. The on-box menu already
+  covers the "toggle at the box without my phone" case, so no physical
+  gesture is needed.
+- **PiSugar long-press (considered, advised against).** The PiSugar
+  button exposes exactly **three gestures** (single/double/long) and all
+  are taken by media controls — single=playpause, double=next, long=prev
+  (`power.sh:224-226`). There is no free gesture, so mapping tailscale
+  here **sacrifices "previous"**. Worse fit reasons: this toggle has
+  battery + security + internet-exposure consequences, so a silent,
+  feedback-less gesture a kid can trigger is the wrong home for it (the
+  PiSugar button has no display; the only feedback is the Pirate Audio
+  screen, often asleep). It's also largely redundant with the on-box
+  settings menu. **If** a physical shortcut is still wanted: keep prev on
+  the normal long-press, use a distinct *very-long* press, and make it
+  **wake the screen and show "Tailscale ON/OFF + hostname"** — never
+  silent.
+
 ## IDEA 2 — VPS + WireGuard reverse-proxy front
 
 **Status:** backlog. **Feasibility:** solid, well-trodden pattern.
