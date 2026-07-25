@@ -218,11 +218,14 @@ Owner decisions:
   problem is out of scope by construction.
 - **Fallback is SSH:** `sudo cat /etc/tapbox/api-token`. `install.sh`
   also prints the token and the link at the end of a run.
-- QR encodes the box's **current IP** (`http://<ip>:3679/#t=<TOKEN>`),
-  not `tapbox.local` — Android browsers resolve `.local` unreliably, and
-  with a screen on every box re-scanning after a network change is cheap.
-  Consequence to accept: `localStorage` is origin-scoped, so a new
-  IP/hotspot origin needs a re-scan (an annoyance, not a lockout).
+- QR encodes the box's **stable `<name>.local`**
+  (`http://tapbox.local:3679/#t=<TOKEN>`), not its IP. The browser keeps
+  the token per ORIGIN, so an IP-based link dies the moment DHCP moves
+  the box or it comes up as its own hotspot — you'd re-scan every time.
+  The name resolves in BOTH modes: mDNS on the LAN, and in hotspot the
+  captive resolver answers every name with the box
+  (`address=/#/10.42.0.1`). The IP is printed under the QR for the rare
+  client that can't resolve mDNS: browse there and paste the token.
 - Token in the URL **fragment** (`#t=`), never the path: fragments are
   never sent to the server, so the secret can't land in a log or Referer.
 - Token is **Crockford base32, 16 chars** — one secret that is both

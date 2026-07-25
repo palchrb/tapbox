@@ -52,6 +52,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
 from tapbox import boxapi  # noqa: E402
 from tapbox import paths as _paths  # noqa: E402 — idle activity marker
 from tapbox import radio as _radio  # noqa: E402 — artwork yields to audio
+from tapbox import netmgmt as _netmgmt  # noqa: E402 — the box's .local name
 
 api_get = boxapi.get
 api_post = boxapi.post
@@ -1715,9 +1716,14 @@ class App:
 
         The QR encodes http://<ip>:3679/#t=<TOKEN>. In the FRAGMENT, so
         the secret is never sent to a server (no logs, no Referer), and
-        against the box's IP rather than tapbox.local because Android
-        browsers resolve .local unreliably — and this screen must also
-        work in hotspot mode, where the box is 10.42.0.1.
+        against the box's STABLE <name>.local rather than its IP: the
+        browser stores the token per ORIGIN, so an IP-based link is lost
+        the moment DHCP moves the box or it comes up as its own hotspot,
+        and the parent has to re-scan. The name resolves in both modes
+        (mDNS on the LAN; in hotspot the captive resolver answers every
+        name with the box). The IP is printed underneath for the rare
+        client that can't resolve .local — it can browse there and paste
+        the token shown below.
 
         The same token is printed underneath in Crockford groups: that
         is the fallback when a camera won't focus on a 240px LCD, and
@@ -1737,8 +1743,9 @@ class App:
             d.text((10, 124), "Restart tapboxd to make one.", font=F_SMALL,
                    fill=(90, 90, 90))
             return
-        ip = (self.system.get("wifi") or {}).get("ip") or "tapbox.local"
-        url = f"http://{ip}:3679/#t={value}"
+        host = _netmgmt.mdns_host()
+        ip = (self.system.get("wifi") or {}).get("ip") or ""
+        url = f"http://{host}:3679/#t={value}"
         qr_img = None
         try:
             import qrcode  # lazy: a box without it still shows the text
@@ -1751,7 +1758,7 @@ class App:
             # fixing it) means a longer host — a bumped QR version —
             # shrinks to fit instead of overflowing the screen.
             modules = len(q.get_matrix())
-            box = max(3, (H - 46) // modules)  # 46px reserved for the text
+            box = max(3, (H - 60) // modules)  # 60px reserved for the 3 text lines
             qr_img = q.make_image(fill_color="black",
                                   back_color="white").convert("RGB")
             qr_img = qr_img.resize((box * modules,) * 2, Image.NEAREST)
@@ -1765,7 +1772,10 @@ class App:
             ty = 60
         d.text((W // 2, ty), _tok.grouped(value), font=F_MED,
                fill=(0, 0, 0), anchor="ma")
-        d.text((W // 2, ty + 20), "A: new token   B: back", font=F_SMALL,
+        sub = f"{host}  ·  {ip}" if ip else host
+        d.text((W // 2, ty + 19), sub, font=F_SMALL,
+               fill=(110, 110, 110), anchor="ma")
+        d.text((W // 2, ty + 33), "A: new token   B: back", font=F_SMALL,
                fill=(110, 110, 110), anchor="ma")
 
     def render_storage(self, d):

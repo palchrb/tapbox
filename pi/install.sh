@@ -89,7 +89,11 @@ print_token() {
   echo
   echo "    Box token (links a phone to the PWA):"
   echo "        ${API_TOKEN}"
-  [[ -n $ip ]] && echo "        http://${ip}:3679/#t=${API_TOKEN}"
+  # The .local form first: the browser keeps the token PER ORIGIN, so a
+  # link opened against an IP is lost as soon as DHCP moves the box. The
+  # IP is the fallback for a client that can't resolve mDNS.
+  echo "        http://${BOX_NAME}.local:3679/#t=${API_TOKEN}"
+  [[ -n $ip ]] && echo "        (or http://${ip}:3679/#t=${API_TOKEN})"
   echo "    Also on the box: Settings -> Link phone (scan the QR)."
   echo "    Lost it later:  sudo cat /etc/tapbox/api-token"
 }

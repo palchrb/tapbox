@@ -82,6 +82,57 @@ for i, label in enumerate(rows):
         assert acted and acted[0][0] == "put", f"{label}: {acted}"
 print("1. every settings row acts on its own label (no index drift) OK")
 
+# 1b. THE ORIGIN RULE: the QR must target the box's stable <name>.local,
+#     never its IP. The browser keeps the token per ORIGIN, so an
+#     IP-based link is lost the moment DHCP moves the box or it comes up
+#     as its own hotspot — the parent would have to re-scan every time.
+import types as _t  # noqa: E402
+
+from tapbox import netmgmt  # noqa: E402
+
+AVAHI = os.path.join(TMP, "avahi.conf")
+with open(AVAHI, "w") as f:
+    f.write("[server]\nhost-name=stuebox\n")
+netmgmt.AVAHI_CONF = AVAHI
+assert netmgmt.mdns_host() == "stuebox.local", netmgmt.mdns_host()
+
+captured = {}
+
+
+class _FakeQR:
+    def __init__(self, **k):
+        pass
+
+    def add_data(self, d):
+        captured["url"] = d
+
+    def make(self, **k):
+        pass
+
+    def get_matrix(self):
+        return [[0] * 35] * 35
+
+    def make_image(self, **k):
+        from PIL import Image as _I
+        return _I.new("RGB", (35, 35), (255, 255, 255))
+
+
+fake_qr = _t.SimpleNamespace(QRCode=_FakeQR,
+                             constants=_t.SimpleNamespace(ERROR_CORRECT_M=0))
+sys.modules["qrcode"] = fake_qr
+from PIL import Image as _Img, ImageDraw as _Draw  # noqa: E402
+
+app.system = {"wifi": {"ip": "10.0.0.21"}}
+_i = _Img.new("RGB", (ui.W, ui.H))
+app.render_link(_Draw.Draw(_i), _i)
+assert captured["url"].startswith("http://stuebox.local:3679/#t="), \
+    f"the QR must use the stable .local origin: {captured['url']}"
+assert "10.0.0.21" not in captured["url"], \
+    f"the QR must NOT pin the IP (origin would change on DHCP): {captured['url']}"
+assert captured["url"].endswith(token.read()), captured["url"]
+print("1b. QR targets <name>.local (stable origin), token in the fragment OK")
+del sys.modules["qrcode"]
+
 # 2. the link view renders WITH qrcode present
 from PIL import Image, ImageDraw  # noqa: E402
 

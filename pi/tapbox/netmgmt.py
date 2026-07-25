@@ -99,6 +99,38 @@ def wifi_reconnect(window_s=30):
         WIFI_LOCK.release()
 
 
+AVAHI_CONF = os.environ.get("TAPBOX_AVAHI_CONF",
+                            "/etc/avahi/avahi-daemon.conf")
+
+
+def mdns_host():
+    """The box's stable '<name>.local' address.
+
+    install.sh writes the chosen box name as avahi's host-name, so this
+    survives every IP change — which is exactly why the PWA link uses it
+    rather than an address: the browser stores the API token PER ORIGIN,
+    so a token handed out against an IP is lost the moment DHCP moves the
+    box or it comes up as its own hotspot. One stable origin means you
+    link a phone once, ever.
+
+    It resolves in BOTH modes: mDNS on the home LAN, and in hotspot mode
+    the captive-portal resolver answers every name with the box's own
+    address (dnsmasq-shared 'address=/#/10.42.0.1')."""
+    name = ""
+    try:
+        with open(AVAHI_CONF) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("host-name="):
+                    name = line.split("=", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    if not name:
+        name = (socket.gethostname() or "tapbox").split(".")[0]
+    return f"{name}.local"
+
+
 # --- wifi management (nmcli — RPi OS's NetworkManager) -----------------------------
 
 WIFI_LOCK = threading.Lock()  # one scan/connect at a time
