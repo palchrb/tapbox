@@ -91,6 +91,11 @@ localhost or token-gated like the rest, not left open.)
 
 ## API trust models for the PWA
 
+> HTTPS and off-LAN access options (Caddy + Cloudflare, Tailscale,
+> VPS + WireGuard) and the battery tradeoffs are worked out separately in
+> [`docs/remote-access.md`](docs/remote-access.md). The token model below
+> is what protects the API *regardless* of transport.
+
 Design anchor: **the box has a screen.** That makes "prove you physically
 hold the box" cheap — a PIN or QR shown on the display is a natural,
 strong-enough capability handoff for a home device. Everything below
