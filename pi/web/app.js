@@ -9,7 +9,20 @@ const $ = (sel) => document.querySelector(sel);
    screen — see SECURITY.md. Stored per ORIGIN, so a box reached by a new
    IP (or via the setup hotspot) needs one more scan. */
 const TOKEN_KEY = "tapbox.token";
-let TOKEN = localStorage.getItem(TOKEN_KEY) || "";
+
+/* localStorage can be absent or throw (Safari private browsing, storage
+   disabled). Degrade to a session-only token rather than breaking the
+   whole app on load — playback must never depend on storage. */
+function storeGet(k) {
+  try { return localStorage.getItem(k) || ""; } catch (e) { return ""; }
+}
+function storeSet(k, v) {
+  try {
+    if (v) localStorage.setItem(k, v); else localStorage.removeItem(k);
+  } catch (e) { /* session-only for this tab */ }
+}
+
+let TOKEN = storeGet(TOKEN_KEY);
 
 function normToken(raw) {
   return String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "")
@@ -18,8 +31,7 @@ function normToken(raw) {
 
 function setToken(raw) {
   TOKEN = normToken(raw);
-  if (TOKEN) localStorage.setItem(TOKEN_KEY, TOKEN);
-  else localStorage.removeItem(TOKEN_KEY);
+  storeSet(TOKEN_KEY, TOKEN);
   renderLinkState();
 }
 
@@ -1144,10 +1156,14 @@ document.addEventListener("visibilitychange", () => {
    can't land in a request line, a log or a Referer. Strip it from the
    URL bar afterwards so it isn't left in history or a screenshot. */
 (function claimTokenFromUrl() {
-  const m = (location.hash || "").match(/[#&]t=([0-9A-Za-z-]+)/);
+  let m = null;
+  try { m = (location.hash || "").match(/[#&]t=([0-9A-Za-z-]+)/); }
+  catch (e) { /* no location (non-browser host) */ }
   if (!m) { renderLinkState(); return; }
   setToken(m[1]);
-  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    history.replaceState(null, "", location.pathname + location.search);
+  } catch (e) { /* best effort — the token is already stored */ }
   toast("This phone is now linked to the box");
 })();
 
