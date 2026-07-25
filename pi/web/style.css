@@ -183,6 +183,19 @@ dd { margin: 0; text-align: right; }
 .dim { color: var(--dim); }
 .small { font-size: 0.85rem; }
 
+/* "this phone isn't linked" — persistent by design: the fix is to walk
+   to the box, which is not something to blink for two seconds. */
+.banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 0.6rem 0.9rem;
+  background: #7a3d00;
+  color: #fff;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
 #toast {
   position: fixed;
   bottom: 1rem;

@@ -239,6 +239,22 @@
     same as toggling Wi-Fi on from the box’s screen.</p>
   </div>
   <div class="card">
+    <h2>This phone</h2>
+    <p id="link-state" class="dim small"></p>
+    <p class="dim small">Settings, Wi-Fi, Bluetooth and shutdown need this
+      phone to be linked to the box. On the box: <b>Settings → Link
+      phone</b>, then scan the QR code. Playback works either way.</p>
+    <label>Box token
+      <input id="set-token" type="text" inputmode="latin"
+             autocapitalize="characters" autocomplete="off"
+             placeholder="XXXX-XXXX-XXXX-XXXX">
+    </label>
+    <div class="controls">
+      <button id="btn-token-save">Link this phone</button>
+      <button id="btn-token-forget">Forget</button>
+    </div>
+  </div>
+  <div class="card">
     <h2>System</h2>
     <dl id="sysinfo"></dl>
     <div class="controls">

@@ -176,7 +176,8 @@
       "Bash(awk '/write_if_changed \\\\/etc\\\\/systemd\\\\/system\\\\/tapbox-ui.service/,/^EOF/' /workspace/tapbox/pi/install.sh)",
       "Bash(awk '/tapbox-buttons.service/,/^EOF/' /workspace/tapbox/pi/install.sh)",
       "Bash(echo \"rc=$?\")",
-      "Bash(awk 'NR>1866 && /^[a-zA-Z_]/ {print NR\": \"$0; exit}' pi/daemon.py)"
+      "Bash(awk 'NR>1866 && /^[a-zA-Z_]/ {print NR\": \"$0; exit}' pi/daemon.py)",
+      "Bash(grep -n \"function \\\\|=> {$\" pi/web/app.js)"
     ]
   }
 }

@@ -3,17 +3,80 @@
 
 const $ = (sel) => document.querySelector(sel);
 
+/* The box token. Privileged endpoints (settings, Wi-Fi, Bluetooth,
+   shutdown) need it; playback and reads never do, so an unlinked phone
+   still controls the music. Provisioned by scanning the QR on the box
+   screen — see SECURITY.md. Stored per ORIGIN, so a box reached by a new
+   IP (or via the setup hotspot) needs one more scan. */
+const TOKEN_KEY = "tapbox.token";
+let TOKEN = localStorage.getItem(TOKEN_KEY) || "";
+
+function normToken(raw) {
+  return String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "")
+    .replace(/[IL]/g, "1").replace(/O/g, "0").replace(/U/g, "V");
+}
+
+function setToken(raw) {
+  TOKEN = normToken(raw);
+  if (TOKEN) localStorage.setItem(TOKEN_KEY, TOKEN);
+  else localStorage.removeItem(TOKEN_KEY);
+  renderLinkState();
+}
+
+function renderLinkState() {
+  const el = $("#link-state");
+  if (el) {
+    el.textContent = TOKEN ? "✓ Linked to the box"
+                           : "Not linked — playback only";
+  }
+  const input = $("#set-token");
+  if (input && !input.matches(":focus")) input.value = TOKEN;
+}
+
+/* A persistent banner, not a toast: "you must go to the box" is not a
+   message to blink for two seconds. */
+function linkBanner(show) {
+  let el = $("#link-banner");
+  if (!show) { if (el) el.remove(); return; }
+  if (el) return;
+  el = document.createElement("div");
+  el.id = "link-banner";
+  el.className = "banner";
+  el.textContent = "This phone isn't linked to the box — on the box: " +
+    "Settings → Link phone";
+  document.body.prepend(el);
+}
+
 async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  // Sent on every request: SAFE endpoints ignore it, and one branch
+  // beats keeping a copy of the box's endpoint classification here
+  // (which would drift the first time the box adds a route).
+  if (TOKEN) headers["X-TapBox-Token"] = TOKEN;
   const r = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...opts,
+    headers: { ...headers, ...(opts.headers || {}) },
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   });
   if (!r.ok) {
-    let msg = r.statusText;
-    try { msg = (await r.json()).error || msg; } catch (e) { /* not json */ }
+    let msg = r.statusText, code = "";
+    try {
+      const j = await r.json();
+      msg = j.error || msg;
+      code = j.code || "";
+    } catch (e) { /* not json */ }
+    if (r.status === 401) {
+      // A rotated/stale token is worse than none: drop it so the UI says
+      // "link" rather than silently failing every privileged action.
+      if (code === "token_invalid") setToken("");
+      linkBanner(true);
+      const err = new Error("This phone isn't linked to the box");
+      err.code = code || "token_required";
+      throw err;
+    }
     throw new Error(msg);
   }
+  linkBanner(false);
   return r.json();
 }
 
@@ -1074,6 +1137,31 @@ document.addEventListener("visibilitychange", () => {
   // in saveLibrary — but the view would still LOOK stale.)
   const active = document.querySelector("nav button.active");
   if (active && active.dataset.tab === "library") loadLibrary();
+});
+
+/* QR landing: the box screen shows http://<box>/#t=<TOKEN>. The token
+   rides in the FRAGMENT, which browsers never send to the server, so it
+   can't land in a request line, a log or a Referer. Strip it from the
+   URL bar afterwards so it isn't left in history or a screenshot. */
+(function claimTokenFromUrl() {
+  const m = (location.hash || "").match(/[#&]t=([0-9A-Za-z-]+)/);
+  if (!m) { renderLinkState(); return; }
+  setToken(m[1]);
+  history.replaceState(null, "", location.pathname + location.search);
+  toast("This phone is now linked to the box");
+})();
+
+$("#btn-token-save")?.addEventListener("click", () => {
+  const v = normToken($("#set-token").value);
+  if (!v) { toast("Enter the token shown on the box screen"); return; }
+  setToken(v);
+  linkBanner(false);
+  toast("This phone is now linked to the box");
+});
+
+$("#btn-token-forget")?.addEventListener("click", () => {
+  setToken("");
+  toast("Token removed from this phone");
 });
 
 startPolling();
