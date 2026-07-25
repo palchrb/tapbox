@@ -69,6 +69,19 @@ we want behind a trust gate:
 (`/bt/lost` is an internal btwatchd → daemon call; it should be bound to
 localhost or token-gated like the rest, not left open.)
 
+## Done
+
+- **2026-07-25 — `Content-Type: application/json` required on POST/PUT.**
+  Closed a *live* CSRF hole: `do_POST` swallowed a JSON `ValueError` and
+  continued with `body = {}`, so a plain auto-submitting `<form>` on any
+  page a LAN user opened could fire every bodyless endpoint
+  (`/system/shutdown`, `/wifi/reconnect`, `/bt/scan`, `/spotify/logout`,
+  `/stop`). Cross-site simple requests can't set `application/json`, and
+  anything else needs a preflight this server never grants.
+  `tests/api_csrf_content_type.py` also pins the two assumptions it rests
+  on: **no `Access-Control-*` headers, no `do_OPTIONS`.** Adding either
+  silently re-opens the hole.
+
 ## TODOs — ranked
 
 1. **Split safe vs privileged and gate the privileged set** (below). This
@@ -182,6 +195,64 @@ HTTPS, which on a `.local` box means a self-signed cert and browser
 trust friction — deferred, and only needed if the box must be trusted on
 networks you don't control. For the home threat model, token-over-HTTP is
 the right stopping point.
+
+### Decided implementation (architect + QA reviewed, 2026-07-25)
+
+**Model A + B**, with these owner decisions and review findings folded
+in. Not built yet — this is the spec.
+
+Owner decisions:
+- **QR on the box screen is the primary provisioning route.** Every box
+  in the fleet now has a screen, so the "headless box has no way in"
+  problem is out of scope by construction.
+- **Fallback is SSH:** `sudo cat /etc/tapbox/api-token`. `install.sh`
+  also prints the token and the link at the end of a run.
+- QR encodes the box's **current IP** (`http://<ip>:3679/#t=<TOKEN>`),
+  not `tapbox.local` — Android browsers resolve `.local` unreliably, and
+  with a screen on every box re-scanning after a network change is cheap.
+  Consequence to accept: `localStorage` is origin-scoped, so a new
+  IP/hotspot origin needs a re-scan (an annoyance, not a lockout).
+- Token in the URL **fragment** (`#t=`), never the path: fragments are
+  never sent to the server, so the secret can't land in a log or Referer.
+- Token is **Crockford base32, 16 chars** — one secret that is both
+  QR-encodable and typeable (`XXXX-XXXX-XXXX-XXXX`). No separate PIN
+  mechanism (a PIN would need a new *unauthenticated* claim endpoint).
+
+Blocking items from the QA review, to implement with the gate:
+1. ~~Require `Content-Type: application/json`~~ — **done** (see Done).
+2. `install.sh` prints the token + link; document the SSH fallback.
+3. **Fail-closed token rules:** unreadable/missing token file ⇒ deny;
+   **empty or short token ⇒ deny** (`hmac.compare_digest("", "")` is
+   `True`, so a truncated file would authorize everyone); `ensure()`
+   creates only when absent and must never rewrite on a transient error
+   (that would unlink every phone).
+4. **Label-based settings dispatch in `pi/ui.py` is mandatory**, not
+   optional — the menu dispatch is index-keyed and inserting a "Link
+   phone" row would shift Wi-Fi/BT/Storage/Shut down (this bug class has
+   already bitten in the field).
+5. Add `qrcode` to install.sh's venv **import probe**, not just the pip
+   line — otherwise existing boxes never install it and silently degrade
+   to text-only.
+6. Gate design: **default-deny.** An explicit SAFE allowlist
+   (`GET`/`HEAD` blanket-safe + the playback POSTs); every unknown
+   method or path is privileged. Auto-wrap all `do_*` at import so a
+   future `do_DELETE` is closed without anyone remembering. The blanket
+   `GET: True` rule is structural — static files and `<img>` artwork
+   loads can't carry a header — so **no privileged endpoint may ever be
+   a GET.**
+7. Internal callers use the **token file via `boxapi.py`** (one line,
+   covers `ui.py` and `btwatchd.py`), **not** a localhost bypass: a
+   future Caddy reverse proxy would make every request look local and
+   silently open everything. `play.sh` needs the header too once `/play`
+   with a raw `target` becomes privileged.
+8. Corrected from the original plan: **no install.sh restart reorder is
+   needed** — the order is already btwatchd → daemon → UI.
+
+Related follow-up worth the same pass: **`/play` with a raw `target`
+should become privileged** (`/play` with `id` stays open). It makes the
+box fetch an arbitrary URL via mpv/yt-dlp, which is a bigger blast radius
+than "pausing the music". The Content-Type fix already removes the
+drive-by vector; this closes the LAN-local one.
 
 ### Recommended path
 
