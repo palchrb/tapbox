@@ -143,6 +143,34 @@ Binding privileged endpoints to a fixed IP/subnet, or an admin VLAN.
 Fragile against DHCP and doesn't fit "the parent's phone, anywhere on
 the LAN." Fine as an *extra* layer, wrong as the main gate.
 
+### Model E — WebAuthn / passkeys (the strong-auth upgrade, for the internet-facing case)
+
+Possible, and elegant, but **downstream of HTTPS** — `navigator.
+credentials` only runs in a secure context, and the credential binds to an
+RP ID = the domain (so a real domain beats `.local`; passkeys sync poorly
+for a `.local` RP). Assessment:
+
+- **For the LAN threat it's over-engineering.** Model B (token/PIN)
+  already closes "anyone on the Wi-Fi can control the box" with a fraction
+  of the code and *no HTTPS prerequisite*. WebAuthn defends against
+  phishing / credential theft at scale — threats a single home appliance
+  on the LAN doesn't really face.
+- **It earns its complexity when the box goes internet-facing** (remote
+  access IDEAs 2/3 in `docs/remote-access.md`): there a leaked bearer
+  token is game-over, whereas a passkey **cannot be exfiltrated** (private
+  key stays in the device's secure enclave) and is phishing-resistant.
+  HTTPS is already mandatory in that scenario, so the prerequisite is met.
+- **Daily UX is low-friction** (Face ID tap); the cost is server-side
+  implementation (registration/assertion ceremonies, a credential store,
+  a session layer) and enrollment/recovery design. The **box screen is
+  the enrollment/recovery anchor** ("approve this passkey on the box"),
+  same physical-possession trick as the token QR. Note that after a
+  successful assertion you still issue a session token — WebAuthn just
+  replaces *how the session is obtained* with something stronger.
+
+Layering: ship **Model B now** (LAN), keep **Model E as the phase-2
+upgrade** if/when the box becomes internet-facing.
+
 ### Transport caveat (be honest about it)
 
 All of the above send the token over **plain HTTP**. On a home WPA2
