@@ -71,6 +71,19 @@ localhost or token-gated like the rest, not left open.)
 
 ## Done
 
+- **2026-07-25 — the API gate is LIVE (Model A+B, 5 commits).** Privileged
+  endpoints require the box token; playback and reads stay open so the
+  phone shortcut ("Hey Siri, pause TapBox") needs no setup. Provisioned
+  by scanning a QR on the box screen (Settings → Link phone); the token
+  rides in the URL fragment so it never reaches a server log. Recovery:
+  the same screen re-displays and rotates it, `install.sh` prints it, and
+  `sudo cat /etc/tapbox/api-token` is the SSH fallback. `/play` is split
+  by body — a library `id` stays open, a raw `target` needs the token.
+  Internal callers (ui, btwatchd) authenticate via the token file in
+  `boxapi.py`, deliberately not a localhost bypass. Covered by
+  `tests/api_token.py`, `api_auth_gate.py`, `pwa_token.py`,
+  `ui_link_phone.py`, `install_token.py`.
+
 - **2026-07-25 — `Content-Type: application/json` required on POST/PUT.**
   Closed a *live* CSRF hole: `do_POST` swallowed a JSON `ValueError` and
   continued with `body = {}`, so a plain auto-submitting `<form>` on any
@@ -198,8 +211,8 @@ the right stopping point.
 
 ### Decided implementation (architect + QA reviewed, 2026-07-25)
 
-**Model A + B**, with these owner decisions and review findings folded
-in. Not built yet — this is the spec.
+**Model A + B — SHIPPED 2026-07-25.** Kept here as the design record;
+every blocking item below was implemented and is covered by a test.
 
 Owner decisions:
 - **QR on the box screen is the primary provisioning route.** Every box
@@ -218,22 +231,20 @@ Owner decisions:
   QR-encodable and typeable (`XXXX-XXXX-XXXX-XXXX`). No separate PIN
   mechanism (a PIN would need a new *unauthenticated* claim endpoint).
 
-Blocking items from the QA review, to implement with the gate:
-1. ~~Require `Content-Type: application/json`~~ — **done** (see Done).
-2. `install.sh` prints the token + link; document the SSH fallback.
-3. **Fail-closed token rules:** unreadable/missing token file ⇒ deny;
+Blocking items from the QA review — all **done**:
+1. ~~Require `Content-Type: application/json`~~ — done (see Done).
+2. ~~`install.sh` prints the token + link; document the SSH fallback~~ —
+   done, on every exit path.
+3. ~~**Fail-closed token rules:** unreadable/missing token file ⇒ deny;
    **empty or short token ⇒ deny** (`hmac.compare_digest("", "")` is
    `True`, so a truncated file would authorize everyone); `ensure()`
    creates only when absent and must never rewrite on a transient error
-   (that would unlink every phone).
-4. **Label-based settings dispatch in `pi/ui.py` is mandatory**, not
-   optional — the menu dispatch is index-keyed and inserting a "Link
-   phone" row would shift Wi-Fi/BT/Storage/Shut down (this bug class has
-   already bitten in the field).
-5. Add `qrcode` to install.sh's venv **import probe**, not just the pip
-   line — otherwise existing boxes never install it and silently degrade
-   to text-only.
-6. Gate design: **default-deny.** An explicit SAFE allowlist
+   (that would unlink every phone)~~ — done, `tests/api_token.py`.
+4. ~~**Label-based settings dispatch in `pi/ui.py`**~~ — done; every row
+   is walked in `tests/ui_link_phone.py`, and `ui_hotspot.py`'s index
+   pins were converted too.
+5. ~~Add `qrcode` to install.sh's venv **import probe**~~ — done.
+6. ~~Gate design: **default-deny.** An explicit SAFE allowlist
    (`GET`/`HEAD` blanket-safe + the playback POSTs); every unknown
    method or path is privileged. Auto-wrap all `do_*` at import so a
    future `do_DELETE` is closed without anyone remembering. The blanket
