@@ -177,7 +177,9 @@
       "Bash(awk '/tapbox-buttons.service/,/^EOF/' /workspace/tapbox/pi/install.sh)",
       "Bash(echo \"rc=$?\")",
       "Bash(awk 'NR>1866 && /^[a-zA-Z_]/ {print NR\": \"$0; exit}' pi/daemon.py)",
-      "Bash(grep -n \"function \\\\|=> {$\" pi/web/app.js)"
+      "Bash(grep -n \"function \\\\|=> {$\" pi/web/app.js)",
+      "Bash(/tmp/qrv/bin/pip install *)",
+      "Bash(/tmp/qrv/bin/python -c ' *)"
     ]
   }
 }

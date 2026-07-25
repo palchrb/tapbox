@@ -58,12 +58,16 @@ app.confirm = lambda: True
 # 1. the settings menu has the row, right after Wi-Fi
 items = app.current_items()
 labels = [i[0] if isinstance(i, tuple) else i for i in items]
-assert labels[6] == "Setup hotspot", labels
-assert labels[9] == "Shut down" and labels[10] == "Restart", labels
+# Positions are NOT pinned: dispatch is label-based precisely so rows
+# can be inserted (the index form once made "Restart" power the box
+# off). Pin membership and the ordering that matters to the user.
+assert "Setup hotspot" in labels and "Wi-Fi" in labels, labels
+assert labels.index("Setup hotspot") == labels.index("Wi-Fi") + 1, labels
+assert {"Shut down", "Restart"} <= set(labels), labels
 print("1. settings menu: Setup hotspot row after Wi-Fi OK")
 
 # 2. selecting it starts the AP and shows what to join
-app.sel = 6
+app.sel = labels.index("Setup hotspot")
 app.select_setting()
 assert POSTS == [("/wifi/hotspot", {"enabled": True})], POSTS
 assert any("TapBox-zero2" in m and "tapbox123" in m for m in MSGS), MSGS
@@ -78,28 +82,29 @@ app.select_setting()
 assert POSTS == [("/wifi/hotspot", {"enabled": False})], POSTS
 print("3. select while active -> stops the hotspot OK")
 
-# 4. the shifted rows still map right: Bluetooth=7, Storage=8
+# 4. the other rows still map right, wherever they sit
 POSTS.clear()
-app.sel = 7
+app.sel = labels.index("Bluetooth")
 app.select_setting()
 assert GETS[-1] == "/bt" and app.view == "bt", (GETS, app.view)
 app.view, app.stack = "settings", []
-app.sel = 8
+app.sel = labels.index("Storage")
 app.select_setting()
 assert app.view == "storage", app.view
 app.view, app.stack = "settings", []
-print("4. Bluetooth and Storage rows still work at 7/8 OK")
+print("4. Bluetooth and Storage rows still work OK")
 
-# 5. Shut down (9) powers off, Restart (10) restarts — NOT inverted
-# (the exact field-reported bug the old comment warns about)
+# 5. Shut down powers off, Restart restarts — NOT inverted. This is the
+# exact field-reported bug that index-based dispatch caused, so it stays
+# pinned even though the dispatch is label-based now.
 POSTS.clear()
-app.sel = 9
+app.sel = labels.index("Shut down")
 app.select_setting()
 assert POSTS == [("/system/shutdown", {"restart": False})], POSTS
 POSTS.clear()
-app.sel = 10
+app.sel = labels.index("Restart")
 app.select_setting()
 assert POSTS == [("/system/shutdown", {"restart": True})], POSTS
-print("5. Shut down/Restart at 9/10 map correctly (not inverted) OK")
+print("5. Shut down/Restart map correctly (not inverted) OK")
 
 print("ui_hotspot: all OK")

@@ -1131,6 +1131,9 @@ class App:
             self.select()  # A acts everywhere: select here, play/pause in now
         elif ev == "b":
             self.back()    # B backs out everywhere — matching hold-B in now
+        if self.view == "link":
+            # keep the screen lit while someone is aiming a camera at it
+            _paths.touch_activity()
 
     def handle_now(self, ev):
         # A = play/pause: the same physical button that selects in the
@@ -1432,6 +1435,7 @@ class App:
                     ("Setup hotspot", "on" if w.get("hotspot") else ""),
                     ("Bluetooth", ""),
                     ("Storage", ""),
+                    ("Link phone", ""),
                     ("Shut down", ""),
                     ("Restart", "")]
         if self.view == "bt":
@@ -1446,6 +1450,8 @@ class App:
                     for d in self.bt_found] or ["(nothing found)"]
         if self.view == "storage":
             return []
+        if self.view == "link":
+            return []
         return []
 
     @staticmethod
@@ -1458,6 +1464,18 @@ class App:
 
     def select(self):
         try:
+            if self.view == "link":
+                # A = new token. Deliberately confirmed: it unlinks every
+                # phone in the house, and the button is one press away
+                # from a kid's hands.
+                self.draw_message("New token? Every linked phone must be\n"
+                                  "linked again.  (A confirms, B cancels)")
+                if self.confirm():
+                    from tapbox import token as _tok
+                    _tok.rotate()
+                    log("api token rotated from the box screen")
+                self.dirty = True
+                return
             if self.view == "home":
                 secs = (self.library or {}).get("sections", [])
                 if not secs:
@@ -1505,25 +1523,32 @@ class App:
             time.sleep(1)
 
     def select_setting(self):
-        i = self.sel
-        cycles = {0: ("screen_timeout_s", [15, 30, 60, 0]),
-                  1: ("screen_brightness", [25, 50, 75, 100]),
-                  2: ("volume_cap", [60, 70, 80, 90, 100]),
-                  3: ("idle_shutdown_min", [15, 30, 60, 0]),
-                  4: ("simple_nav", [0, 1, 2])}  # browse: menus/flat/cats
-        if i in cycles:
-            key, opts = cycles[i]
+        # Dispatch on the row's LABEL, never its index. The index form
+        # broke every time a row was inserted — one inverted flag once
+        # made "Restart" power the box off instead (field-reported) — and
+        # this menu grows. The labels are the same literals as
+        # current_items() above; a typo shows up as a dead row, not as
+        # the wrong action firing.
+        rows = self.current_items()
+        label = rows[self.sel][0] if self.sel < len(rows) else ""
+        cycles = {"Screen off after": ("screen_timeout_s", [15, 30, 60, 0]),
+                  "Brightness": ("screen_brightness", [25, 50, 75, 100]),
+                  "Volume cap": ("volume_cap", [60, 70, 80, 90, 100]),
+                  "Auto-off (idle)": ("idle_shutdown_min", [15, 30, 60, 0]),
+                  "Browse": ("simple_nav", [0, 1, 2])}  # menus/flat/cats
+        if label in cycles:
+            key, opts = cycles[label]
             cur = self.settings.get(key)
             nxt = opts[(opts.index(cur) + 1) % len(opts)] if cur in opts else opts[0]
             self.settings = api_put("/settings", {key: nxt})
             if key == "screen_brightness":
                 self.display.set_brightness(nxt)  # live preview
-        elif i == 5:
+        elif label == "Wi-Fi":
             enabled = (self.system.get("wifi") or {}).get("enabled")
             self.draw_message("Please wait ...")
             r = api_post("/system/wifi", {"enabled": not enabled})
             self.system.setdefault("wifi", {}).update(r)
-        elif i == 6:
+        elif label == "Setup hotspot":
             # Setup hotspot from the BOX: the only way in at a new place
             # when saved networks aren't around — the PWA needs a shared
             # network, which is exactly what's missing (chicken-and-egg).
@@ -1547,20 +1572,21 @@ class App:
                     self.draw_message("Hotspot failed — try again")
                     time.sleep(1.5)
             self.last_system = 0.0  # refresh the hotspot state row now
-        elif i == 7:
+        elif label == "Bluetooth":
             self.draw_message("Loading speakers ...")
             self.bt = api_get("/bt")
             self.push("bt")
-        elif i == 8:
+        elif label == "Storage":
             self.push("storage")
-        elif i in (9, 10):
-            # row 9 = Shut down, row 10 = Restart (an inverted flag here
-            # made Restart power the box off — field-reported)
-            action = "Restarting" if i == 10 else "Shutting down"
+        elif label == "Link phone":
+            self.push("link")
+        elif label in ("Shut down", "Restart"):
+            restart = label == "Restart"
+            action = "Restarting" if restart else "Shutting down"
             self.draw_message(f"{action} ... (A confirms, B cancels)")
             if self.confirm():
                 self.draw_message(f"{action} ...")
-                api_post("/system/shutdown", {"restart": i == 10})
+                api_post("/system/shutdown", {"restart": restart})
 
     def select_bt(self):
         if self.sel == 0:  # Pair nearest (the one-button flow)
@@ -1670,6 +1696,8 @@ class App:
                               hint="A: pair and connect   B: back")
         elif self.view == "storage":
             self.render_storage(d)
+        elif self.view == "link":
+            self.render_link(d, img)
         elif self.view == "carousel":
             rolls = self.render_carousel(d, img)
         elif self.view == "cats":
@@ -1678,6 +1706,67 @@ class App:
             rolls = self.render_now(d, img)
         self.marquee_active = bool(rolls)
         self.display.show(img)
+
+    def render_link(self, d, img):
+        """'Link phone': the box's screen IS the credential handoff.
+        Showing the token here proves physical possession — the same
+        anchor the hold-X output parking uses — so no password, no
+        account, nothing to remember or reuse from another service.
+
+        The QR encodes http://<ip>:3679/#t=<TOKEN>. In the FRAGMENT, so
+        the secret is never sent to a server (no logs, no Referer), and
+        against the box's IP rather than tapbox.local because Android
+        browsers resolve .local unreliably — and this screen must also
+        work in hotspot mode, where the box is 10.42.0.1.
+
+        The same token is printed underneath in Crockford groups: that
+        is the fallback when a camera won't focus on a 240px LCD, and
+        the recovery path when a phone was never linked. If the qrcode
+        lib is missing (an install where pip failed), the text alone
+        still provisions a phone — so the import is lazy and optional."""
+        from tapbox import token as _tok
+        d.rectangle([0, 0, W, H], fill=(255, 255, 255))  # scan contrast
+        value = ""
+        try:
+            value = _tok.read()
+        except OSError:
+            pass
+        if not value:
+            d.text((10, 100), "No token on the box.", font=F_MED,
+                   fill=(0, 0, 0))
+            d.text((10, 124), "Restart tapboxd to make one.", font=F_SMALL,
+                   fill=(90, 90, 90))
+            return
+        ip = (self.system.get("wifi") or {}).get("ip") or "tapbox.local"
+        url = f"http://{ip}:3679/#t={value}"
+        qr_img = None
+        try:
+            import qrcode  # lazy: a box without it still shows the text
+            q = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,
+                              border=3)
+            q.add_data(url)
+            q.make(fit=True)
+            # get_matrix() already includes the quiet border, so size
+            # against it directly. Deriving the module size (rather than
+            # fixing it) means a longer host — a bumped QR version —
+            # shrinks to fit instead of overflowing the screen.
+            modules = len(q.get_matrix())
+            box = max(3, (H - 46) // modules)  # 46px reserved for the text
+            qr_img = q.make_image(fill_color="black",
+                                  back_color="white").convert("RGB")
+            qr_img = qr_img.resize((box * modules,) * 2, Image.NEAREST)
+        except Exception as e:  # noqa: BLE001 — never break the screen
+            log(f"link view: no QR ({e.__class__.__name__}) — showing text")
+        if qr_img is not None:
+            img.paste(qr_img, ((W - qr_img.width) // 2, 2))
+            ty = min(qr_img.height + 6, H - 40)
+        else:
+            d.text((10, 8), "Link phone", font=F_MED, fill=(0, 0, 0))
+            ty = 60
+        d.text((W // 2, ty), _tok.grouped(value), font=F_MED,
+               fill=(0, 0, 0), anchor="ma")
+        d.text((W // 2, ty + 20), "A: new token   B: back", font=F_SMALL,
+               fill=(110, 110, 110), anchor="ma")
 
     def render_storage(self, d):
         d.text((10, 4), "Storage", font=F_MED, fill=DIM)
