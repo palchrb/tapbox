@@ -29,7 +29,7 @@ open control API without breaking the physical-first UX.
 
 | Listener | Bind | Auth | Risk |
 |---|---|---|---|
-| `tapboxd` API + PWA | `0.0.0.0:3679` (`daemon.py:164`) | **none** (`daemon.py:162-163`) | **the main surface** — see endpoint table |
+| `tapboxd` API + PWA | `0.0.0.0:3679` | **token on privileged; open on playback/reads** | the main surface — gated since 2026-07-25 |
 | `tapboxd` captive portal | `0.0.0.0:80` (`daemon.py:2903`) | none | redirect only; low |
 | `go-librespot` API | `localhost:3678` (`install.sh:197`) | none | not LAN-exposed ✓ |
 | `pisugar-server` | `127.0.0.1` | n/a | not LAN-exposed ✓ |
@@ -37,16 +37,16 @@ open control API without breaking the physical-first UX.
 | avahi mDNS | `:5353` | n/a | discovery only |
 | hotspot (AP mode) | `10.42.0.1` | WPA2 PSK | default PSK is shipped — see TODO |
 
-Notes that make the API risk concrete:
-- **No CORS headers** are sent (`_send_unsafe`, `daemon.py`), so browsers
-  block cross-origin *reads* — but a malicious page the parent visits
-  can still fire cross-origin **state-changing POSTs** (CSRF) at
-  `tapbox.local:3679`. A token requirement (below) closes this too.
-- The API can **fully control and brick the box** from the open surface:
-  `/system/shutdown`, `/system/wifi`, `/wifi/connect` (move the box to
-  an attacker's network), `/spotify/logout`, `PUT /library` (wipe the
-  whole library), `/library/section-logo` (3 MB base64 upload), the
-  `/bt/*` family, `/output`, `/stop`.
+Notes:
+- **No CORS headers** are sent and there is no `do_OPTIONS`. That is what
+  makes the `X-TapBox-Token` header CSRF-proof (a cross-origin page can't
+  attach it without a preflight the box never grants) — and it is why
+  adding either would silently undo the protection.
+- Device control, config and destructive endpoints (`/system/shutdown`,
+  `/system/wifi`, `/wifi/*`, `/bt/*`, `PUT /library`,
+  `/library/section-logo`, `/output`, `/spotify/logout`) now require the
+  token. Playback and reads stay open by design — see the classification
+  below.
 
 ## Endpoint classification (the basis for the split below)
 
@@ -66,8 +66,8 @@ we want behind a trust gate:
 - `POST /bt/scan|pair|connect|forget|rename|visible`
 - `POST /output`
 
-(`/bt/lost` is an internal btwatchd → daemon call; it should be bound to
-localhost or token-gated like the rest, not left open.)
+(`/bt/lost` is an internal btwatchd → daemon call and is token-gated
+like the rest; btwatchd authenticates through `boxapi`.)
 
 ## Done
 
@@ -97,19 +97,17 @@ localhost or token-gated like the rest, not left open.)
 
 ## TODOs — ranked
 
-1. **Split safe vs privileged and gate the privileged set** (below). This
-   is the highest-value, lowest-effort change: it removes "fully control
-   / brick the device" from the open surface while keeping playback (and
-   the pause shortcut) zero-auth. **Directly addresses the owner's
-   concern.**
+1. ~~**Split safe vs privileged and gate the privileged set**~~ —
+   **DONE 2026-07-25** (see Done). Removed "fully control / brick the
+   device" from the open surface while keeping playback zero-auth.
 2. **SSH hardening** — key-only auth, ideally LAN-restricted. The only
    full-compromise path. *Owner-managed (handled outside this repo).*
 3. **Per-box hotspot PSK.** `HOTSPOT_PSK` defaults to the shipped
    constant `"tapbox123"` (`pi/tapbox/netmgmt.py:108`). Generate a
    per-box secret at install (`TAPBOX_HOTSPOT_PSK`) and show it on the
    screen when the hotspot is up.
-4. **Bind `/bt/lost` (and any other internal-only endpoint) to
-   localhost.**
+4. ~~**Gate `/bt/lost` and other internal-only endpoints**~~ — done via
+   the token gate (btwatchd authenticates through `boxapi`).
 5. **Optional: UFW default-deny inbound + allowlist** (`22, 3679, 80,
    5353` + hotspot ports). Defense-in-depth only — it can't close
    `:3679` (the PWA needs it), so it mainly stops a *future* accidental
