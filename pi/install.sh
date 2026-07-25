@@ -79,6 +79,21 @@ write_if_changed() {
   return 0
 }
 
+# Show the box token + the link a phone can open. Printed at the end of
+# every run: it is the recovery path when a screen breaks, and the only
+# copy anyone gets on a box whose screen isn't enabled.
+print_token() {
+  [[ -n ${API_TOKEN:-} ]] || return 0
+  local ip
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo
+  echo "    Box token (links a phone to the PWA):"
+  echo "        ${API_TOKEN}"
+  [[ -n $ip ]] && echo "        http://${ip}:3679/#t=${API_TOKEN}"
+  echo "    Also on the box: Settings -> Link phone (scan the QR)."
+  echo "    Lost it later:  sudo cat /etc/tapbox/api-token"
+}
+
 # install(1) only if content differs. Returns 0 when changed.
 install_if_changed() {  # <mode> <src> <dest>
   if cmp -s "$2" "$3" 2>/dev/null; then
@@ -536,10 +551,10 @@ raspi-config nonint do_spi 0 2>/dev/null || true
 if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
   python3 -m venv /opt/tapbox/venv
 fi
-if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio' 2>/dev/null; then
+if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio, qrcode' 2>/dev/null; then
   echo "    installing python libs (this can take a few minutes on a Zero)..."
   /opt/tapbox/venv/bin/pip install --quiet --upgrade \
-    adafruit-circuitpython-pn532 evdev pillow gpiozero
+    adafruit-circuitpython-pn532 evdev pillow gpiozero qrcode
   # lgpio is gpiozero's pin factory on kernel 6.x — without it gpiozero
   # falls back to RPi.GPIO, whose edge detection is broken there
   # ('RuntimeError: Failed to add edge detection' from tapbox-ui).
@@ -903,6 +918,16 @@ else
   fi
 fi
 
+# --- 5b. API token -----------------------------------------------------------
+
+# The credential that gates the privileged endpoints (SECURITY.md). Made
+# HERE, before the services restart, so the daemon never comes up without
+# one. Keep-existing: re-running install.sh must NOT rotate it, or every
+# linked phone in the house silently stops working. token.ensure() is the
+# single generator — the daemon calls the same function at boot to heal a
+# deleted file.
+API_TOKEN="$(/usr/bin/python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/tapbox-py"); from tapbox import token; print(token.ensure())' 2>/dev/null || true)"
+
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 # Normalize modes on units written by older installs (mktemp made them 600
 # and unchanged files are never rewritten) — silences systemd's
@@ -943,6 +968,7 @@ done
 
 if grep -q '"username"' "$CONF_DIR/state.json" 2>/dev/null; then
   echo "==> [8/8] Already logged in to Spotify — done!"
+  print_token
   exit 0
 fi
 
@@ -958,6 +984,7 @@ for _ in $(seq 1 60); do
     echo
     echo "    Logged in! Credentials are stored on the Pi and survive reboots."
     echo "    Next: sudo ./play.sh connect   (with your headset in pairing mode)"
+    print_token
     exit 0
   fi
   sleep 5
