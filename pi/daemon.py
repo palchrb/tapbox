@@ -1782,7 +1782,50 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
+    def _json_ct(self):
+        """Cross-origin CSRF guard for every state-changing request.
+
+        A browser can only send an unauthorized CROSS-SITE request as a
+        'simple request', and those may not carry
+        `Content-Type: application/json` (only form-urlencoded, plain
+        text or multipart). Anything else forces a CORS preflight, which
+        this server answers 501 (no do_OPTIONS, and no Access-Control-*
+        header anywhere) — so the real request is never sent. Requiring
+        JSON therefore makes every POST/PUT unreachable from a random
+        web page the parent happens to visit.
+
+        This was live, not theoretical (QA review 2026-07-25): do_POST
+        parses the body with json.loads and, on ValueError, fell through
+        with `body = {}` instead of failing. Every endpoint that needs
+        no body — /system/shutdown, /wifi/reconnect, /bt/scan,
+        /bt/visible, /spotify/logout, /stop — could therefore be fired
+        by a plain auto-submitting <form> on any page someone on the LAN
+        opened. No enctype trick required.
+
+        Safe for every internal caller: boxapi.py, the PWA's api()
+        wrapper and play.sh's curl calls all set the header already.
+        """
+        ct = (self.headers.get("Content-Type") or "").split(";")[0]
+        if ct.strip().lower() == "application/json":
+            return True
+        # Drain a bounded body before answering: replying while request
+        # data is still unread turns the socket close into an RST, and
+        # the client sees a connection reset instead of our error.
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if 0 < n <= 65536:
+            try:
+                self.rfile.read(n)
+            except OSError:
+                pass
+        self._send(415, {"error": "Content-Type: application/json required"})
+        return False
+
     def do_PUT(self):
+        if not self._json_ct():
+            return
         n = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(n)) if n else {}
@@ -1821,6 +1864,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self._json_ct():
+            return
         n = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(n)) if n else {}
