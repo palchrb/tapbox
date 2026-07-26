@@ -12,13 +12,16 @@ BASE = os.environ.get("TAPBOX_DAEMON", "http://127.0.0.1:3679")
 def _request(method, path, body, timeout):
     data = None if body is None and method == "GET" \
         else json.dumps(body if body is not None else {}).encode()
-    # Authenticate as the box itself. Deliberately a token file rather
-    # than a localhost bypass: `docs/remote-access.md` contemplates a
-    # Caddy reverse proxy, and the day one lands EVERY request arrives
-    # from 127.0.0.1 — a loopback exemption would silently expose the
-    # whole privileged surface. token.header() is best-effort ({} when
-    # unreadable), so callers that only touch SAFE endpoints keep working
-    # even without read access to it.
+    # Authenticate as the box itself. A loopback exemption would also
+    # have worked — nothing but root runs here, and a proxied request is
+    # still distinguishable (a reverse proxy makes the peer 127.0.0.1 but
+    # sets X-Forwarded-For, which a direct client cannot fake). We use
+    # the token instead simply to keep ONE auth rule rather than a rule
+    # plus an exemption; it is not a security necessity. The cost is a
+    # real dependency: a screen action that is purely local now needs a
+    # readable token file. token.header() is therefore best-effort ({}
+    # when unreadable), so callers that only touch SAFE endpoints keep
+    # working regardless.
     headers = {"Content-Type": "application/json"}
     headers.update(token.header())
     req = urllib.request.Request(

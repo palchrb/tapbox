@@ -82,7 +82,8 @@ like the rest; btwatchd authenticates through `boxapi`.)
   install log or a pasted scrollback. `/play` is split
   by body — a library `id` stays open, a raw `target` needs the token.
   Internal callers (ui, btwatchd) authenticate via the token file in
-  `boxapi.py`, deliberately not a localhost bypass. Covered by
+  `boxapi.py` rather than a loopback exemption — a preference for one
+  auth rule, not a security necessity (see item 7 below). Covered by
   `tests/api_token.py`, `api_auth_gate.py`, `pwa_token.py`,
   `ui_link_phone.py`, `install_token.py`.
 
@@ -257,11 +258,19 @@ Blocking items from the QA review — all **done**:
    `GET: True` rule is structural — static files and `<img>` artwork
    loads can't carry a header — so **no privileged endpoint may ever be
    a GET.**
-7. Internal callers use the **token file via `boxapi.py`** (one line,
-   covers `ui.py` and `btwatchd.py`), **not** a localhost bypass: a
-   future Caddy reverse proxy would make every request look local and
-   silently open everything. `play.sh` needs the header too once `/play`
-   with a raw `target` becomes privileged.
+7. ~~Internal callers use the **token file via `boxapi.py`**~~ — done
+   (one line, covers `ui.py` and `btwatchd.py`). **The original
+   justification was overstated** and is corrected here: it claimed a
+   future reverse proxy would make every request look local so a
+   loopback bypass would silently open everything. A proxy does make the
+   peer 127.0.0.1 — but it also sets `X-Forwarded-For`, which a direct
+   client cannot fake over a real TCP handshake, so a bypass gated on
+   *loopback AND no XFF* would have been sound. The token is a
+   preference (one auth rule instead of a rule plus an exemption), not a
+   security requirement, and it has a real cost: a purely local screen
+   action now depends on a readable token file. Reviewed and kept
+   2026-07-26. `play.sh` needs the header too once `/play` with a raw
+   `target` becomes privileged.
 8. Corrected from the original plan: **no install.sh restart reorder is
    needed** — the order is already btwatchd → daemon → UI.
 
