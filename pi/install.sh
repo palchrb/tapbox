@@ -82,20 +82,13 @@ write_if_changed() {
 # Show the box token + the link a phone can open. Printed at the end of
 # every run: it is the recovery path when a screen breaks, and the only
 # copy anyone gets on a box whose screen isn't enabled.
+# Point at the token, never print it. The secret only appears when
+# someone explicitly runs `tapbox-token` — an install log (or a
+# scrollback shared while debugging) shouldn't carry it.
 print_token() {
-  [[ -n ${API_TOKEN:-} ]] || return 0
-  local ip
-  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   echo
-  echo "    Box token (links a phone to the PWA):"
-  echo "        ${API_TOKEN}"
-  # The .local form first: the browser keeps the token PER ORIGIN, so a
-  # link opened against an IP is lost as soon as DHCP moves the box. The
-  # IP is the fallback for a client that can't resolve mDNS.
-  echo "        http://${BOX_NAME}.local:3679/#t=${API_TOKEN}"
-  [[ -n $ip ]] && echo "        (or http://${ip}:3679/#t=${API_TOKEN})"
-  echo "    Also on the box: Settings -> Link phone (scan the QR)."
-  echo "    Lost it later:  sudo cat /etc/tapbox/api-token"
+  echo "    Pair a phone:   on the box, Settings -> Link phone (scan the QR)"
+  echo "    Or over ssh:    sudo tapbox-token"
 }
 
 # install(1) only if content differs. Returns 0 when changed.
@@ -593,6 +586,7 @@ RFID_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/tapbox-rfid   && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
+install_if_changed 755 "$SCRIPT_DIR/token.sh" /usr/local/bin/tapbox-token || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
 UI_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    && UI_CHANGED=1
@@ -929,8 +923,10 @@ fi
 # one. Keep-existing: re-running install.sh must NOT rotate it, or every
 # linked phone in the house silently stops working. token.ensure() is the
 # single generator — the daemon calls the same function at boot to heal a
-# deleted file.
-API_TOKEN="$(/usr/bin/python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/tapbox-py"); from tapbox import token; print(token.ensure())' 2>/dev/null || true)"
+# deleted file, and `tapbox-token` reads it back on demand. Deliberately
+# NOT printed here: the secret should only appear when someone asks.
+/usr/bin/python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/tapbox-py"); from tapbox import token; token.ensure()' 2>/dev/null \
+  || echo "    WARNING: could not create the API token — privileged endpoints will refuse requests"
 
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 # Normalize modes on units written by older installs (mktemp made them 600

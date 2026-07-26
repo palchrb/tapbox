@@ -76,8 +76,10 @@ like the rest; btwatchd authenticates through `boxapi`.)
   phone shortcut ("Hey Siri, pause TapBox") needs no setup. Provisioned
   by scanning a QR on the box screen (Settings → Link phone); the token
   rides in the URL fragment so it never reaches a server log. Recovery:
-  the same screen re-displays and rotates it, `install.sh` prints it, and
-  `sudo cat /etc/tapbox/api-token` is the SSH fallback. `/play` is split
+  the same screen re-displays and rotates it, and `sudo tapbox-token`
+  (show / `rotate` / `path`) is the SSH fallback. install.sh deliberately
+  does NOT print the secret — only a pointer — so it can't end up in an
+  install log or a pasted scrollback. `/play` is split
   by body — a library `id` stays open, a raw `target` needs the token.
   Internal callers (ui, btwatchd) authenticate via the token file in
   `boxapi.py`, deliberately not a localhost bypass. Covered by
@@ -216,8 +218,10 @@ Owner decisions:
 - **QR on the box screen is the primary provisioning route.** Every box
   in the fleet now has a screen, so the "headless box has no way in"
   problem is out of scope by construction.
-- **Fallback is SSH:** `sudo cat /etc/tapbox/api-token`. `install.sh`
-  also prints the token and the link at the end of a run.
+- **Fallback is SSH:** `sudo tapbox-token` prints the token and a ready
+  pairing link (`rotate` issues a new one, `path` prints the file). It is
+  a separate command on purpose: the secret appears only when asked for,
+  never in an install log. install.sh just points at it.
 - QR encodes the box's **stable `<name>.local`**
   (`http://tapbox.local:3679/#t=<TOKEN>`), not its IP. The browser keeps
   the token per ORIGIN, so an IP-based link dies the moment DHCP moves
@@ -235,7 +239,8 @@ Owner decisions:
 Blocking items from the QA review — all **done**:
 1. ~~Require `Content-Type: application/json`~~ — done (see Done).
 2. ~~`install.sh` prints the token + link; document the SSH fallback~~ —
-   done, on every exit path.
+   done, but inverted on purpose: install.sh prints only a pointer and
+   `tapbox-token` prints the secret on demand.
 3. ~~**Fail-closed token rules:** unreadable/missing token file ⇒ deny;
    **empty or short token ⇒ deny** (`hmac.compare_digest("", "")` is
    `True`, so a truncated file would authorize everyone); `ensure()`

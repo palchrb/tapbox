@@ -22,7 +22,7 @@ src = open(SH).read()
 
 # 1. the generator install.sh calls is token.ensure() — the same function
 #    the daemon self-heals with, so there is exactly one implementation
-assert "from tapbox import token; print(token.ensure())" in src, \
+assert "from tapbox import token; token.ensure()" in src, \
     "install.sh must generate via token.ensure(), not its own generator"
 print("1. install.sh generates through token.ensure() OK")
 
@@ -41,7 +41,7 @@ print("2. re-running install.sh keeps the token (linked phones survive) OK")
 
 # 3. the token is created BEFORE the service restarts, so the daemon
 #    never comes up without one
-i_token = src.index("API_TOKEN=")
+i_token = src.index("from tapbox import token; token.ensure()")
 i_restart = src.index('echo "==> [6/8] Enabling services')
 assert i_token < i_restart, \
     "the token must be generated before the services are restarted"
@@ -57,13 +57,27 @@ assert "gpiozero qrcode" in src or "qrcode" in src.split("pip install")[1][:200]
     "qrcode missing from the pip install line"
 print("4. qrcode is in both the import probe and the pip line OK")
 
-# 5. the token is printed at the end — this is the recovery path when a
-#    screen breaks, and the only copy a headless run ever shows
-assert "print_token" in src and "sudo cat /etc/tapbox/api-token" in src, \
-    "install.sh must print the token and document the SSH fallback"
+# 5. install.sh must NOT print the secret — it should only appear when
+#    someone explicitly asks. An install log (or a scrollback pasted
+#    while debugging) must not carry it.
+i_fn = src.index("print_token() {")
+fn = src[i_fn:src.index("}", i_fn)]
+assert "API_TOKEN" not in fn and "api-token" not in fn, \
+    f"install.sh must not print the token itself:\n{fn}"
+assert "tapbox-token" in fn, "it must point at the tapbox-token command"
 assert src.count("print_token") >= 3, \
     "print_token must be called on the exit paths, not just defined"
-print("5. install.sh prints the token + documents the SSH fallback OK")
+print("5. install.sh points at tapbox-token, never prints the secret OK")
+
+# 5b. ...and the command that DOES print it is installed
+assert "/usr/local/bin/tapbox-token" in src, \
+    "install.sh must install the tapbox-token command"
+tok_sh = open(os.path.join(REPO, "pi", "token.sh")).read()
+assert "token.ensure()" in tok_sh and "token.rotate()" in tok_sh, \
+    "tapbox-token must use the shared token module, not its own generator"
+assert ".local:3679/#t=" in tok_sh, \
+    "the pairing link must use the stable .local origin"
+print("5b. tapbox-token is installed and reuses the shared module OK")
 
 # 6. it must not be world-readable anywhere it lands
 sys.path.insert(0, os.path.join(REPO, "pi"))

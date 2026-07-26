@@ -179,7 +179,15 @@
       "Bash(awk 'NR>1866 && /^[a-zA-Z_]/ {print NR\": \"$0; exit}' pi/daemon.py)",
       "Bash(grep -n \"function \\\\|=> {$\" pi/web/app.js)",
       "Bash(/tmp/qrv/bin/pip install *)",
-      "Bash(/tmp/qrv/bin/python -c ' *)"
+      "Bash(/tmp/qrv/bin/python -c ' *)",
+      "Bash(BOX_NAME=stuebox API_TOKEN=K7M2P9QR4TVX8N3Z bash -c ' *)",
+      "Bash(cp -r /workspace/tapbox/pi/tapbox tokdemo/lib/)",
+      "Bash(sed -e 's#PYLIB=/usr/local/lib/tapbox-py#PYLIB=/tmp/tokdemo/lib#' -e 's#\\\\[\\\\[ \\\\$EUID -ne 0 \\\\]\\\\]#[[ 0 -ne 0 ]]#' -e 's#/etc/avahi/avahi-daemon.conf#/tmp/tokdemo/avahi.conf#g' /workspace/tapbox/pi/token.sh)",
+      "Bash(chmod +x tokdemo/tapbox-token)",
+      "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token)",
+      "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token rotate <<< \"n\")",
+      "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token path)",
+      "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token bogus)"
     ]
   }
 }
