@@ -1446,7 +1446,8 @@ class App:
                     ("Shut down", ""),
                     ("Restart", "")]
         if self.view == "bt":
-            rows = [("Pair nearest", ""), ("Scan for new", "")]
+            rows = [("Pair nearest", ""), ("Scan for new", ""),
+                    ("Pair from car", "")]
             for d in self.bt.get("devices", []):
                 mark = "●" if d.get("connected") else (
                     "✓" if d["mac"] == self.bt.get("configured") else "")
@@ -1597,7 +1598,13 @@ class App:
                 api_post("/system/shutdown", {"restart": restart})
 
     def select_bt(self):
-        if self.sel == 0:  # Pair nearest (the one-button flow)
+        # Label-based like select_setting: the action rows above the
+        # device list have grown once already, and an index-keyed
+        # dispatch silently misfires the moment they grow again.
+        rows = self.current_items()
+        label = rows[self.sel][0] if self.sel < len(rows) else ""
+        n_actions = 3  # rows before the device list
+        if label == "Pair nearest":  # the one-button flow
             self.draw_message("Pairing the nearest speaker ... (up to 60 s)")
             try:
                 r = api_post("/bt/pair", {}, timeout=130)
@@ -1608,7 +1615,7 @@ class App:
             except OSError as e:
                 self.draw_message(f"Failed: {e}")
             time.sleep(2)
-        elif self.sel == 1:  # Scan for new
+        elif label == "Scan for new":
             self.draw_message("Scanning ... (~25 s)")
             try:
                 r = api_post("/bt/scan", {}, timeout=70)
@@ -1617,8 +1624,27 @@ class App:
             except OSError as e:
                 self.draw_message(f"Failed: {e}")
                 time.sleep(2)
+        elif label == "Pair from car":
+            # The INBOUND direction: a car stereo (or any device that
+            # insists on starting the pairing itself) can't be paired by
+            # us reaching out — the box has to become discoverable and
+            # accept. Same firmware-crash quiesce as the outbound flow,
+            # server-side.
+            secs = 120
+            self.draw_message(f"Box is visible as a speaker for "
+                              f"{secs // 60} min.\nStart pairing from the "
+                              f"car's\nBluetooth menu.")
+            try:
+                r = api_post("/bt/visible", {"secs": secs},
+                             timeout=secs + 160)
+                self.bt = api_get("/bt")
+                self.draw_message("Paired!" if r.get("ok")
+                                  else "No pairing came in — try again")
+            except OSError as e:
+                self.draw_message(f"Failed: {e}")
+            time.sleep(2)
         else:
-            d = self.bt["devices"][self.sel - 2]
+            d = self.bt["devices"][self.sel - n_actions]
             self.bt_connect(d["mac"], d["name"])
 
     def bt_connect(self, mac, name):
