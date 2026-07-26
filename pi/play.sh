@@ -39,6 +39,17 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 DAEMON="http://127.0.0.1:3679"
+
+# The box's API token. Playing a RAW url is privileged (it can put
+# uncurated audio in a kid's room), so this CLI has to authenticate like
+# any other client — see SECURITY.md. Root-only file; an empty value
+# just means the privileged calls get a clear 401 instead of silently
+# doing nothing.
+TOKEN_HDR=()
+if [[ -r ${TAPBOX_TOKEN_FILE:-/etc/tapbox/api-token} ]]; then
+  TOKEN_HDR=(-H "X-TapBox-Token: $(tr -d '[:space:]' \
+    < "${TAPBOX_TOKEN_FILE:-/etc/tapbox/api-token}")")
+fi
 FRESH_ARG=""
 FG=0
 while [[ ${1:-} == "--fresh" || ${1:-} == "--fg" ]]; do
@@ -94,7 +105,8 @@ case "$1" in
       resume) EP=playpause ;;
       *)      EP="$1" ;;
     esac
-    if curl -sf -X POST "$DAEMON/$EP" -H 'Content-Type: application/json' -d '{}'; then
+    if curl -sf -X POST "$DAEMON/$EP" -H 'Content-Type: application/json' \
+         "${TOKEN_HDR[@]}" -d '{}'; then
       echo " OK: $1"
     else
       echo "daemon not running — falling back to Spotify API" >&2
@@ -123,6 +135,7 @@ case "$1" in
         *)     BODY="{\"volume\": $2}" ;;
       esac
       curl -sf -X POST "$DAEMON/volume" -H 'Content-Type: application/json' \
+      "${TOKEN_HDR[@]}" \
         -d "$BODY" | jq . || echo "daemon not running" >&2
     fi
     exit 0 ;;
@@ -161,6 +174,7 @@ fi
 FRESH_BOOL=false
 [[ -n $FRESH_ARG ]] && FRESH_BOOL=true
 if curl -sf -X POST "$DAEMON/play" -H 'Content-Type: application/json' \
+     "${TOKEN_HDR[@]}" \
      -d "{\"target\": \"$LINK\", \"fresh\": $FRESH_BOOL}" >/dev/null; then
   echo "==> Playing in the background (survives this terminal)."
   echo "    Follow:  journalctl -u tapbox-daemon -f"

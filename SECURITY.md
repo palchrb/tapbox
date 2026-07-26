@@ -269,8 +269,8 @@ Blocking items from the QA review — all **done**:
    preference (one auth rule instead of a rule plus an exemption), not a
    security requirement, and it has a real cost: a purely local screen
    action now depends on a readable token file. Reviewed and kept
-   2026-07-26. `play.sh` needs the header too once `/play` with a raw
-   `target` becomes privileged.
+   2026-07-26. `play.sh` reads the token file itself (it uses curl, not
+   `boxapi`) — done, `tests/play_sh_token.py`.
 8. Corrected from the original plan: **no install.sh restart reorder is
    needed** — the order is already btwatchd → daemon → UI.
 
