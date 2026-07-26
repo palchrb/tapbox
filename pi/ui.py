@@ -147,6 +147,12 @@ def font(size):
 
 
 F_BIG, F_MED, F_SMALL = font(22), font(17), font(13)
+# The 'Link phone' screen must stay lit while someone aims a camera at
+# it — a QR that blanks after 30s is useless exactly when it is needed.
+# Bounded, though: it holds a SECRET, and leaving it lit forever would
+# both drain the battery and park the token on a screen in the living
+# room. After this it auto-returns to settings and normal sleep resumes.
+LINK_AWAKE_S = float(os.environ.get("TAPBOX_LINK_AWAKE_S", "180"))
 
 
 # --- display backends -----------------------------------------------------------
@@ -1580,6 +1586,7 @@ class App:
         elif label == "Storage":
             self.push("storage")
         elif label == "Link phone":
+            self._link_since = time.monotonic()
             self.push("link")
         elif label in ("Shut down", "Restart"):
             restart = label == "Restart"
@@ -2220,10 +2227,17 @@ class App:
         # The timeout applies whether on charger or battery (0 = never
         # blank). No special charger behaviour — the screen just blanks
         # after screen_timeout_s of no button input, always.
+        if self.view == "link" and self._link_open_s() < LINK_AWAKE_S:
+            return False  # a QR nobody can see is not a QR
         t = self.settings.get("screen_timeout_s", 30)
         if t == 0:
             return False
         return time.monotonic() - self.last_input > t
+
+    def _link_open_s(self):
+        """Seconds the 'Link phone' screen has been up (0 when closed)."""
+        since = getattr(self, "_link_since", 0.0)
+        return time.monotonic() - since if since else 0.0
 
     def _render_watchdog(self):
         """Restart tapbox-ui if the single render loop wedges. The loop
@@ -2346,6 +2360,11 @@ class App:
                         and time.monotonic() - self.last_input
                         > NOW_RETURN_S):
                     self.push("now")
+            if self.view == "link" and self._link_open_s() >= LINK_AWAKE_S:
+                # long enough for any scan — stop displaying the secret
+                self._link_since = 0.0
+                self.back()
+                self.dirty = True
             if self.display.on and self.screen_should_sleep():
                 self.display.set_backlight(False)
                 # Release the browse latch: user_touched suppresses home's

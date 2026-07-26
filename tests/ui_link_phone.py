@@ -18,6 +18,7 @@ Two things are under test:
 import os
 import sys
 import tempfile
+import time
 import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,5 +192,44 @@ os.remove(token.TOKEN_FILE)
 img3 = Image.new("RGB", (ui.W, ui.H))
 app.render_link(ImageDraw.Draw(img3), img3)
 print("5. missing token file renders an explanation, no crash OK")
+
+# 5b. SHOWING the QR must never ROTATE. Rotating on display would
+#     unlink every other phone in the house each time someone glanced at
+#     this screen — the token is stable, and only the explicit A press
+#     (confirmed, above) issues a new one.
+token.ensure()
+stable = token.read()
+for _ in range(3):
+    _img = Image.new("RGB", (ui.W, ui.H))
+    app.render_link(ImageDraw.Draw(_img), _img)
+    assert token.read() == stable, "rendering the QR must not rotate the token"
+print("5b. showing the QR never rotates the token OK")
+
+# 6. THE SCAN WINDOW: the screen must NOT blank while the QR is up —
+#    it blanks after 30s of no input by default, which is exactly the
+#    moment someone is fumbling their phone camera into position.
+app.view = "link"
+app.settings["screen_timeout_s"] = 30
+app._link_since = time.monotonic()
+app.last_input = time.monotonic() - 120  # long past the normal timeout
+assert app.screen_should_sleep() is False, \
+    "the link screen must stay lit while someone is scanning it"
+print("6. link screen stays lit past the normal blank timeout OK")
+
+# 6b. ...but bounded: it holds a SECRET, so after LINK_AWAKE_S normal
+#     sleep resumes (and the loop backs out of the view, below)
+app._link_since = time.monotonic() - ui.LINK_AWAKE_S - 1
+assert app.screen_should_sleep() is True, \
+    "past the window the link screen must sleep like any other"
+print("6b. past the window it sleeps again (battery + secret on screen) OK")
+
+# 6c. other views are unaffected — no accidental never-sleep
+app.view = "settings"
+assert app.screen_should_sleep() is True
+app.settings["screen_timeout_s"] = 0   # 'never' still means never
+app.view = "link"
+app._link_since = time.monotonic()
+assert app.screen_should_sleep() is False
+print("6c. the exemption is scoped to the link view OK")
 
 print("\nall ui_link_phone checks passed")
