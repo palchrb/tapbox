@@ -90,6 +90,7 @@ import functools
 import json
 import mimetypes
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -111,7 +112,8 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from tapbox import spotify_web as _spotify_web  # noqa: E402
 from tapbox.paths import (  # noqa: E402
-    ART_DIR, RUN_DIR, STATE_DIR, go_restarted_within, note_go_restart)
+    ART_DIR, MEDIA_DIR, RUN_DIR, STATE_DIR, go_restarted_within,
+    note_go_restart)
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
 # these names) keeps calling daemon.<helper>.
@@ -1768,6 +1770,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # expansion hits the network; stay alive
                 log(f"expand failed for {target}: {e!r}")
                 self._send(502, {"error": str(e)})
+        elif url.path == "/media":
+            self._send(200, {"collections": media_collections(),
+                             "free": _free_bytes(MEDIA_DIR),
+                             "floor": MEDIA_FREE_FLOOR})
         elif url.path == "/artwork":
             path = (urllib.parse.parse_qs(url.query).get("path") or [None])[0]
             if not path:
@@ -1834,6 +1840,69 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return self._require_token()
 
+    def _media_upload(self):
+        """Stream one uploaded audio file straight to disk.
+
+        NEVER buffers: a 300MB audiobook read into memory would take the
+        box down (512MB, and mpv/go-librespot are already resident). The
+        body is copied in chunks to a .part file and renamed on success,
+        so an interrupted upload leaves no half-file that expand_entries
+        would try to play.
+        """
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        coll = _media_safe_name((q.get("collection") or [""])[0] + ".mp3")
+        coll = os.path.splitext(coll)[0]
+        name = _media_safe_name((q.get("name") or [""])[0])
+        if not coll or not name:
+            self._send(400, {"error": "collection and name required "
+                                      "(audio or cover image)"})
+            return
+        try:
+            total = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            total = 0
+        if total <= 0:
+            self._send(400, {"error": "Content-Length required"})
+            return
+        if total > MEDIA_MAX_BYTES:
+            self._send(413, {"error": f"file larger than "
+                                      f"{MEDIA_MAX_BYTES // 10**6} MB"})
+            return
+        os.makedirs(MEDIA_DIR, exist_ok=True)
+        free = _free_bytes(MEDIA_DIR)
+        if free - total < MEDIA_FREE_FLOOR:
+            # Refusing is the kind outcome: a full card breaks playback,
+            # the cache sweep and the bookmarks, not just this upload.
+            self._send(507, {"error": "not enough free space on the box",
+                             "free": free, "needed": total})
+            return
+        d = os.path.join(MEDIA_DIR, coll)
+        os.makedirs(d, exist_ok=True)
+        dest, tmp = os.path.join(d, name), os.path.join(d, name + ".part")
+        got = 0
+        try:
+            with open(tmp, "wb") as f:
+                while got < total:
+                    chunk = self.rfile.read(min(262144, total - got))
+                    if not chunk:
+                        raise OSError("upload ended early")
+                    f.write(chunk)
+                    got += len(chunk)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, dest)
+        except OSError as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            log(f"media upload failed ({name}): {e!r}")
+            self._send(500, {"error": str(e)})
+            return
+        log(f"media: uploaded {coll}/{name} ({got // 1000} kB)")
+        self._send(200, {"ok": True, "collection": coll, "name": name,
+                         "path": d, "bytes": got})
+
     def _json_ct(self):
         """Cross-origin CSRF guard for every state-changing request.
 
@@ -1858,7 +1927,17 @@ class Handler(BaseHTTPRequestHandler):
         wrapper and play.sh's curl calls all set the header already.
         """
         ct = (self.headers.get("Content-Type") or "").split(";")[0]
-        if ct.strip().lower() == "application/json":
+        ct = ct.strip().lower()
+        if ct == "application/json":
+            return True
+        # A file upload can't be JSON. octet-stream is still NOT a
+        # "simple request" — an HTML form can only send urlencoded,
+        # text/plain or multipart — so a cross-origin page still can't
+        # reach this without a preflight we never grant. (multipart
+        # WOULD be reachable, which is exactly why uploads are raw
+        # octet-stream with the name in the query string instead.)
+        if ct == "application/octet-stream" and \
+                urllib.parse.urlparse(self.path).path == "/media/upload":
             return True
         # Drain a bounded body before answering: replying while request
         # data is still unread turns the socket close into an RST, and
@@ -1918,6 +1997,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._json_ct():
+            return
+        if urllib.parse.urlparse(self.path).path == "/media/upload":
+            self._media_upload()   # streams the body; must not be read here
             return
         n = int(self.headers.get("Content-Length") or 0)
         self._body_consumed = True  # _deny must not try to drain it again
@@ -2155,6 +2237,27 @@ class Handler(BaseHTTPRequestHandler):
                 r = bt_action(["rename", mac, name], timeout=20)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
+            elif self.path == "/media/delete":
+                coll = _media_safe_name(str(body.get("collection") or "")
+                                        + ".mp3")
+                coll = os.path.splitext(coll)[0]
+                if not coll:
+                    self._send(400, {"error": "collection required"})
+                    return
+                d = os.path.join(MEDIA_DIR, coll)
+                name = _media_safe_name(body.get("name"))
+                try:
+                    if name:  # one file
+                        os.remove(os.path.join(d, name))
+                    else:     # the whole collection
+                        for f in os.listdir(d):
+                            os.remove(os.path.join(d, f))
+                        os.rmdir(d)
+                except OSError as e:
+                    self._send(404, {"error": str(e)})
+                    return
+                log(f"media: removed {coll}" + (f"/{name}" if name else ""))
+                self._send(200, {"ok": True})
             elif self.path == "/stop":
                 self._send(200, ORCH.stop())
             else:
@@ -2234,6 +2337,60 @@ for _name in [n for n in list(vars(Handler)) if n.startswith("do_")]:
     setattr(Handler, _name, _gate(vars(Handler)[_name]))
 # PortalHandler (:80) is deliberately NOT gated: it only ever answers a
 # 302 to its own captive-portal page and serves no API.
+
+
+
+# --- uploaded media (own audiobooks, ripped CDs, the kids' recordings) ---
+# Books run 150-400MB, ~10x a podcast episode, so a full card is a REAL
+# failure mode here — and a full card takes the whole box down, not just
+# the upload. Refuse below the floor rather than filling it.
+MEDIA_FREE_FLOOR = int(os.environ.get("TAPBOX_MEDIA_FREE_FLOOR",
+                                      str(1_500_000_000)))
+MEDIA_MAX_BYTES = int(os.environ.get("TAPBOX_MEDIA_MAX_BYTES",
+                                     str(2_000_000_000)))
+MEDIA_EXTS = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav",
+              ".jpg", ".jpeg", ".png")  # audio + cover art
+
+
+def _free_bytes(path):
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize
+    except OSError:
+        return 0
+
+
+def _media_safe_name(raw):
+    """A single path component, no traversal, keeping a known extension.
+    Uploads name their own files, so this is the security boundary."""
+    name = os.path.basename(str(raw or "").replace("\\", "/")).strip()
+    name = re.sub(r"[^A-Za-z0-9._ '()\-]", "_", name)[:120].lstrip(".")
+    ext = os.path.splitext(name)[1].lower()
+    return name if name and ext in MEDIA_EXTS else ""
+
+
+def media_collections():
+    """[{name, files, bytes}] — what the PWA lists and plays."""
+    out = []
+    try:
+        names = sorted(os.listdir(MEDIA_DIR))
+    except OSError:
+        return out
+    for coll in names:
+        d = os.path.join(MEDIA_DIR, coll)
+        if not os.path.isdir(d):
+            continue
+        files, total = [], 0
+        for f in sorted(os.listdir(d)):
+            try:
+                total += os.path.getsize(os.path.join(d, f))
+            except OSError:
+                pass
+            if os.path.splitext(f)[1].lower() in MEDIA_EXTS[:7]:
+                files.append(f)
+        out.append({"name": coll, "path": d, "files": files,
+                    "bytes": total})
+    return out
 
 
 def _clean_bt_name(raw):

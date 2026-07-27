@@ -8,6 +8,13 @@ STATE_DIR = os.environ.get("TAPBOX_STATE", "/var/lib/tapbox/state")
 CACHE_DIR = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
 # Uploaded section logos — user content, so NOT under CACHE_DIR's pruning
 ART_DIR = os.environ.get("TAPBOX_ART", "/var/lib/tapbox/art")
+# Audio the parent uploaded from the PWA (own audiobooks, ripped CDs, the
+# kids' own recordings). Like ART_DIR this is USER CONTENT and must stay
+# outside CACHE_DIR: prune_cache would happily delete a 300MB audiobook
+# nobody has another copy of. expand_entries() already plays a folder of
+# audio files (mp3/m4a/m4b/ogg/opus/flac/wav) with per-file bookmarks and
+# cover.jpg as art, so uploading IS the whole feature.
+MEDIA_DIR = os.environ.get("TAPBOX_MEDIA", "/var/lib/tapbox/media")
 SETTINGS_FILE = os.environ.get("TAPBOX_SETTINGS", "/etc/tapbox/settings.json")
 
 # Advisory 'a human pressed a button' marker, mtime is the fact — same
