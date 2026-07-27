@@ -2546,7 +2546,15 @@ def _go_swap_restart(prev_mac):
     process restarted. So: MAC changed => restart go-librespot, which
     re-reads asound.conf. Same-device transitions (crash heal, blip,
     bt<->local toggles) never enter here and keep the cheap live reopen.
-    The bookmark + _bt_resume make the restart seamless."""
+    The bookmark + _bt_resume make the restart seamless.
+
+    STOPGAP — REMOVE when the fork fixes reopen_output: the real fix is
+    the fork refreshing its cached ALSA config (snd_config_update_free_
+    global) before reopening, which makes the live reopen correct across
+    MAC changes too. This guard deliberately walks back v0.0.7's
+    no-restart property for the ONE case where the live reopen provably
+    cannot work today; once the fork re-resolves the alias, delete this
+    and let every transition take the live path."""
     new_mac = _configured_bt_mac()
     if not new_mac or new_mac == prev_mac:
         return
