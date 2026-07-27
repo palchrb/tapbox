@@ -837,8 +837,27 @@ def expand_entries(target):
         if files:
             _log(f"folder with {len(files)} audio files: {target}")
             cover = collection_image(target)
+            # Embedded tags, recorded by the uploader (daemon writes this
+            # sidecar with ffprobe output). Titles beat filenames on a
+            # 240px screen — "Kapittel 3" instead of "01-track_03_final".
+            # Absent sidecar = the old filename behaviour, so folders
+            # copied on by hand keep working exactly as before.
+            meta = {}
+            try:
+                with open(os.path.join(target, ".tapbox-meta.json")) as mf:
+                    meta = json.load(mf)
+            except (OSError, ValueError):
+                pass
+            if meta:
+                # Order by embedded track number when EVERY file has one;
+                # a partial set would interleave worse than the filenames.
+                nums = [meta.get(f, {}).get("track") for f in files]
+                if all(isinstance(n, int) for n in nums):
+                    files = [f for _, f in sorted(zip(nums, files))]
             return [{"url": os.path.join(target, f),
-                     "title": os.path.splitext(f)[0], "id": f, "image": cover}
+                     "title": (meta.get(f, {}).get("title")
+                               or os.path.splitext(f)[0]),
+                     "id": f, "image": cover}
                     for f in files]
         return passthrough
     try:

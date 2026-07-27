@@ -1899,9 +1899,16 @@ class Handler(BaseHTTPRequestHandler):
             log(f"media upload failed ({name}): {e!r}")
             self._send(500, {"error": str(e)})
             return
-        log(f"media: uploaded {coll}/{name} ({got // 1000} kB)")
+        tags, art = {}, False
+        if os.path.splitext(name)[1].lower() in MEDIA_EXTS[:7]:  # audio
+            tags = _media_note_meta(d, name, dest)
+            art = _media_extract_cover(dest, d)
+        log(f"media: uploaded {coll}/{name} ({got // 1000} kB)"
+            + (f" — {tags['title']}" if tags.get("title") else "")
+            + (" +cover" if art else ""))
         self._send(200, {"ok": True, "collection": coll, "name": name,
-                         "path": d, "bytes": got})
+                         "path": d, "bytes": got, "tags": tags,
+                         "cover": art})
 
     def _json_ct(self):
         """Cross-origin CSRF guard for every state-changing request.
@@ -2350,6 +2357,86 @@ MEDIA_MAX_BYTES = int(os.environ.get("TAPBOX_MEDIA_MAX_BYTES",
                                      str(2_000_000_000)))
 MEDIA_EXTS = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav",
               ".jpg", ".jpeg", ".png")  # audio + cover art
+
+
+MEDIA_META = ".tapbox-meta.json"
+
+
+def _media_probe(path):
+    """Embedded tags for one uploaded file, via ffprobe.
+
+    ffmpeg is already a dependency (install.sh), so this costs no new
+    package — and it reads headers only, so it is fast even on a 300MB
+    audiobook. Best-effort: a file with no tags just keeps its filename
+    as the title, which is what happened before this existed.
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", path],
+            capture_output=True, text=True, timeout=30)
+        tags = (json.loads(r.stdout or "{}").get("format") or {}).get("tags")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    tags = {k.lower(): v for k, v in (tags or {}).items()}
+    out = {}
+    for key in ("title", "album", "artist", "album_artist"):
+        if tags.get(key):
+            out[key] = str(tags[key])[:200]
+    # "3" or "3/12" -> 3, so chapters order by tag rather than filename
+    m = re.match(r"\s*(\d+)", str(tags.get("track") or ""))
+    if m:
+        out["track"] = int(m.group(1))
+    return out
+
+
+def _media_extract_cover(src, folder):
+    """Pull embedded art out to cover.jpg — the name collection_image()
+    already looks for, so the art then works with no other change. Only
+    when the folder has no cover yet: a parent-uploaded cover.jpg must
+    win over whatever is baked into the file."""
+    for name in ("cover.jpg", "cover.jpeg", "cover.png", "folder.jpg"):
+        if os.path.exists(os.path.join(folder, name)):
+            return False
+    dest = os.path.join(folder, "cover.jpg")
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", src, "-an",
+             "-frames:v", "1", "-update", "1", dest],
+            capture_output=True, timeout=60)
+        if r.returncode == 0 and os.path.getsize(dest) > 0:
+            return True
+        os.remove(dest)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+    return False
+
+
+def _media_note_meta(folder, name, path):
+    """Record this file's tags in the collection's sidecar, so the menus
+    show real titles in track order instead of raw filenames."""
+    meta_path = os.path.join(folder, MEDIA_META)
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        meta = {}
+    tags = _media_probe(path)
+    if tags:
+        meta[name] = tags
+    else:
+        meta.pop(name, None)
+    try:
+        tmp = meta_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(meta, f)
+        os.replace(tmp, meta_path)
+    except OSError:
+        pass
+    return tags
 
 
 def _free_bytes(path):
