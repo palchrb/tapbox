@@ -894,6 +894,41 @@ class Orchestrator:
             log(f"pause -> {', '.join(acted) if acted else 'nothing playing'}")
             return {"paused": acted}
 
+    def unpause(self):
+        """Resume (never toggle) whatever is loaded — the mirror of
+        pause(). NOT named resume(): self.resume is already the library
+        entry's resume-position flag, and a method by that name is
+        silently shadowed by the instance attribute.
+
+        AVRCP sends DISTINCT play and pause commands: a car head unit
+        says "play" when it wants sound, not "flip whatever you are
+        doing". Mapping its PLAY onto a toggle made the box PAUSE while
+        the car thought it was starting playback, the car send PLAY
+        again, and so on — audible stutter the whole trip (field
+        2026-07-27, Skoda head unit). Idempotent by construction: if it
+        is already playing, this is a no-op.
+        """
+        with self.lock:
+            acted = []
+            if self._mpv_alive():
+                try:
+                    if mpv_ipc(["set_property", "pause", False]).get("error") \
+                            == "success":
+                        acted.append("mpv")
+                except OSError:
+                    pass
+            elif self.source == "spotify":
+                try:
+                    st = go_status()
+                    if (st.get("track") or {}) and not st.get("stopped"):
+                        if st.get("paused"):
+                            go("/player/resume")
+                        acted.append("spotify")
+                except OSError:
+                    pass
+            log(f"resume -> {', '.join(acted) if acted else 'nothing loaded'}")
+            return {"resumed": acted}
+
     def stop(self):
         """Stop = done: also clear the resume bookmark, so the next play
         starts from the top. (Pause / power-off keep the position.)"""
@@ -2051,6 +2086,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, ORCH.command(self.path[1:]))
             elif self.path == "/pause":
                 self._send(200, ORCH.pause())
+            elif self.path == "/resume":
+                self._send(200, ORCH.unpause())
             elif self.path == "/shuffle":
                 if not isinstance(body.get("enabled"), bool):
                     self._send(400, {"error": "enabled (bool) required"})
@@ -2300,7 +2337,7 @@ SAFE = {
     # separately inside the handler (it can put arbitrary content in a
     # kid's room, so it needs the token).
     "POST": frozenset({"/play", "/playpause", "/next", "/prev", "/pause",
-                       "/shuffle", "/volume", "/stop"}),
+                       "/resume", "/shuffle", "/volume", "/stop"}),
     # PUT /library replaces the entire library and PUT /settings rewrites
     # config — both privileged.
     "PUT": frozenset(),

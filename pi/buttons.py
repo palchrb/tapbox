@@ -30,11 +30,19 @@ from tapbox import boxapi, mpv, spotify  # noqa: E402
 # (used by the PiSugar tap shells) imports lazily so it runs on plain python3.
 
 # Standard Linux input-event-codes (raw ints so no evdev import at load)
+# AVRCP sends DISTINCT play and pause commands, so these must NOT all
+# collapse onto a toggle. A car head unit says "play" when it wants
+# sound; answering that with a toggle PAUSED a box that was already
+# playing, the car sent play again, and the trip became one long stutter
+# (field 2026-07-27, Skoda head unit). Only KEY_PLAYPAUSE is genuinely a
+# toggle key. Idempotent commands also make a peer that re-sends its
+# state on connect harmless.
 ACTIONS = {
-    200: "playpause",  # KEY_PLAYCD
-    201: "playpause",  # KEY_PAUSECD
-    164: "playpause",  # KEY_PLAYPAUSE
-    166: "playpause",  # KEY_STOPCD
+    200: "resume",     # KEY_PLAYCD      — explicit "make sound"
+    201: "pause",      # KEY_PAUSECD     — explicit "be quiet"
+    166: "pause",      # KEY_STOPCD      — pause, not /stop: a car's stop
+                       #                   button shouldn't drop the queue
+    164: "playpause",  # KEY_PLAYPAUSE   — the real toggle key
     163: "next",       # KEY_NEXTSONG
     165: "prev",       # KEY_PREVIOUSSONG
     115: "volup",      # KEY_VOLUMEUP
@@ -42,12 +50,14 @@ ACTIONS = {
 }
 VOL_STEP = 5  # percent per volume key press
 # A flaky BT headset (e.g. the JBL AVRCP) can emit rapid self-cancelling
-# play/pause bursts; a sub-350ms playpause repeat carries no human intent
+# play/pause bursts; a sub-350ms transport repeat carries no human intent
 # and just churns the A2DP transport (a firmware-crash trigger on the Zero
 # 2 W). next/prev/volume repeats ARE legitimate, so only playpause debounces.
 REPEAT_DEBOUNCE_S = 0.35
 MPV_CMDS = {
     "playpause": ["cycle", "pause"],
+    "resume": ["set_property", "pause", False],
+    "pause": ["set_property", "pause", True],
     "next": ["playlist-next"],
     "prev": ["playlist-prev"],
     "volup": ["add", "volume", VOL_STEP],
@@ -90,7 +100,11 @@ def handle(action):
     except OSError:
         pass  # no mpv running — try spotify
     try:
-        spotify_command(action)
+        # the raw spotify client only knows the toggle; a resume/pause
+        # that reached this far has no daemon and no mpv, so the toggle
+        # is the best available approximation
+        spotify_command("playpause" if action in ("resume", "pause")
+                        else action)
         log(f"{action} -> spotify")
     except OSError as e:
         log(f"{action}: no active player ({e})")
@@ -146,7 +160,7 @@ def main():
                         # drop a flaky peer's sub-350ms play/pause repeat
                         # (see REPEAT_DEBOUNCE_S) — no human intent, and it's
                         # what churns the A2DP transport
-                        if action == "playpause":
+                        if action in ("playpause", "resume", "pause"):
                             now = time.monotonic()
                             if now - last_fired.get(action, 0.0) \
                                     < REPEAT_DEBOUNCE_S:
@@ -161,8 +175,10 @@ if __name__ == "__main__":
     # One-shot CLI (used by the PiSugar tap shells): `buttons.py next`
     if len(sys.argv) > 1:
         action = sys.argv[1]
-        if action not in ("playpause", "next", "prev", "volup", "voldown"):
-            print("usage: buttons.py [playpause|next|prev|volup|voldown]",
+        if action not in ("playpause", "resume", "pause", "next", "prev",
+                          "volup", "voldown"):
+            print("usage: buttons.py [playpause|resume|pause|next|prev"
+                  "|volup|voldown]",
                   file=sys.stderr)
             sys.exit(1)
         handle(action)
