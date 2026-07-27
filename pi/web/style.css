@@ -180,6 +180,15 @@ dl {
 dt { color: var(--dim); }
 dd { margin: 0; text-align: right; }
 
+.bar {
+  height: 6px;
+  background: #23232f;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0.4rem 0;
+}
+.bar > div { height: 100%; width: 0; background: var(--hilite); transition: width .2s; }
+
 .dim { color: var(--dim); }
 .small { font-size: 0.85rem; }
 

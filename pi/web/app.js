@@ -1148,7 +1148,7 @@ document.addEventListener("visibilitychange", () => {
   // one re-fetches the document and applies only its own keyed change
   // in saveLibrary — but the view would still LOOK stale.)
   const active = document.querySelector("nav button.active");
-  if (active && active.dataset.tab === "library") loadLibrary();
+  if (active && active.dataset.tab === "library") { loadLibrary(); loadMedia(); }
 });
 
 /* QR landing: the box screen shows http://<box>/#t=<TOKEN>. The token
@@ -1178,6 +1178,104 @@ $("#btn-token-save")?.addEventListener("click", () => {
 $("#btn-token-forget")?.addEventListener("click", () => {
   setToken("");
   toast("Token removed from this phone");
+});
+
+/* ---- Your own audio: upload + manage ------------------------------- */
+/* XHR, not fetch: only XHR reports UPLOAD progress, and an audiobook is
+   minutes over wifi to a Zero 2 W — without a bar it looks hung. */
+function uploadOne(collection, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const url = "/media/upload?collection=" + encodeURIComponent(collection) +
+                "&name=" + encodeURIComponent(file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    // octet-stream (not multipart) is what keeps the CSRF guard intact —
+    // a form can send multipart, but not this.
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    if (TOKEN) xhr.setRequestHeader("X-TapBox-Token", TOKEN);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(body);
+      if (xhr.status === 401) { linkBanner(true); }
+      reject(new Error(body.error || ("HTTP " + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.send(file);
+  });
+}
+
+async function loadMedia() {
+  const box = $("#media-list");
+  if (!box) return;
+  let r;
+  try { r = await api("/media"); } catch (e) { box.textContent = ""; return; }
+  const gb = (n) => (n / 1e9).toFixed(1) + " GB";
+  box.innerHTML = "";
+  for (const c of r.collections || []) {
+    const el = document.createElement("div");
+    el.className = "entry";
+    const n = c.files.length;
+    el.innerHTML = `<div class="entry-info"><b></b><small></small></div>`;
+    el.querySelector("b").textContent = c.name;
+    el.querySelector("small").textContent =
+      `${n} file${n === 1 ? "" : "s"} · ${(c.bytes / 1e6).toFixed(0)} MB · ${c.path}`;
+    const del = document.createElement("button");
+    del.textContent = "Delete";
+    del.className = "danger";
+    del.onclick = async () => {
+      if (!confirm(`Delete the whole "${c.name}" collection from the box?`)) return;
+      try {
+        await api("/media/delete", { method: "POST", body: { collection: c.name } });
+        toast("Deleted");
+        loadMedia();
+      } catch (e) { toast(e.message); }
+    };
+    el.appendChild(del);
+    box.appendChild(el);
+  }
+  if (typeof r.free === "number") {
+    const p = document.createElement("p");
+    p.className = "dim small";
+    p.textContent = `${gb(r.free)} free on the box`;
+    box.appendChild(p);
+  }
+}
+
+$("#btn-upload")?.addEventListener("click", async () => {
+  const coll = ($("#up-collection").value || "").trim();
+  const files = Array.from($("#up-files").files || []);
+  if (!coll) { toast("Give the collection a name first"); return; }
+  if (!files.length) { toast("Pick one or more files"); return; }
+  const wrap = $("#up-progress"), bar = $("#up-bar"), status = $("#up-status");
+  const btn = $("#btn-upload");
+  btn.disabled = true;
+  wrap.hidden = false;
+  const total = files.reduce((a, f) => a + f.size, 0);
+  let done = 0;
+  try {
+    for (const [i, f] of files.entries()) {
+      status.textContent = `Uploading ${i + 1}/${files.length}: ${f.name}`;
+      await uploadOne(coll, f, (frac) => {
+        bar.style.width = (100 * (done + f.size * frac) / total).toFixed(1) + "%";
+      });
+      done += f.size;
+      bar.style.width = (100 * done / total).toFixed(1) + "%";
+    }
+    status.textContent = "Done — add it as a library entry below.";
+    $("#up-files").value = "";
+    toast(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`);
+    loadMedia();
+  } catch (e) {
+    status.textContent = "Failed: " + e.message;
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { wrap.hidden = true; bar.style.width = "0%"; }, 4000);
+  }
 });
 
 startPolling();
