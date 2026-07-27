@@ -125,7 +125,7 @@ fi
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
-GO_LIBRESPOT_VERSION="v0.1.4"  # v0.0.8 Fast skip: debounced next/prev (a
+GO_LIBRESPOT_VERSION="v0.1.5"  # v0.0.8 Fast skip: debounced next/prev (a
 # burst of N presses costs 2 audio-key requests instead of N) + a circuit
 # breaker on throttled keys (aes code 2 -> one retry + stop, never the
 # 51-track walk that kept the account rate-limited); /status gains
@@ -137,7 +137,12 @@ GO_LIBRESPOT_VERSION="v0.1.4"  # v0.0.8 Fast skip: debounced next/prev (a
 # playlists AND albums (the now-view song picker), no Web API involved.
 # v0.1.3/v0.1.4: album listings actually carry metadata (v0.1.2 returned
 # track:null for every album row -> the picker showed nothing; v0.1.4 is
-# the second take on the same fix, fork #15).
+# the second take on the same fix, fork #15). v0.1.5: setupPcm refreshes
+# the process ALSA config (snd_config_update_free_global) before every
+# PCM open, so a speaker swap's rewritten asound.conf is honored by the
+# running process — the silent-box bug 2026-07-27 — on both the play and
+# live-reopen paths. This is what made the daemon's swap-restart guard
+# deletable.
 GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
 
 if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \

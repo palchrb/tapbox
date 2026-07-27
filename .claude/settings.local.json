@@ -187,7 +187,8 @@
       "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token)",
       "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token rotate <<< \"n\")",
       "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token path)",
-      "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token bogus)"
+      "Bash(TAPBOX_TOKEN_FILE=/tmp/tokdemo/api-token ./tokdemo/tapbox-token bogus)",
+      "Bash(git rm *)"
     ]
   }
 }

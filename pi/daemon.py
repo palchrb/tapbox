@@ -2230,9 +2230,7 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("name"):
                     args.append(str(body["name"]))
                 resume = _bt_quiesce()
-                prev_mac = _configured_bt_mac()
                 r = bt_action(args, timeout=120)
-                _go_swap_restart(prev_mac)  # a fresh pair swaps the MAC too
                 _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
@@ -2261,7 +2259,6 @@ class Handler(BaseHTTPRequestHandler):
                 cmd = {"/bt/connect": "use", "/bt/forget": "forget",
                        "/bt/disconnect": "disconnect"}[self.path]
                 resume = _bt_quiesce() if cmd == "use" else False
-                prev_mac = _configured_bt_mac()
                 # 240s, not 90: connect can legitimately run a full
                 # firmware recover() (two re-attach rounds + rfkill
                 # power-cycle) — a 90s SIGKILL could land BETWEEN
@@ -2269,7 +2266,6 @@ class Handler(BaseHTTPRequestHandler):
                 # for good (review 2026-07-18 R6)
                 r = bt_action([cmd, mac], timeout=240 if cmd == "use" else 30)
                 if cmd == "use":
-                    _go_swap_restart(prev_mac)  # BEFORE the resume plays
                     _bt_resume(resume)
                 self._send(409 if r is None else 200,
                            r or {"error": "bt operation already in progress"})
@@ -2526,51 +2522,6 @@ def _clean_bt_name(raw):
     the screen: drop control/non-printable chars, collapse to a single
     line, cap the length. Blank (after cleaning) clears the alias."""
     return "".join(c for c in str(raw or "") if c.isprintable())[:64].strip()
-
-
-def _configured_bt_mac():
-    try:
-        with open(_bt.MAC_FILE) as f:
-            return f.read().strip().upper()
-    except OSError:
-        return ""
-
-
-def _go_swap_restart(prev_mac):
-    """After a SPEAKER SWAP (a different MAC behind tapbox_bt), a live
-    output reopen cannot work: the running go-librespot resolves
-    tapbox_bt through its process-cached ALSA config, which still names
-    the OLD device. Field 2026-07-27 17:12-17:15 (Skoda -> JBL): every
-    open after the swap tried the departed car's MAC ('PCM not found',
-    'No such device'), leaving the box SILENT on every output until the
-    process restarted. So: MAC changed => restart go-librespot, which
-    re-reads asound.conf. Same-device transitions (crash heal, blip,
-    bt<->local toggles) never enter here and keep the cheap live reopen.
-    The bookmark + _bt_resume make the restart seamless.
-
-    STOPGAP — REMOVE when the fork fixes reopen_output: the real fix is
-    the fork refreshing its cached ALSA config (snd_config_update_free_
-    global) before reopening, which makes the live reopen correct across
-    MAC changes too. This guard deliberately walks back v0.0.7's
-    no-restart property for the ONE case where the live reopen provably
-    cannot work today; once the fork re-resolves the alias
-    (snd_config_update_free_global in setupPcm — branch
-    claude/go-librespot-alsa-config-refresh, lands as v0.1.5), delete
-    this and let every transition take the live path. (Correction from
-    the fork side: the false success was NOT a lazy open — setupPcm
-    negotiates hw_params immediately; it succeeded because the stale
-    config resolved to the still-PAIRED old device, so the negotiation
-    ran against the wrong peer.)"""
-    new_mac = _configured_bt_mac()
-    if not new_mac or new_mac == prev_mac:
-        return
-    log(f"speaker swapped ({prev_mac or 'none'} -> {new_mac}) — restarting "
-        "go-librespot (its cached ALSA config still names the old one)")
-    try:
-        subprocess.run(["systemctl", "restart", "go-librespot"], timeout=30)
-        _note_go_restart()
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log(f"go-librespot restart failed: {e!r}")
 
 
 def _bt_quiesce():
