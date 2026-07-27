@@ -6,6 +6,49 @@ kostnad/risiko, anbefaling.
 
 ---
 
+## Stabile per-høyttaler PCM-navn (i stedet for ett omdefinert alias)
+
+**Hva:** Én uforanderlig ALSA-blokk per paret høyttaler
+(`pcm.tapbox_bt_2cfdb35b1cba` osv.) i stedet for dagens ene `tapbox_bt`
+som får definisjonen sin omskrevet ved hvert bytte. Å bytte høyttaler =
+åpne et annet *navn*, ikke endre hva et navn betyr. `tapbox_bt` kan bestå
+som kompat-alias.
+
+**Hvorfor:** Dagens mønster koder «hvilken høyttaler» som global,
+muterbar tilstand — det var det som ga stillhets-buggen 2026-07-27
+(prosess-cachet ALSA-konfig løste `tapbox_bt` til den forlatte bilens
+MAC; total stillhet til manuell restart). Fork-fiksen
+(snd_config_update_free_global i setupPcm, v0.1.5) reparerer symptomet,
+men med stabile navn blir stale-oppløsning *strukturelt* umulig, to
+prosesser kan aldri være uenige om hva som gjelder, og bytter mellom
+kjente enheter virker på hvilken som helst binær — ekte
+belt-and-suspenders. Foreslått av librespot-fork-agenten; enig.
+
+**Hvordan (designkravet som avgjør om det virker):** Blokkene må
+akkumuleres **ved paring**, ikke ved bytte. Et navn som legges til i
+asound.conf etter at go-librespot startet finnes ikke i prosessens
+config-snapshot — å åpne det ukjente navnet feiler like hardt som
+stale-aliaset. Skrevet ved paring ligger alle kjente høyttalere i
+boot-snapshotet, og bytte mellom dem trenger aldri refresh; kun
+første-gangs-paring av en helt ny enhet trenger restart/refresh (og
+paring er uansett en tung, sjelden flyt). `forget` prunser blokken.
+
+**Berører:** `bt.py` (rewrite → akkumulering + prune), `output.py`
+(pcm-navn per MAC), OUT_FILE-konsumentene, btwatchd-announce,
+mpv-retargeting (`alsa/<navn>`), testene deres.
+
+**Kostnad/risiko:** Middels — det er nøyaktig rørleggingen som nettopp
+har vært gjennom stillhets-bug + swap-guard + fork-fiks. Å endre
+arkitekturen der før v0.1.5-tilstanden er felt-verifisert blander to
+eksperimenter: er noe stille i bilen etterpå, vet vi ikke hvilken
+endring som gjorde det.
+
+**Anbefaling:** Gjør det — men først etter at v0.1.5 er ute, swap-guarden
+er slettet og Skoda↔JBL-bytte er verifisert i felt noen dager (ny MAC i
+`Getting BlueALSA PCM`-loggen uten restart). Da som egen, rolig endring.
+
+---
+
 ## ✅ Rename BT-enheter fra PWA-en — LEVERT (bygget via Alias, som foreslått)
 
 Bygget: `POST /bt/rename {mac, name}` → `bt.py rename` → `btbus.set_alias`
