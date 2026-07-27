@@ -111,8 +111,8 @@ print("6. capture-wide histograms + active-span rate OK")
 #    AND a per-crash delta — the prime suspect once the pre-mpris
 #    capture crashed at a calm 2 PDU/s (2026-07-27)
 assert "link-policy events" in out
-assert "EVT Mode Change" in out
-assert "last link-policy event 8.0s before: EVT Mode Change" in out
-print("7. link-policy timeline + per-crash delta OK")
+assert "EVT Mode Change -> Sniff" in out, "direction must be extracted"
+assert "last link-policy event 8.0s before: EVT Mode Change -> Sniff" in out
+print("7. link-policy timeline + direction + per-crash delta OK")
 
 print("all snoop_digest checks passed")

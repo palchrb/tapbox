@@ -86,6 +86,17 @@ def classify(hdr, sublines):
         if m:
             tag = (tag[0], f"{tag[1]} -> {m.group(1)}")
             break
+    # role/mode direction is THE question for link-policy events: who
+    # ended up master matters more than that a switch happened (field
+    # 2026-07-27: the Skoda role-switches at connect; the crash story
+    # hinges on which role the chip then streams in)
+    if tag[0] == "event" and tag[1].startswith(("EVT Role Change",
+                                                "EVT Mode Change")):
+        for ln in sublines:
+            m = re.search(r"\b(Role|Mode):\s+([A-Za-z]+)", ln)
+            if m:
+                tag = (tag[0], f"{tag[1]} -> {m.group(2)}")
+                break
     return (direction, tag[0], tag[1])
 
 
