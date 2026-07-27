@@ -787,6 +787,10 @@ install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || tru
 # (hci_reset_dev), so dmesg alone can't tell chip-fault from link-fault.
 # Enable during a crash hunt: sudo systemctl enable --now tapbox-btsnoop
 install_if_changed 755 "$SCRIPT_DIR/btsnoop.sh" /usr/local/bin/tapbox-btsnoop || true
+# ...and the analysis half: per-crash control-plane digest of a captured
+# ring segment (what was on the air before each Hardware Error):
+#   tapbox-snoop-digest ~/20260727-200749.snoop
+install_if_changed 755 "$SCRIPT_DIR/snoopdigest.py" /usr/local/bin/tapbox-snoop-digest || true
 write_if_changed /etc/systemd/system/tapbox-btsnoop.service <<'EOF' || true
 [Unit]
 Description=TapBox btsnoop ring (BT crash diagnosis, RAM-only)
