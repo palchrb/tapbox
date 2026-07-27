@@ -2553,8 +2553,14 @@ def _go_swap_restart(prev_mac):
     global) before reopening, which makes the live reopen correct across
     MAC changes too. This guard deliberately walks back v0.0.7's
     no-restart property for the ONE case where the live reopen provably
-    cannot work today; once the fork re-resolves the alias, delete this
-    and let every transition take the live path."""
+    cannot work today; once the fork re-resolves the alias
+    (snd_config_update_free_global in setupPcm — branch
+    claude/go-librespot-alsa-config-refresh, lands as v0.1.5), delete
+    this and let every transition take the live path. (Correction from
+    the fork side: the false success was NOT a lazy open — setupPcm
+    negotiates hw_params immediately; it succeeded because the stale
+    config resolved to the still-PAIRED old device, so the negotiation
+    ran against the wrong peer.)"""
     new_mac = _configured_bt_mac()
     if not new_mac or new_mac == prev_mac:
         return
