@@ -522,6 +522,27 @@ chmod 755 /usr/local/bin/tapbox-bt-reconnect-poll
 rm -f /usr/local/bin/tapbox-bt-reconnect
 
 install_if_changed 755 "$SCRIPT_DIR/btwatchd.py" /usr/local/bin/tapbox-btwatchd && RECON_CHANGED=1
+MPRIS_CHANGED=0
+install_if_changed 755 "$SCRIPT_DIR/mpris.py" /usr/local/bin/tapbox-mpris && MPRIS_CHANGED=1
+# AVRCP media player: answers the head unit's player polling (which
+# otherwise runs an endless Invalid-Player-ID error loop DURING live
+# A2DP — the known channel-ops-while-streaming crasher on this chip),
+# shows title/artist on the car display, and routes the car's transport
+# buttons to the daemon's idempotent endpoints.
+write_if_changed /etc/systemd/system/tapbox-mpris.service <<'EOF' && MPRIS_CHANGED=1
+[Unit]
+Description=TapBox AVRCP media player (bluez MPRIS bridge)
+After=bluetooth.service tapbox-daemon.service
+Wants=bluetooth.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-mpris
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
 write_if_changed /etc/systemd/system/tapbox-bt-reconnect.service <<'EOF' && RECON_CHANGED=1
 [Unit]
 Description=TapBox BT reconnect daemon (event-driven, btwatchd)
@@ -935,7 +956,7 @@ echo "==> [6/8] Enabling services (restarting only what changed)..."
 chmod 644 /etc/systemd/system/tapbox-*.service \
   /etc/systemd/system/go-librespot.service 2>/dev/null || true
 systemctl daemon-reload
-systemctl enable --now go-librespot.service tapbox-bt-reconnect.service \
+systemctl enable --now go-librespot.service tapbox-bt-reconnect.service tapbox-mpris.service \
   tapbox-buttons.service tapbox-daemon.service tapbox-idle.service
 # One-time migration: earlier installs enabled tapbox-rfid before the PN532
 # existed. Switch it to the same opt-in contract as tapbox-ui — but only
@@ -950,6 +971,7 @@ if [[ ! -f /var/lib/tapbox/.rfid-opt-in ]]; then
 fi
 [[ $GO_CHANGED -eq 1 || ${GO_RESTART_NEEDED:-0} -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
+[[ ${MPRIS_CHANGED:-0} -eq 1 ]] && { echo "    mpris bridge changed — restarting"; systemctl restart tapbox-mpris.service; }
 [[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart tapbox-idle.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null \
   && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
