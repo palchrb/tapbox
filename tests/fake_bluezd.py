@@ -383,6 +383,11 @@ class Mock(dbus.service.Object):
         # 'ok' | 'already-connected' | 'failed'
         DEVICES[str(mac).upper()]["connect_result"] = str(result)
 
+    @dbus.service.method("org.tapbox.Mock", in_signature="ss")
+    def SetUuids(self, mac, uuids):
+        # space-separated profile UUIDs (adopt checks for Audio Sink)
+        DEVICES[str(mac).upper()]["uuids"] = str(uuids).split()
+
     @dbus.service.method("org.tapbox.Mock", in_signature="s",
                          out_signature="b")
     def GetTrusted(self, mac):

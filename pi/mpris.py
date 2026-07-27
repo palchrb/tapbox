@@ -84,7 +84,11 @@ COMMANDS = {
 
 
 def status_to_props(st):
-    """tapboxd /status -> MPRIS player properties (what BlueZ parses)."""
+    """tapboxd /status -> MPRIS player properties (what BlueZ parses).
+    Position is None when /status carried no position — that means
+    UNKNOWN (mpv's IPC socket answers get_property with nothing while
+    it's busy), never 0. Callers run the result through carry_position()
+    before storing/emitting it."""
     title = st.get("title")
     playing = bool(st.get("playing"))
     status = "Playing" if playing else ("Paused" if title else "Stopped")
@@ -101,26 +105,46 @@ def status_to_props(st):
             meta["xesam:artist"] = [str(st["collection"])]
         if st.get("duration"):
             meta["mpris:length"] = int(float(st["duration"]) * 1_000_000)
+    pos = st.get("position")
     return {
         "PlaybackStatus": status,
-        "Position": int(float(st.get("position") or 0) * 1_000_000),
+        "Position": None if pos is None else int(float(pos) * 1_000_000),
         "Metadata": meta,
         "CanPlay": True, "CanPause": True, "CanGoNext": True,
         "CanGoPrevious": True, "CanControl": True,
     }
 
 
+def carry_position(old, new):
+    """Fill an UNKNOWN position with the previous one, extrapolated
+    while playing. Treating a positionless poll as 0 made every IPC
+    hiccup look like a seek-to-start: the car's progress bar slammed to
+    0:00 (remaining = full length) and back on alternating polls (field
+    2026-07-27, Skoda display)."""
+    if new.get("Position") is not None:
+        return new
+    base = (old or {}).get("Position") or 0
+    if old and old.get("PlaybackStatus") == "Playing" \
+            and new.get("PlaybackStatus") == "Playing":
+        base += int(POLL_S * 1_000_000)
+    out = dict(new)
+    out["Position"] = base
+    return out
+
+
 def props_changed(old, new):
     """The keys worth signalling: track/status always; position only when
     it jumped off the extrapolation (a seek/track change), because BlueZ
     extrapolates steady playback by itself."""
+    if new.get("Position") is None:  # direct callers may skip the carry
+        new = carry_position(old, new)
     if old is None:
         return dict(new)
     out = {}
     for k in ("PlaybackStatus", "Metadata"):
         if new[k] != old[k]:
             out[k] = new[k]
-    expect = old["Position"]
+    expect = old["Position"] or 0
     if old["PlaybackStatus"] == "Playing":
         expect += int(POLL_S * 1_000_000)
     if abs(new["Position"] - expect) > SEEK_JUMP_S * 1_000_000 or out:
@@ -166,7 +190,7 @@ def main():
     class Player(dbus.service.Object):
         def __init__(self):
             super().__init__(bus, PLAYER_PATH)
-            self.props = status_to_props({})
+            self.props = carry_position(None, status_to_props({}))
 
         # --- org.freedesktop.DBus.Properties ---
         @dbus.service.method("org.freedesktop.DBus.Properties",
@@ -250,7 +274,7 @@ def main():
             st = get_status()
         except (OSError, ValueError):
             return True  # daemon busy/restarting — keep the last state
-        new = status_to_props(st)
+        new = carry_position(player.props, status_to_props(st))
         changed = props_changed(player.props, new)
         player.props = new
         if changed and registered["ok"]:

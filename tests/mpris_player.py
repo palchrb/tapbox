@@ -103,6 +103,23 @@ assert changed["Metadata"]["xesam:title"] == "Neste sang"
 assert "Position" in changed
 print("3c. track change emits Metadata + Position OK")
 
+# 3e. a poll with NO position (mpv's shared IPC socket answered nothing)
+#     is UNKNOWN, not a seek to 0:00 — it must carry the old position
+#     forward (extrapolated while playing) and emit NOTHING. Without
+#     this, the car's progress bar slammed to 0:00/full-remaining and
+#     back on alternating polls (field 2026-07-27).
+none_st = dict(st, position=None)
+raw = mpris.status_to_props(none_st)
+assert raw["Position"] is None, "missing position must stay None, not 0"
+carried = mpris.carry_position(old, raw)
+assert carried["Position"] == old["Position"] + int(mpris.POLL_S * 1_000_000)
+assert mpris.props_changed(old, carried) == {}, \
+    "an IPC hiccup must not emit a phantom seek"
+# props_changed called with the raw (uncarried) props must not crash or
+# emit either — belt for direct callers
+assert mpris.props_changed(old, raw) == {}
+print("3e. positionless poll: carried forward, no phantom seek OK")
+
 # 3d. pause/resume emits PlaybackStatus
 paused = dict(st, playing=False)
 changed = mpris.props_changed(old, mpris.status_to_props(paused))

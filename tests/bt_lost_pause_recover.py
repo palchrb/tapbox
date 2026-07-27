@@ -172,4 +172,40 @@ assert RECOVERS == [], "cooldown must gate the retry after a failure"
 assert daemon._BT_HEAL["last"] == before
 print("5d. failed recovery: cooldown kept, retry gated OK")
 
+# 5e. a crash INSIDE the cooldown arms exactly ONE delayed re-probe
+#     (field 2026-07-27 20:09: the third crash of the evening landed in
+#     the 45s success cooldown with nobody pressing play — the
+#     controller looped hardware errors until a manual reboot). The
+#     re-probe re-enters the heal after expiry; a phantom (signature
+#     gone) or a healthy gated call arms nothing.
+RECHECKS = []
+daemon._schedule_heal_recheck = lambda delay: RECHECKS.append(delay)
+daemon._BT_HEAL["recheck"] = False
+daemon._bt._hci_crashed = lambda: True
+daemon._bt_recover = lambda verb: (RECOVERS.append(verb), True)[1]
+daemon._BT_HEAL["last"] = time.monotonic() - 10  # deep inside cooldown
+RECOVERS.clear()
+REAL_HEAL()
+assert RECOVERS == [] and len(RECHECKS) == 1, (RECOVERS, RECHECKS)
+assert daemon._BT_HEAL["recheck"], "the armed flag must be set"
+remaining = daemon.BT_HEAL_COOLDOWN_S - 10
+assert remaining < RECHECKS[0] < remaining + 10, \
+    f"re-probe must land just past cooldown expiry, got {RECHECKS[0]}"
+REAL_HEAL()  # second crash signal while armed
+assert len(RECHECKS) == 1, "re-probes must never stack"
+# the probe fires: flag clears, cooldown expired -> a real recover runs
+daemon._BT_HEAL["recheck"] = False  # what _fire() does first
+daemon._BT_HEAL["last"] = time.monotonic() - daemon.BT_HEAL_COOLDOWN_S - 1
+with daemon._BT_WAIT_LOCK:
+    daemon._BT_WAIT["lost"] = time.monotonic() - 10
+REAL_HEAL()
+assert RECOVERS == ["recover"], RECOVERS
+# a gated call WITHOUT the crash signature must not arm anything
+RECHECKS.clear()
+daemon._bt._hci_crashed = lambda: False
+daemon._BT_HEAL["last"] = time.monotonic() - 10
+REAL_HEAL()
+assert RECHECKS == [], "healthy controller: no re-probe scheduled"
+print("5e. crash inside cooldown: one delayed re-probe, then heals OK")
+
 print("\nall bt_lost_pause_recover checks passed")

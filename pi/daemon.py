@@ -57,8 +57,11 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
                    screen's "disconnected" choice popup
   POST /bt/visible {"secs"?} — incoming pairing mode: the box becomes
                    discoverable for ~2 min and accepts a pairing started
-                   FROM a car/head unit; the new bond shows up in GET /bt
-                   for the parent to pick as speaker (never auto-adopted)
+                   FROM a car/head unit; the new bond shows up in GET /bt.
+                   Once BONDED, a device that connects itself while the
+                   configured speaker is absent is auto-adopted as the
+                   active speaker (btwatchd follow-the-connector, owner
+                   request 2026-07-27) — an unbonded device never is
   POST /bt/connect {"mac"}  — connect a speaker; pairs first when the mac
                    is new (picked from a scan), routes audio to it
   POST /bt/forget  {"mac"}  — drop the bond (permanent)
@@ -2713,8 +2716,22 @@ def _heal_crashed_controller():
     if not _BT_HEAL["lock"].acquire(blocking=False):
         return  # a recovery is already running
     try:
-        if time.monotonic() - _BT_HEAL["last"] < BT_HEAL_COOLDOWN_S:
-            return  # recently tried — a wedge needing a power cycle
+        wait = BT_HEAL_COOLDOWN_S - (time.monotonic() - _BT_HEAL["last"])
+        if wait > 0:
+            # Inside the cooldown. A real crash landing here used to be
+            # dropped on the floor: field 2026-07-27 20:09, the third
+            # crash of the evening hit 27s after a clean heal (still in
+            # the 45s success cooldown), nobody pressed play again, and
+            # the controller looped hardware errors until a manual
+            # reboot. Arm exactly ONE delayed re-probe for cooldown
+            # expiry; it re-runs this function, which re-checks all of
+            # it (signature gone by then = quiet no-op).
+            if not _BT_HEAL.get("recheck") and _bt._hci_crashed():
+                _BT_HEAL["recheck"] = True
+                log(f"bt heal: crash inside the cooldown — re-probing in "
+                    f"{int(wait) + 5}s")
+                _schedule_heal_recheck(wait + 5)
+            return
         if not _bt._hci_crashed():
             return  # plain speaker-away: btwatchd's job, not ours
         _BT_HEAL["last"] = time.monotonic()
@@ -2751,6 +2768,17 @@ def _heal_crashed_controller():
         log(f"bt heal error: {e!r}")
     finally:
         _BT_HEAL["lock"].release()
+
+
+def _schedule_heal_recheck(delay):
+    """One delayed re-entry into _heal_crashed_controller (separated so
+    the test gate can stub the timer)."""
+    def _fire():
+        _BT_HEAL["recheck"] = False
+        _heal_crashed_controller()
+    t = threading.Timer(delay, _fire)
+    t.daemon = True
+    t.start()
 
 
 # the box screen's speaker popups (field log 2026-07-17: the speaker came

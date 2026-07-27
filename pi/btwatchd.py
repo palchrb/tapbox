@@ -24,6 +24,11 @@ Scope guards (plan §7):
   enforcement (that stays inside bt.py connect(); auto-kicking a
   self-connecting second device from here would need debounce against
   reconnect loops — deliberately not taken on in phase C).
+  One addition since (owner request 2026-07-27): follow-the-connector —
+  a PAIRED audio sink that connects itself while the configured speaker
+  is ABSENT is adopted as the active speaker (via tapboxd /bt/connect,
+  which owns routing). Detection lives here because this daemon already
+  watches every Device1 signal; the switch itself still runs in bt.py.
 - Cross-process flock (LOCK_NB) before Connect: when bt.py owns the
   radio (pairing, switching) we skip; a signal or timer retries soon.
 - bluez restart (NameOwnerChanged) re-enters the BOOT fast window, so
@@ -36,6 +41,7 @@ exec's the old bash poll loop (installed as tapbox-bt-reconnect-poll).
 import os
 import subprocess
 import sys
+import threading
 import time
 
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -116,6 +122,17 @@ WIFI_GATE_S = float(os.environ.get("TAPBOX_RECON_WIFI_GATE", "45"))
 # ~4 failed boot pages = the speaker is off; the 5s boot cadence would
 # otherwise burn ~24 pages against nothing, exactly while wifi comes up
 BOOT_FAIL_LIMIT = int(os.environ.get("TAPBOX_RECON_BOOT_FAILS", "4"))
+# Follow-the-connector (field 2026-07-27): the Skoda head unit paged US
+# and brought up AVRCP while the box still pointed at the JBL sitting at
+# home — metadata flowed to the car's display, audio kept opening the
+# JBL's dead PCM. A paired audio sink connecting itself IS user intent
+# (ignition on, headset power button); when the configured speaker is
+# absent, adopt the connector. The confirm delay lets a manual switch
+# in progress win the race (bt.py connects first, writes the MAC file
+# after) so adoption becomes a no-op instead of a duplicate connect.
+ADOPT_CONFIRM_S = float(os.environ.get("TAPBOX_RECON_ADOPT_CONFIRM", "3"))
+ADOPT_DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_ADOPT_DEBOUNCE", "60"))
+AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
 
 BLUEZ = "org.bluez"
 ADAPTER_PATH = "/org/bluez/hci0"
@@ -152,6 +169,7 @@ class Reconnector:
         self._nudged = False         # one A2DP nudge per steady period
         self.boot_fails = 0          # real page failures this boot window
         self._yield_logged = False   # log the first radio-yield only
+        self.adopt_seen = {}         # mac -> monotonic of last adopt look
 
     # --- bus plumbing ------------------------------------------------------
 
@@ -202,6 +220,11 @@ class Reconnector:
                 # RSSI etc. — evidence the device is nearby right now
                 self.backoff = BACKOFF_MIN_S
                 self.attempt("target seen", debounce=True)
+        elif (str(iface) == "org.bluez.Device1" and changed.get("Connected")
+                and str(path).startswith(ADAPTER_PATH + "/dev_")):
+            # a device we did NOT page connected (they page us) and it is
+            # not the target — maybe follow it (see ADOPT_* above)
+            self._inbound_connected(str(path))
 
     def _ifaces_added(self, path, _ifaces):
         if self.target and str(path) == dev_path(self.target):
@@ -444,6 +467,62 @@ class Reconnector:
         except Exception as e:
             log(f"lost-notify failed ({e.__class__.__name__}) — "
                 "the output fallback remains the backstop")
+
+    # --- follow-the-connector (adopt) ----------------------------------------
+
+    def _inbound_connected(self, path):
+        """A non-target device's Connected flipped true. Debounce per
+        mac, then confirm after a short delay off the signal path."""
+        mac = path.rsplit("/dev_", 1)[-1].replace("_", ":").upper()
+        if len(mac) != 17 or mac == self.target:
+            return
+        now = time.monotonic()
+        last = self.adopt_seen.get(mac)
+        if last is not None and now - last < ADOPT_DEBOUNCE_S:
+            return
+        self.adopt_seen[mac] = now
+        GLib.timeout_add(int(ADOPT_CONFIRM_S * 1000),
+                         self._adopt_confirm, mac)
+
+    def _adopt_confirm(self, mac):
+        if mac == (read_target() or self.target):
+            return False  # a manual switch already landed here — no-op
+        props = self._dev_props(mac)
+        uuids = [str(u).lower() for u in (props or {}).get("UUIDs") or []]
+        if (not props or not props.get("Paired")
+                or not props.get("Connected")
+                or AUDIO_SINK_UUID not in uuids):
+            return False  # gone again / not bonded / not a speaker
+        if self.target and self._connected():
+            # the configured speaker is ALIVE — it keeps the audio. The
+            # Skoda connects itself whenever the ignition turns while a
+            # kid listens on the headset in the back seat; stealing the
+            # stream onto the car's speakers then would be the new bug.
+            return False
+        log(f"paired speaker {mac} connected by itself while "
+            f"{self.target or 'no speaker'} is away — adopting it")
+        threading.Thread(target=self._adopt_post, args=(mac,),
+                         daemon=True).start()
+        return False  # one-shot timer
+
+    def _adopt_post(self, mac):
+        """tapboxd owns the switch (quiesce, alias rewrite, resume) —
+        same path as picking the speaker in the PWA. Off the GLib loop:
+        /bt/connect legitimately runs for minutes when it heals."""
+        try:
+            boxapi.post("/bt/connect", {"mac": mac}, timeout=250)
+        except Exception as e:
+            log(f"adopt of {mac} failed ({e.__class__.__name__}) — "
+                "target unchanged")
+
+    def _dev_props(self, mac):
+        try:
+            p = dbus.Interface(
+                self.bus.get_object(BLUEZ, dev_path(mac), introspect=False),
+                "org.freedesktop.DBus.Properties")
+            return p.GetAll("org.bluez.Device1", timeout=5)
+        except Exception:
+            return None
 
     # --- the attempt ---------------------------------------------------------
 
