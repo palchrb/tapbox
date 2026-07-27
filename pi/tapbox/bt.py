@@ -135,19 +135,36 @@ def hci_tx_bytes():
 
 def _hci_crashed():
     """Crashed = the controller is down AND the kernel reported the
-    firmware crash recently. The functional check comes first (a running
-    controller is never 'crashed', whatever old log lines say), and the
-    log query is time-bounded to the last two minutes — so a crash from
-    hours ago can't trigger recovery, and an rfkill-blocked or merely
-    powered-down adapter (down, no signature) doesn't either. The log IS
-    the right source: the kernel has no sysfs flag for this event."""
-    if _hci_up():
-        return False
+    firmware crash recently — OR the chip's COMMAND path is timing out
+    even though the interface still says UP.
+
+    The second form is the milder wedge from the field 2026-07-27 21:47:
+    no hardware-error line, adapter flag UP, but `hci0: command 0x0406
+    tx timeout` repeating for over a minute — so no healer fired and
+    reconnection fought br-connection-busy instead of re-probing the
+    firmware. Repeated command timeouts prove unresponsiveness no
+    matter what the UP flag claims: HCI commands are answered by the
+    chip itself, peers can't delay them. `link tx timeout` deliberately
+    does NOT count — that is a peer walking out of range, which the
+    normal reconnect machinery owns.
+
+    The log query is time-bounded to the last two minutes — a crash
+    from hours ago can't trigger recovery, and an rfkill-blocked or
+    merely powered-down adapter (down, no signature) doesn't either.
+    The log IS the right source: the kernel has no sysfs flag for
+    either event. Cost note: this now reads the journal on every probe
+    (the UP fast path can't rule out the command-timeout wedge); one
+    bounded journalctl read per play-press probe, deduped by the
+    healer's lock+cooldown."""
     code, out = _run(["journalctl", "-k", "-S", "-120s", "-o", "cat",
                       "--no-pager"], timeout=10)
     if code != 0 or not out.strip():
         _c, out = _run(["dmesg"], timeout=10)  # fallback: journal missing
         out = "\n".join(out.splitlines()[-80:])
+    if len(re.findall(r"command 0x[0-9a-f]+ tx timeout", out)) >= 3:
+        return True  # command path dead — UP flag or not
+    if _hci_up():
+        return False
     return "hci0: hardware error" in out or "Opcode 0x0c03 failed" in out
 
 

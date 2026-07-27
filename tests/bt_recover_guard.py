@@ -146,6 +146,40 @@ assert any("Restart=on-failure" in b for b in blocks), \
     "install.sh must drop Restart=on-failure into bluetooth.service"
 print("4. install.sh installs the bluetoothd on-failure restart drop-in OK")
 
+# 5. crash-signature detection (field 2026-07-27 21:47): a chip whose
+# COMMAND path times out counts as crashed even with the UP flag set;
+# link tx timeouts alone (peer out of range) never do; the hard
+# hardware-error signature still requires the controller to be down.
+DEGRADED = ("Bluetooth: hci0: link tx timeout\n"
+            "Bluetooth: hci0: killing stalled connection b4:ec:02:4f:36:7c\n"
+            "Bluetooth: hci0: command 0x0406 tx timeout\n"
+            "Bluetooth: hci0: command 0x0406 tx timeout\n"
+            "Bluetooth: hci0: command 0x0c03 tx timeout\n")
+RANGE_LOSS = ("Bluetooth: hci0: link tx timeout\n" * 3
+              + "Bluetooth: hci0: killing stalled connection aa:bb\n")
+HARD = "Bluetooth: hci0: hardware error 0x00\n"
+real_run, real_up = bt_mod._run, bt_mod._hci_up
+try:
+    bt_mod._hci_up = lambda: True
+    bt_mod._run = lambda cmd, timeout=30: (0, DEGRADED)
+    assert bt_mod._hci_crashed(), \
+        "3+ command tx timeouts = crashed, UP flag notwithstanding"
+    bt_mod._run = lambda cmd, timeout=30: (0, RANGE_LOSS)
+    assert not bt_mod._hci_crashed(), \
+        "link tx timeouts alone are a peer out of range, not a crash"
+    bt_mod._run = lambda cmd, timeout=30: (0, HARD)
+    assert not bt_mod._hci_crashed(), \
+        "hardware-error signature with the controller UP is stale log"
+    bt_mod._hci_up = lambda: False
+    assert bt_mod._hci_crashed(), "down + hardware error = crashed"
+    bt_mod._run = lambda cmd, timeout=30: (0, "")
+    assert not bt_mod._hci_crashed(), \
+        "down with no signature = rfkill/powered-down, not a crash"
+finally:
+    bt_mod._run, bt_mod._hci_up = real_run, real_up
+print("5. crash signatures: command-timeout wedge detected, range loss "
+      "and stale logs ignored OK")
+
 print("BT RECOVER GUARD OK — the radio can't be stranded blocked, the "
       "connect endpoint outlives a full recovery, and a crashed "
       "bluetoothd restarts itself.")
