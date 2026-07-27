@@ -133,6 +133,15 @@ BOOT_FAIL_LIMIT = int(os.environ.get("TAPBOX_RECON_BOOT_FAILS", "4"))
 ADOPT_CONFIRM_S = float(os.environ.get("TAPBOX_RECON_ADOPT_CONFIRM", "3"))
 ADOPT_DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_ADOPT_DEBOUNCE", "60"))
 AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
+# When the target IS alive, a second audio sink connecting itself is not
+# adopted — and not left parked either: a parallel ACL with the Skoda's
+# AVRCP polling on it during live A2DP is exactly the channel-ops-while-
+# streaming dose this chip's firmware crashes under (owner 2026-07-27:
+# never car + headset connected at once). Disconnect the newcomer ONCE;
+# if it pages right back (some head units retry hard) let it park — a
+# quiet parked link beats fighting a reconnect loop with page storms.
+# The kick memory decays, so a fresh trip hours later gets a fresh kick.
+KICK_RETRY_S = float(os.environ.get("TAPBOX_RECON_KICK_RETRY", "3600"))
 
 BLUEZ = "org.bluez"
 ADAPTER_PATH = "/org/bluez/hci0"
@@ -170,6 +179,7 @@ class Reconnector:
         self.boot_fails = 0          # real page failures this boot window
         self._yield_logged = False   # log the first radio-yield only
         self.adopt_seen = {}         # mac -> monotonic of last adopt look
+        self.kicked = {}             # mac -> monotonic of last polite kick
 
     # --- bus plumbing ------------------------------------------------------
 
@@ -494,10 +504,18 @@ class Reconnector:
                 or AUDIO_SINK_UUID not in uuids):
             return False  # gone again / not bonded / not a speaker
         if self.target and self._connected():
-            # the configured speaker is ALIVE — it keeps the audio. The
+            # The configured speaker is ALIVE — it keeps the audio. The
             # Skoda connects itself whenever the ignition turns while a
             # kid listens on the headset in the back seat; stealing the
             # stream onto the car's speakers then would be the new bug.
+            # But don't leave the newcomer parked next to the live link
+            # either — one polite kick per KICK_RETRY_S (see above).
+            last = self.kicked.get(mac)
+            if last is None or time.monotonic() - last > KICK_RETRY_S:
+                self.kicked[mac] = time.monotonic()
+                log(f"{mac} connected while {self.target} is active — "
+                    "disconnecting it (one link at a time)")
+                self._kick(mac)
             return False
         log(f"paired speaker {mac} connected by itself while "
             f"{self.target or 'no speaker'} is away — adopting it")
@@ -523,6 +541,23 @@ class Reconnector:
             return p.GetAll("org.bluez.Device1", timeout=5)
         except Exception:
             return None
+
+    def _kick(self, mac):
+        """Async Disconnect of a non-target device — a hangup on an
+        existing ACL, not a page, so no radio flock needed. Failure is
+        fine: the link we tried to drop just stays parked."""
+        try:
+            dev = dbus.Interface(
+                self.bus.get_object(BLUEZ, dev_path(mac), introspect=False),
+                "org.bluez.Device1")
+            dev.Disconnect(
+                reply_handler=lambda: None,
+                error_handler=lambda e: log(
+                    f"kick of {mac} failed "
+                    f"({getattr(e, 'get_dbus_name', lambda: e)()})"),
+                timeout=CONNECT_TIMEOUT_S)
+        except Exception as e:
+            log(f"kick of {mac} failed ({e.__class__.__name__})")
 
     # --- the attempt ---------------------------------------------------------
 

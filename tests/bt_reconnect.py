@@ -173,20 +173,26 @@ def main():
                  lambda: mock().GetConnected(JR), timeout=6)
         print("5. flock deference OK")
 
-        # 6a: the car pages us while the TARGET IS ALIVE -> no adoption
-        # (the Skoda connects itself on ignition even when the kid is on
-        # the headset in the back seat — stealing the stream would be
-        # the new bug). Also: a paired device WITHOUT the audio-sink
-        # profile (a phone) never adopts, target alive or not.
+        # 6a: the car pages us while the TARGET IS ALIVE -> no adoption,
+        # and the newcomer's parallel link is politely KICKED (owner
+        # 2026-07-27: never car + headset connected at once — a second
+        # ACL carrying AVRCP polls during live A2DP is the crash dose).
+        # A paired device WITHOUT the audio-sink profile (a phone) is
+        # neither adopted nor kicked.
         adopts = lambda: [p for p in POSTS if p[0] == "/bt/connect"]  # noqa: E731
         mock().AddDevice(CAR, "Skoda BT 4441", True, False, 0)
         mock().SetUuids(CAR, SINK_UUID)
         mock().AddDevice(PHONE, "Parent Phone", True, False, 0)
         mock().SetConnected(CAR, True)
         mock().SetConnected(PHONE, True)
-        time.sleep(1.5)  # confirm delay is 0.5s — give it slack
+        wait_for("polite kick of the second sink",
+                 lambda: not mock().GetConnected(CAR), timeout=6)
+        time.sleep(1)  # give a would-be adopt POST time to appear
         assert not adopts(), f"must not adopt: {POSTS}"
-        print("6a. target alive / non-sink device: no adoption OK")
+        assert mock().GetConnected(PHONE), "a phone must be left alone"
+        assert mock().GetConnected(JR), "the target must stay connected"
+        print("6a. target alive: second sink kicked, no adoption, "
+              "phone untouched OK")
 
         # 6b: the target is genuinely away (pages fail) and the car
         # re-pages us -> adopted via POST /bt/connect
