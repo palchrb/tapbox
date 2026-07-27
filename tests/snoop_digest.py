@@ -56,6 +56,11 @@ SAMPLE = """\
 > HCI Event: Hardware Error (0x10) plen 1                #13 [hci0] 23.000040
 > HCI Event: Hardware Error (0x10) plen 1                #14 [hci0] 23.000090
 < HCI Command: Reset (0x03|0x0003) plen 0                #15 [hci0] 25.000000
+> HCI Event: Hardware Error (0x10) plen 1                #16 [hci0] 25.500000
+< HCI Command: Reset (0x03|0x0003) plen 0                #17 [hci0] 27.000000
+> HCI Event: Hardware Error (0x10) plen 1                #18 [hci0] 27.500000
+< HCI Command: Reset (0x03|0x0003) plen 0                #19 [hci0] 29.000000
+> HCI Event: Hardware Error (0x10) plen 1                #20 [hci0] 29.500000
 """
 
 buf = io.StringIO()
@@ -64,12 +69,14 @@ with redirect_stdout(buf):
 out = buf.getvalue()
 print(out)
 
-# 1. one anchor from the three-event µs burst, burst size reported
-assert "1 Hardware Error" not in out.split("\n")[0], \
-    "three chip events must all be counted in the header"
-assert "3 Hardware Error" in out.split("\n")[0], out.split("\n")[0]
+# 1. the µs burst collapses to one anchor (size kept), and the kernel's
+#    reset-loop cascade collapses to ONE context block — 27 loop anchors
+#    drowned the real crashes in the 2026-07-27 wedge capture
+assert "6 Hardware Error" in out.split("\n")[0], out.split("\n")[0]
 assert "3 error events in the burst" in out
-print("1. burst collapsed to one anchor, size kept OK")
+assert out.count("-- crash at") == 1, "cascade must not get own blocks"
+assert "DEATH LOOP: 3 more" in out
+print("1. burst + reset-loop cascade collapsed to one anchor OK")
 
 # 2. AVDTP churn attributed: last op is the Start at 11.0s, crash 23.0s
 assert "last AVDTP op 12.0s before the crash: AVDTP Start Command" in out
@@ -89,9 +96,10 @@ tail = out[out.index("last 30 control packets"):]
 assert "PSM 25" not in tail and "dlen 400" not in tail
 print("5. audio + NOCP noise skipped OK")
 
-# 6. histograms present: AVRCP mix and rate line
-assert "AVRCP rate:" in out and "AVRCP GetPlayStatus" in out
+# 6. histograms present: AVRCP mix and the ACTIVE-span rate (a capture
+#    idling long before the peer connects must not dilute the rate)
+assert "s active = " in out and "AVRCP GetPlayStatus" in out
 assert "CMD Reset" in out
-print("6. capture-wide histograms OK")
+print("6. capture-wide histograms + active-span rate OK")
 
 print("all snoop_digest checks passed")

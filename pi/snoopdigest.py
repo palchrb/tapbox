@@ -127,7 +127,13 @@ def digest(name, lines):
 
     avrcp = [p for p in packets if p[2] == "avrcp"]
     avdtp = [p for p in packets if p[2] == "avdtp"]
-    print(f"   AVRCP rate: {len(avrcp) / span:.2f}/s over the capture")
+    if avrcp:
+        # rate over the span AVRCP actually flowed (a capture that ran
+        # for 20min before the peer connected would dilute it 10x —
+        # field 2026-07-27: the boot capture's real rate was ~41/s)
+        aspan = max(avrcp[-1][0] - avrcp[0][0], 1.0)
+        print(f"   AVRCP: {len(avrcp)} PDUs over {aspan:.0f}s active "
+              f"= {len(avrcp) / aspan:.2f}/s")
     for tag, n in hist([p[3] for p in avrcp])[:8]:
         print(f"     {n:5d}  {tag}")
     if avdtp:
@@ -139,17 +145,37 @@ def digest(name, lines):
                         if p[2] in ("cmd", "l2cap")])[:6]:
         print(f"     {n:5d}  {tag}")
 
-    # collapse a µs-burst of Hardware Errors into one anchor
+    # collapse a µs-burst of Hardware Errors into one anchor...
     anchors = []
     for ts in crashes:
         if not anchors or ts - anchors[-1][0] > 1.0:
             anchors.append([ts, 1])
         else:
             anchors[-1][1] += 1
-    for ts, burst in anchors:
+    # ...and a reset-loop cascade into one block: once the chip wedges,
+    # the kernel retries HCI Reset every ~2s, each timeout re-injects a
+    # Hardware Error — dozens of anchors that all describe the SAME
+    # death (field 2026-07-27: 27 of them drowned the two real crashes).
+    # Only the first anchor of a tight chain gets full context.
+    clusters, cur = [], None
+    for a in anchors:
+        if cur and a[0] - cur[-1][0] < 6.0:
+            cur.append(a)
+        else:
+            cur = [a]
+            clusters.append(cur)
+    for cluster in clusters:
+        ts, burst = cluster[0]
         print(f"\n   -- crash at {ts - t0:.1f}s"
               + (f" ({burst} error events in the burst)" if burst > 1
                  else ""))
+        if len(cluster) > 1:
+            print(f"      then a DEATH LOOP: {len(cluster) - 1} more "
+                  f"Hardware Errors at ~"
+                  f"{(cluster[-1][0] - ts) / (len(cluster) - 1):.1f}s "
+                  f"intervals until {cluster[-1][0] - t0:.1f}s — the "
+                  "kernel re-injects one per unanswered HCI Reset; the "
+                  "chip's command path is dead (data may still flow)")
         before = [p for p in packets if p[0] < ts and p[2] != "crash"]
         last_churn = next((p for p in reversed(before)
                            if p[2] == "avdtp"), None)
