@@ -48,6 +48,11 @@ SAMPLE = """\
 < ACL Data TX: Handle 11 flags 0x00 dlen 12              #10 [hci0] 11.000000
       Channel: 65 len 8 [PSM 25 mode Basic (0x00) {chan 1}]
       AVDTP: Start (0x07) Command (0x00) type 0x00 label 6 nosp 0
+> HCI Event: Mode Change (0x14) plen 6                   #21 [hci0] 15.000000
+        Status: Success (0x00)
+        Handle: 11
+        Mode: Sniff (0x02)
+        Interval: 800.000 msec (0x0500)
 > ACL Data RX: Handle 11 flags 0x02 dlen 24              #11 [hci0] 19.000000
       Channel: 64 len 20 [PSM 23 mode Basic (0x00) {chan 0}]
       AVCTP Control: Command: type 0x00 label 3 PID 0x110e
@@ -101,5 +106,13 @@ print("5. audio + NOCP noise skipped OK")
 assert "s active = " in out and "AVRCP GetPlayStatus" in out
 assert "CMD Reset" in out
 print("6. capture-wide histograms + active-span rate OK")
+
+# 7. link-policy events (sniff/role/packet-type) get their own timeline
+#    AND a per-crash delta — the prime suspect once the pre-mpris
+#    capture crashed at a calm 2 PDU/s (2026-07-27)
+assert "link-policy events" in out
+assert "EVT Mode Change" in out
+assert "last link-policy event 8.0s before: EVT Mode Change" in out
+print("7. link-policy timeline + per-crash delta OK")
 
 print("all snoop_digest checks passed")

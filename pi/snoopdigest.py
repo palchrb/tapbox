@@ -41,6 +41,15 @@ NOISE_EVENTS = ("Number of Completed Packets",)
 
 TAIL_N = 30        # control packets shown before each crash
 NEAR_S = 10.0      # "final seconds" window for rate comparison
+# Link-policy events — the baseband things a peer can do to a live ACL
+# (sniff mode, role switch, packet-type renegotiation) that combo-chip
+# firmware is notoriously sensitive to. Became the prime suspect when
+# the pre-mpris capture crashed at a CALM 2 AVRCP PDU/s (2026-07-27):
+# the storm theory couldn't explain it, so what differs between the
+# Skoda and the JBL must live at this layer.
+LINK_EVT = ("Mode Change", "Role Change", "Connection Packet Type",
+            "Max Slots Change", "QoS Setup", "Encryption Change",
+            "Link Supervision", "Sniff Subrating")
 
 
 def classify(hdr, sublines):
@@ -142,8 +151,17 @@ def digest(name, lines):
         for p in avdtp:
             print(f"     {p[0] - t0:8.1f}s  {p[3]}")
     for tag, n in hist([p[3] for p in packets
-                        if p[2] in ("cmd", "l2cap")])[:6]:
+                        if p[2] in ("cmd", "l2cap", "event")])[:10]:
         print(f"     {n:5d}  {tag}")
+    link = [p for p in packets if p[2] == "event"
+            and any(k in p[3] for k in LINK_EVT)]
+    if link:
+        print("   link-policy events (sniff/role/packet-type — what a "
+              "peer does to the ACL itself):")
+        for p in link[:40]:
+            print(f"     {p[0] - t0:8.1f}s  {p[1]} {p[3]}")
+        if len(link) > 40:
+            print(f"     ... and {len(link) - 40} more")
 
     # collapse a µs-burst of Hardware Errors into one anchor...
     anchors = []
@@ -189,6 +207,11 @@ def digest(name, lines):
         if last_avrcp:
             print(f"      last AVRCP PDU {ts - last_avrcp[0]:.3f}s before: "
                   f"{last_avrcp[3]}")
+        last_link = next((p for p in reversed(before) if p[2] == "event"
+                          and any(k in p[3] for k in LINK_EVT)), None)
+        if last_link:
+            print(f"      last link-policy event {ts - last_link[0]:.1f}s "
+                  f"before: {last_link[3]}")
         near = [p for p in before if ts - p[0] <= NEAR_S and p[2] == "avrcp"]
         print(f"      AVRCP in the final {NEAR_S:.0f}s: {len(near)} PDUs "
               f"({len(near) / NEAR_S:.2f}/s vs {len(avrcp) / span:.2f}/s "
