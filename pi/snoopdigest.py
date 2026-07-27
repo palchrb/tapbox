@@ -199,15 +199,17 @@ def digest(name, lines):
 
 
 def render(path):
+    """An ITERATOR of btmon text lines — never the whole text in memory.
+    A 14MB snoop renders to >100MB of text; slurping that OOMed the
+    512MB Zero 2 the tool is meant to run on. parse() keeps only the
+    control-plane packets, which stay small."""
     if path == "-":
-        return sys.stdin.readlines()
+        return sys.stdin
     if path.endswith((".txt", ".log")):
-        with open(path) as f:
-            return f.readlines()
-    r = subprocess.run(["btmon", "-r", path], capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout:
-        sys.exit(f"btmon -r {path} failed: {r.stderr.strip() or 'no output'}")
-    return r.stdout.splitlines(keepends=True)
+        return open(path)
+    p = subprocess.Popen(["btmon", "-r", path],
+                         stdout=subprocess.PIPE, text=True)
+    return p.stdout
 
 
 def main(argv):
