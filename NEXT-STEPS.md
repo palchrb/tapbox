@@ -153,3 +153,35 @@ sikkerhetsnett i stedet for daglig brukte krykker.
 
 **Kostnad/risiko:** Go-endring i forken + rebase-vedlikehold. Middels.
 Verdt det når skip-følelsen er neste prioritet.
+
+---
+
+## Extras-krok: generisk «start eget script»-meny (RetroPie-caset) — *designet, ikke bygget*
+
+**Hva:** `/etc/tapbox/extras/` (root-eid; install.sh oppretter, rører aldri
+innholdet). En extra = kjørbar, root-eid fil (UI nekter andre — barne-
+skrivbar fil ville vært rett-til-root); navn fra `# tapbox-name:`-header.
+Settings viser «Extras»-rad KUN når katalogen har innhold, bak confirm-gate.
+Ingen HTTP-rute — SSH legger inn, fysisk skjerm starter (SECURITY-linjen:
+maksimal overlevering skal ikke kunne fjernutløses).
+
+**Overlevering:** ui.py eier SPI+GPIO og må selv dø — extraen startes derfor
+som transient systemd-enhet (`systemd-run`) med wrapper
+`/usr/local/bin/tapbox-extra`: stopp tapbox-ui/-idle/-buttons + avspilling
+(frigjør I2S), kjør scriptet, gjenopprett. Daemon/API blir stående.
+**Retur-garanti (QA-blokker): gjenoppretting i `ExecStopPost=` på den
+transiente enheten** (kjører uansett hvordan wrapperen dør — SIGKILL
+inkludert), trap som belte. Lavbatteri-poweroff forblir aktiv; PiSugar-
+knappen er nødutgang. Ingen hard timeout (avklart med eier? — åpen).
+
+**Gate-tester før shipping:** wrapper-modell gjennom exit-0/krasj/aldri-
+avslutter/drept-wrapper (alle må gjenopprette + slippe idle-stoppen),
+scope-vakt (ingen rute eller opplastingsendelse når /etc/tapbox/extras),
+install-idempotens over full katalog, UI: skjult ved tom katalog + confirm.
+
+**Docs (aldri produktkode):** docs/extras.md med RetroPie-eksempelscript —
+fbcp-speiling for ST7789 (ikke en framebuffer), USB-gamepad via OTG
+(4 knapper holder ikke), ALSA-kortvalg, opprydding.
+
+**Åpne eierbeslutninger:** hard timeout (anbef. nei), daemon oppe under
+extras (anbef. ja), confirm-gate vs hold-A-barnesikring.
