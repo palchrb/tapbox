@@ -156,7 +156,11 @@ Verdt det når skip-følelsen er neste prioritet.
 
 ---
 
-## Extras-krok: generisk «start eget script»-meny (RetroPie-caset) — *designet, ikke bygget*
+## Extras-krok: generisk «start eget script»-meny (RetroPie-caset) — *BYGGET (d84e6b7)*
+
+Shippet 2026-07-28 med eierens valg: X+Y-chord (ikke settings-rad),
+ingen timeout, daemon oppe under extras. Gjenstår kun felttest på
+boksen + at eieren skriver sitt RetroPie-script etter docs/extras.md.
 
 **Hva:** `/etc/tapbox/extras/` (root-eid; install.sh oppretter, rører aldri
 innholdet). En extra = kjørbar, root-eid fil (UI nekter andre — barne-
