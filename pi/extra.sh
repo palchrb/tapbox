@@ -21,6 +21,7 @@
 set -u
 
 SYSTEMCTL="${TAPBOX_SYSTEMCTL:-systemctl}"
+RFKILL="${TAPBOX_RFKILL:-rfkill}"
 API="${TAPBOX_DAEMON:-http://127.0.0.1:3679}"
 
 # Stopped on handoff: the display/button owner, the auto-power-off (a
@@ -76,6 +77,11 @@ case "${1:-}" in
     for u in $RESTORE; do
       $SYSTEMCTL start "$u" 2>/dev/null || true
     done
+    # Radio baseline: extras (games especially) often rfkill wifi for
+    # coex/latency on the shared radio. systemd-rfkill PERSISTS a block
+    # across reboots, so a crashed script could leave the box offline
+    # for good — the return trip always hands back both radios.
+    $RFKILL unblock wifi bluetooth 2>/dev/null || true
     # re-park the CPU to whatever mode --run found (battery default)
     prev="$(cat "$GOV_STATE" 2>/dev/null || echo powersave)"
     for g in "$CPUS"/cpu*/cpufreq/scaling_governor; do

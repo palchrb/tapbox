@@ -47,6 +47,13 @@ class Daemon(BaseHTTPRequestHandler):
 srv = HTTPServer(("127.0.0.1", 0), Daemon)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
+# fake rfkill: records the radio-baseline handback
+RFKILL_LOG = os.path.join(TMP, "rfkill.log")
+FAKE_RFKILL = os.path.join(TMP, "rfkill")
+with open(FAKE_RFKILL, "w") as f:
+    f.write(f'#!/bin/sh\necho "$@" >> {RFKILL_LOG}\n')
+os.chmod(FAKE_RFKILL, 0o755)
+
 # fake cpufreq tree: boot state is the powersave park
 CPUS = os.path.join(TMP, "cpu")
 for n in range(2):
@@ -62,7 +69,7 @@ def governors():
             for n in range(2)]
 
 
-env = dict(os.environ, TAPBOX_SYSTEMCTL=FAKE,
+env = dict(os.environ, TAPBOX_SYSTEMCTL=FAKE, TAPBOX_RFKILL=FAKE_RFKILL,
            TAPBOX_DAEMON=f"http://127.0.0.1:{srv.server_port}",
            TAPBOX_CPUFREQ=CPUS, TAPBOX_RUN=TMP)
 
@@ -108,6 +115,8 @@ assert "tapbox-btsnoop" not in " ".join(calls), \
     "the opt-in snoop ring must stay however the owner left it"
 assert governors() == ["powersave", "powersave"], \
     "--restore must re-park the CPU to the snapshotted mode"
+assert "unblock wifi bluetooth" in open(RFKILL_LOG).read(), \
+    "--restore must hand back both radios (rfkill blocks persist!)"
 # ...and the snapshot honors a box that was in perf mode before the game
 for n in range(2):
     with open(os.path.join(CPUS, f"cpu{n}", "cpufreq",

@@ -92,6 +92,18 @@ RP_USER="${RP_USER:-palchrb}"   # the user RetroPie-Setup installed for
 systemctl stop tapbox-bt-reconnect 2>/dev/null || true
 # systemctl stop tapbox-daemon tapbox-mpris
 
+# RF quiet for gaming: wifi off (coex + input latency on the shared
+# radio) and hang up BT AUDIO sinks — the controller (HID) keeps the
+# radio to itself; game sound goes out the jack anyway. NB: wifi off =
+# no SSH / screen -x until the session ends — set KEEP_WIFI=1 in the
+# environment when you need live debugging. Safe either way: the
+# TapBox return trip always rfkill-unblocks both radios.
+[ "${KEEP_WIFI:-0}" = 1 ] || rfkill block wifi
+for d in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+  bluetoothctl info "$d" | grep -q "Audio Sink" \
+    && bluetoothctl disconnect "$d" >/dev/null
+done
+
 # mirror /dev/fb0 onto the Pirate Audio ST7789 (build fbcp-ili9341
 # yourself; without it nothing reaches the SPI display)
 FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
