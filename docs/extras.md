@@ -73,18 +73,52 @@ Reality check for this hardware first:
 ```sh
 #!/usr/bin/env bash
 # tapbox-name: RetroPie
-set -e
-# optional: reclaim the API's RAM for hungry cores (restore restarts it)
-systemctl stop tapbox-daemon tapbox-mpris tapbox-bt-reconnect
-/usr/local/bin/fbcp-ili9341 &            # mirror /dev/fb0 -> ST7789
-FBCP=$!
-emulationstation                          # blocks until the user quits
-kill $FBCP 2>/dev/null || true
-# just exit — the wrapper's ExecStopPost brings TapBox back
+#
+# Test launcher for RetroPie via the extras hook.
+# - NO autostart anywhere: when RetroPie-Setup offers "start
+#   EmulationStation at boot", answer NO — boot must stay TapBox, and
+#   this script (X+Y chord) is the only way ES starts.
+# - ES runs inside a GNU screen session, so from SSH you can watch and
+#   debug it live:     screen -x retropie
+# - The wrapper has already stopped tapbox-ui/idle/buttons, stopped
+#   playback and go-librespot, and lifted the CPU governor — don't
+#   redo any of that here.
+set -u
+RP_USER="${RP_USER:-palchrb}"   # the user RetroPie-Setup installed for
+
+# quiet the BT pager while pairing/using a BT controller (restore
+# restarts it). Uncomment the daemon line too if a core needs the RAM —
+# but note the phone's remote escape hatch goes away while it is down.
+systemctl stop tapbox-bt-reconnect 2>/dev/null || true
+# systemctl stop tapbox-daemon tapbox-mpris
+
+# mirror /dev/fb0 onto the Pirate Audio ST7789 (build fbcp-ili9341
+# yourself; without it nothing reaches the SPI display)
+FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
+FBCP_PID=""
+if [ -x "$FBCP_BIN" ]; then
+  "$FBCP_BIN" & FBCP_PID=$!
+else
+  echo "retropie-extra: WARNING: $FBCP_BIN missing — no picture on the SPI display"
+fi
+
+cleanup() {
+  [ -n "$FBCP_PID" ] && kill "$FBCP_PID" 2>/dev/null || true
+  screen -S retropie -X quit 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# screen -Dm runs ATTACHED-IN-FOREGROUND: this script blocks here until
+# EmulationStation exits — essential, because the moment this script
+# exits, the wrapper takes the box back. runuser drops root: RetroPie's
+# configs live in the install user's home.
+screen -Dm -S retropie runuser -u "$RP_USER" -- emulationstation
+# reaching here = Quit chosen in ES -> trap cleans up -> TapBox returns
 ```
 
 Install RetroPie the normal way (RetroPie-Setup on top of the same OS)
-before wiring the script; none of that touches TapBox.
+before wiring the script; none of that touches TapBox. `apt install
+screen` if the box lacks it.
 
 ## Security posture (why it is shaped this way)
 
