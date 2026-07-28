@@ -56,6 +56,16 @@ while.
 
 ## Example: RetroPie launcher
 
+**The complete, maintained example lives in
+[`docs/examples/retropie.sh`](examples/retropie.sh)** — copy it to
+`/etc/tapbox/extras/retropie.sh` on the box (root-owned, mode 755).
+It carries: screen-session launch (ES needs a real CLI session),
+runuser to the install user, RF quiet (wifi off — or softened with
+`KEEP_WIFI=1` for live `screen -x` debugging), hangup of BT audio
+sinks (controllers untouched), fbcp mirroring, and the emergency
+hold-the-MODE-button-3s -> Ctrl-C rescue ported from
+[palchrb/retropie_wrapper](https://github.com/palchrb/retropie_wrapper).
+
 Reality check for this hardware first:
 
 - The Pirate Audio display is **not a Linux framebuffer** — RetroArch
@@ -68,72 +78,8 @@ Reality check for this hardware first:
 - Audio goes out the I2S DAC (ALSA card `sndrpihifiberry` /
   `tapbox_local`'s underlying card) — point RetroArch at it.
 - 512 MB RAM total: stop `tapbox-daemon` too if a core needs the
-  headroom (see below), and stick to 8/16-bit systems.
-
-```sh
-#!/usr/bin/env bash
-# tapbox-name: RetroPie
-#
-# Test launcher for RetroPie via the extras hook.
-# - NO autostart anywhere: when RetroPie-Setup offers "start
-#   EmulationStation at boot", answer NO — boot must stay TapBox, and
-#   this script (X+Y chord) is the only way ES starts.
-# - ES runs inside a GNU screen session, so from SSH you can watch and
-#   debug it live:     screen -x retropie
-# - The wrapper has already stopped tapbox-ui/idle/buttons, stopped
-#   playback and go-librespot, and lifted the CPU governor — don't
-#   redo any of that here.
-set -u
-RP_USER="${RP_USER:-palchrb}"   # the user RetroPie-Setup installed for
-
-# quiet the BT pager while pairing/using a BT controller (restore
-# restarts it). Uncomment the daemon line too if a core needs the RAM —
-# but note the phone's remote escape hatch goes away while it is down.
-systemctl stop tapbox-bt-reconnect 2>/dev/null || true
-# systemctl stop tapbox-daemon tapbox-mpris
-
-# RF quiet for gaming: wifi off (coex + input latency on the shared
-# radio) and hang up BT AUDIO sinks — the controller (HID) keeps the
-# radio to itself; game sound goes out the jack anyway. NB: wifi off =
-# no SSH / screen -x until the session ends — set KEEP_WIFI=1 when you
-# need live debugging: wifi then stays up but is SOFTENED instead
-# (power-save + 5 dBm), which hands BT most of the airtime. Safe either
-# way: the TapBox return trip rfkill-unblocks both radios and resets
-# txpower to auto.
-if [ "${KEEP_WIFI:-0}" = 1 ]; then
-  iw dev wlan0 set power_save on 2>/dev/null || true
-  iw dev wlan0 set txpower fixed 500 2>/dev/null || true
-else
-  rfkill block wifi
-fi
-for d in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
-  bluetoothctl info "$d" | grep -q "Audio Sink" \
-    && bluetoothctl disconnect "$d" >/dev/null
-done
-
-# mirror /dev/fb0 onto the Pirate Audio ST7789 (build fbcp-ili9341
-# yourself; without it nothing reaches the SPI display)
-FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
-FBCP_PID=""
-if [ -x "$FBCP_BIN" ]; then
-  "$FBCP_BIN" & FBCP_PID=$!
-else
-  echo "retropie-extra: WARNING: $FBCP_BIN missing — no picture on the SPI display"
-fi
-
-cleanup() {
-  [ -n "$FBCP_PID" ] && kill "$FBCP_PID" 2>/dev/null || true
-  screen -S retropie -X quit 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# screen -Dm runs ATTACHED-IN-FOREGROUND: this script blocks here until
-# EmulationStation exits — essential, because the moment this script
-# exits, the wrapper takes the box back. runuser drops root: RetroPie's
-# configs live in the install user's home.
-screen -Dm -S retropie runuser -u "$RP_USER" -- emulationstation
-# reaching here = Quit chosen in ES -> trap cleans up -> TapBox returns
-```
+  headroom (the example has the line commented), and stick to
+  8/16-bit systems.
 
 Install RetroPie the normal way (RetroPie-Setup on top of the same OS)
 before wiring the script; none of that touches TapBox. `apt install
