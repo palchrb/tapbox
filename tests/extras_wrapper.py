@@ -47,8 +47,24 @@ class Daemon(BaseHTTPRequestHandler):
 srv = HTTPServer(("127.0.0.1", 0), Daemon)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
+# fake cpufreq tree: boot state is the powersave park
+CPUS = os.path.join(TMP, "cpu")
+for n in range(2):
+    os.makedirs(os.path.join(CPUS, f"cpu{n}", "cpufreq"))
+    with open(os.path.join(CPUS, f"cpu{n}", "cpufreq",
+                           "scaling_governor"), "w") as f:
+        f.write("powersave\n")
+
+
+def governors():
+    return [open(os.path.join(CPUS, f"cpu{n}", "cpufreq",
+                              "scaling_governor")).read().strip()
+            for n in range(2)]
+
+
 env = dict(os.environ, TAPBOX_SYSTEMCTL=FAKE,
-           TAPBOX_DAEMON=f"http://127.0.0.1:{srv.server_port}")
+           TAPBOX_DAEMON=f"http://127.0.0.1:{srv.server_port}",
+           TAPBOX_CPUFREQ=CPUS, TAPBOX_RUN=TMP)
 
 # the "extra": records that it ran and inspects what was stopped first
 MARK = os.path.join(TMP, "ran")
@@ -68,7 +84,9 @@ assert "stop tapbox-idle tapbox-buttons tapbox-ui" in before_script
 assert "stop go-librespot" in before_script, "the ALSA holder must stop"
 assert "tapbox-daemon" not in before_script, \
     "--run must leave the daemon (remote escape hatch) alone"
-print("1. --run: /stop + hardware owners freed before the script OK")
+assert governors() == ["ondemand", "ondemand"], \
+    "the powersave park (600MHz) must lift for the extra"
+print("1. --run: /stop + hardware freed + CPU unparked OK")
 
 # 2. --restore: unmask BEFORE enable BEFORE any start, full audio-chain
 #    set started (incl. units --run never stopped — bluetooth/bluealsa
@@ -88,7 +106,20 @@ for unit in ("tapbox-ui", "tapbox-idle", "tapbox-buttons",
     assert unit in started, f"restore must start {unit}: {started}"
 assert "tapbox-btsnoop" not in " ".join(calls), \
     "the opt-in snoop ring must stay however the owner left it"
-print("2. --restore: unmask, enable, full audio-chain set OK")
+assert governors() == ["powersave", "powersave"], \
+    "--restore must re-park the CPU to the snapshotted mode"
+# ...and the snapshot honors a box that was in perf mode before the game
+for n in range(2):
+    with open(os.path.join(CPUS, f"cpu{n}", "cpufreq",
+                           "scaling_governor"), "w") as f:
+        f.write("ondemand\n")
+subprocess.run(["bash", WRAPPER, "--run", script], env=env,
+               capture_output=True, timeout=30)
+subprocess.run(["bash", WRAPPER, "--restore"], env=env,
+               capture_output=True, timeout=30)
+assert governors() == ["ondemand", "ondemand"], \
+    "a perf-mode box must return to perf, not be forced to powersave"
+print("2. --restore: unmask, enable, full set + governor snapshot OK")
 
 # 3. a crashing extra: the wrapper execs the script, so its exit code IS
 #    the unit result — systemd still runs ExecStopPost (pinned in

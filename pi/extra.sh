@@ -39,9 +39,22 @@ HANDOFF="tapbox-idle tapbox-buttons tapbox-ui"
 RESTORE="bluetooth bluealsa go-librespot tapbox-daemon tapbox-mpris
          tapbox-bt-reconnect tapbox-buttons tapbox-idle tapbox-ui"
 
+CPUS="${TAPBOX_CPUFREQ:-/sys/devices/system/cpu}"
+GOV_STATE="${TAPBOX_RUN:-/run}/tapbox-extra-governor"
+
 case "${1:-}" in
   --run)
     script="${2:?usage: tapbox-extra --run <script>}"
+    # Unpark the CPU: boot runs 'tapbox-power save', which pins the
+    # governor to powersave (= 600 MHz flat on the Zero 2 W) — great
+    # for podcasts, hopeless for an emulator. Snapshot whatever mode
+    # the box was in, lift to ondemand for the extra; --restore puts
+    # the snapshot back (default powersave — the safe battery state).
+    prev="$(cat "$CPUS"/cpu0/cpufreq/scaling_governor 2>/dev/null || true)"
+    [ -n "$prev" ] && { echo "$prev" > "$GOV_STATE" 2>/dev/null || true; }
+    for g in "$CPUS"/cpu*/cpufreq/scaling_governor; do
+      echo ondemand > "$g" 2>/dev/null || true
+    done
     # Stop playback first — the bookmark machinery preserves the exact
     # episode/track position for the return. SAFE endpoint; the CSRF
     # gate wants the JSON content type.
@@ -63,6 +76,12 @@ case "${1:-}" in
     for u in $RESTORE; do
       $SYSTEMCTL start "$u" 2>/dev/null || true
     done
+    # re-park the CPU to whatever mode --run found (battery default)
+    prev="$(cat "$GOV_STATE" 2>/dev/null || echo powersave)"
+    for g in "$CPUS"/cpu*/cpufreq/scaling_governor; do
+      echo "$prev" > "$g" 2>/dev/null || true
+    done
+    rm -f "$GOV_STATE" 2>/dev/null || true
     ;;
   *)
     echo "usage: tapbox-extra --run <script> | --restore" >&2

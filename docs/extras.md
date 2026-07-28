@@ -47,6 +47,12 @@ while.
 - Low-battery power-off (PiSugar) stays active while you run.
 - There is no timeout. The physical PiSugar button is the last-resort
   exit.
+- **The CPU is unparked for you**: TapBox boots in power-save (the
+  governor pinned to powersave = 600 MHz flat). The wrapper lifts it
+  to ondemand for the duration and puts the previous mode back on
+  return — your script does not need to touch cpufreq. Do NOT
+  overclock a battery-powered box in its case; if you must experiment,
+  do it on the charger.
 
 ## Example: RetroPie launcher
 
