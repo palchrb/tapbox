@@ -86,8 +86,12 @@ inp._released("y")
 assert inp._events() == [], "release after y_long must be swallowed"
 inp = fresh(gesture=False)
 inp._pressed("y")
-assert inp._events() == ["y"], "menu Y must stay an instant press"
-print("6. Y: quick=next, hold=episode picker, instant in menus OK")
+assert inp._events() == [], \
+    "menu Y fires on RELEASE since the X+Y extras chord (2026-07-28) — " \
+    "a press may be the first chord finger"
+inp._released("y")
+assert inp._events() == ["y"], "menu Y delivers on release"
+print("6. Y: quick=next, hold=episode picker, release-fired in menus OK")
 
 # --- the dark-screen waking press ------------------------------------------
 # The press that wakes a dark screen is swallowed — EXCEPT A while music

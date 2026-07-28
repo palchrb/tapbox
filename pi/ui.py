@@ -36,6 +36,7 @@ Dev mode (no HAT needed):
 
 import os
 import select
+import subprocess
 import sys
 import threading
 import time
@@ -158,6 +159,10 @@ LINK_AWAKE_S = float(os.environ.get("TAPBOX_LINK_AWAKE_S", "180"))
 # --- display backends -----------------------------------------------------------
 
 BACKLIGHT_PIN = 13  # Pirate Audio backlight (BCM13, PWM1-capable)
+# Owner-dropped launch scripts (docs/extras.md) — SSH is the only way in.
+# Deliberately OUTSIDE every upload/media root; the API has no route.
+EXTRAS_DIR = os.environ.get("TAPBOX_EXTRAS", "/etc/tapbox/extras")
+EXTRA_WRAPPER = "/usr/local/bin/tapbox-extra"
 
 
 class PngDisplay:
@@ -254,17 +259,23 @@ class FifoInput:
                 events.append("y_long")
             elif ch == "s":
                 events.append("settings")
+            elif ch == "g":
+                events.append("extras")
         return events
 
 
 class GpioInput:
-    """Pirate Audio buttons — event/state logic. Hold A+B ~2s -> settings.
+    """Pirate Audio buttons — event/state logic. Hold A+B ~2s -> settings,
+    hold X+Y ~2s -> extras (the owner-script menu, docs/extras.md).
 
     A and B fire on RELEASE — a press can be the start of the A+B
     combo, and firing them on press made the combo navigate the menu
     while you were holding it (select! back!). Overlapping A+B that
     never reaches HOLD_S is swallowed as a failed combo attempt, not
-    delivered as two commands. X/Y stay instant single presses.
+    delivered as two commands. X and Y got the same release-fired
+    treatment when the X+Y combo landed (an instant press-fire made the
+    first chord finger navigate the menu); the cost is one human
+    release time of menu latency, same as A/B always had.
 
     In gesture_mode (the now-playing view) B, X and Y resolve
     short-vs-hold: release before LONG_S -> the plain press, held LONG_S
@@ -295,13 +306,12 @@ class GpioInput:
 
     def _pressed(self, name):
         self.wake.set()  # end the current poll() immediately
-        if name in ("x", "y") and not self.gesture_mode:
-            self.queue.append(name)  # menus: instant single presses
-            return
         self.down[name] = time.monotonic()
         if name in ("x", "y"):
             # now-playing: short X = volume, held X = output;
-            #              short Y = next, held Y = episode picker
+            #              short Y = next, held Y = episode picker.
+            # In menus X/Y are plain presses, fired on RELEASE so the
+            # X+Y extras combo can form without navigating the menu.
             self._long_sent[name] = False
             return
         if name == "b":
@@ -323,6 +333,12 @@ class GpioInput:
         if held_since is None:
             return
         if name in ("x", "y"):
+            partner = "y" if name == "x" else "x"
+            if partner in self.down:
+                # overlapping X+Y released before HOLD_S: a failed
+                # extras-combo attempt — swallow both, like A+B
+                self.tainted.add(partner)
+                return
             if not self._long_sent.get(name):
                 self.queue.append(name)
             return
@@ -354,14 +370,26 @@ class GpioInput:
                 self.down.clear()
                 self.queue.clear()
                 return ["settings"]
+        elif "x" in self.down and "y" in self.down:
+            # the extras combo (owner gesture, mirror of A+B). While it
+            # forms, the individual X/Y holds below must not fire.
+            if now - max(self.down["x"], self.down["y"]) >= self.HOLD_S:
+                self.tainted.update(self.down)
+                self.down.clear()
+                self.queue.clear()
+                return ["extras"]
         elif (self._b_gesture and "b" in self.down
                 and not self._long_sent.get("b")
                 and now - self.down["b"] >= self.LONG_S):
             # long press fires while still held — no waiting for release
             self._long_sent["b"] = True
             self.queue.append("b_long")
+        combo_xy = "x" in self.down and "y" in self.down
         for name in ("x", "y"):
-            if (name in self.down and not self._long_sent.get(name)
+            # the holds only mean something in now-playing, and never
+            # while an X+Y combo is forming
+            if (self.gesture_mode and not combo_xy
+                    and name in self.down and not self._long_sent.get(name)
                     and now - self.down[name] >= self.LONG_S):
                 self._long_sent[name] = True
                 self.queue.append(f"{name}_long")
@@ -1118,6 +1146,11 @@ class App:
             if self.view != "settings":
                 self.push("settings")
             return
+        if ev == "extras":
+            # the X+Y owner chord — a no-op on stock boxes (empty dir)
+            if self.view != "extras" and self.extras():
+                self.push("extras")
+            return
         if self.view == "now":
             self.handle_now(ev)
             return
@@ -1456,6 +1489,9 @@ class App:
         if self.view == "btscan":
             return [(d["name"] + (" ♪" if d.get("audio") else ""), "")
                     for d in self.bt_found] or ["(nothing found)"]
+        if self.view == "extras":
+            return [(e["name"], "") for e in self.extras()] \
+                or ["(no extras installed)"]
         if self.view == "storage":
             return []
         if self.view == "link":
@@ -1519,6 +1555,8 @@ class App:
                 self._enter_now()
             elif self.view == "settings":
                 self.select_setting()
+            elif self.view == "extras":
+                self.select_extra()
             elif self.view == "bt":
                 self.select_bt()
             elif self.view == "btscan":
@@ -1596,6 +1634,71 @@ class App:
             if self.confirm():
                 self.draw_message(f"{action} ...")
                 api_post("/system/shutdown", {"restart": restart})
+
+    def extras(self):
+        """Owner-dropped launch scripts (docs/extras.md). SSH is the
+        only road in, and the scan enforces it: a file must be a
+        regular executable owned by OUR uid (root on the box) and not
+        writable by group/other — anything else is skipped, because a
+        kid-writable file in this dir would be one A-press from root.
+        Display name from a '# tapbox-name:' header, else the
+        filename."""
+        out = []
+        try:
+            names = sorted(os.listdir(EXTRAS_DIR))
+        except OSError:
+            return out  # no dir = stock box = the chord is a no-op
+        for fn in names:
+            path = os.path.join(EXTRAS_DIR, fn)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if not os.path.isfile(path) or not os.access(path, os.X_OK):
+                continue
+            if st.st_uid != os.geteuid() or st.st_mode & 0o022:
+                continue  # wrong owner / group- or world-writable
+            name = ""
+            try:
+                with open(path, errors="ignore") as f:
+                    for i, line in enumerate(f):
+                        if i >= 15:
+                            break
+                        if line.lower().startswith("# tapbox-name:"):
+                            name = line.split(":", 1)[1].strip()
+                            break
+            except OSError:
+                pass
+            if not name:
+                name = (os.path.splitext(fn)[0]
+                        .replace("-", " ").replace("_", " ").strip()
+                        .title() or fn)
+            out.append({"name": name, "path": path})
+        return out
+
+    def select_extra(self):
+        """Hand the whole box to an owner script. The wrapper runs as a
+        TRANSIENT systemd unit (survives tapbox-ui exiting — we hold
+        the SPI display and the buttons, so we must die for the extra
+        to live) whose ExecStopPost restores tapbox no matter how the
+        extra or the wrapper ends — clean exit, crash, even SIGKILL."""
+        items = self.extras()
+        if not items or self.sel >= len(items):
+            return
+        ex = items[self.sel]
+        self.draw_message(f"Start {ex['name']}?\nTapBox stops while it "
+                          "runs.\n(A confirms, B cancels)")
+        if not self.confirm():
+            self.dirty = True
+            return
+        log(f"extras: handing the box to {ex['path']}")
+        self.draw_message(f"Starting {ex['name']} ...")
+        subprocess.Popen([
+            "systemd-run", "--unit=tapbox-extra", "--collect",
+            "--property=Restart=no",
+            f"--property=ExecStopPost={EXTRA_WRAPPER} --restore",
+            EXTRA_WRAPPER, "--run", ex["path"]])
+        # the wrapper stops tapbox-ui within seconds; nothing more here
 
     def select_bt(self):
         # Label-based like select_setting: the action rows above the

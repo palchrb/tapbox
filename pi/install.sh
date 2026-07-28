@@ -613,6 +613,12 @@ install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/tapbox-rfid   && R
 install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
 install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
 install_if_changed 755 "$SCRIPT_DIR/token.sh" /usr/local/bin/tapbox-token || true
+# Extras: owner-dropped launch scripts (docs/extras.md — RetroPie etc.).
+# The dir is created once and its CONTENT is never touched by re-runs;
+# scripts arrive over SSH only (root-owned, no API route, no upload
+# path). The wrapper is the handoff/return machinery for the X+Y chord.
+install -d -m 755 /etc/tapbox/extras
+install_if_changed 755 "$SCRIPT_DIR/extra.sh" /usr/local/bin/tapbox-extra || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
 UI_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    && UI_CHANGED=1

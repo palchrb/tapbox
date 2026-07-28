@@ -290,6 +290,27 @@ screen the box already has. Escalate to **C** (per-device + on-screen
 approval) only if the box starts living on untrusted networks; add
 **HTTPS** only alongside that.
 
+## Extras (owner launch scripts) — screen-only by design
+
+`/etc/tapbox/extras/` holds owner-dropped scripts (docs/extras.md) that
+the screen's X+Y chord can launch as root — the maximal handoff. The
+containment is structural, and tests pin it:
+
+- **No HTTP route exists** to list or launch extras — not even
+  token-authenticated. A linked phone must never be able to blank the
+  box and seize display/audio/GPIO with nobody present, and a launch
+  endpoint could never fit the SAFE allowlist anyway. Install = SSH,
+  launch = hands on the box.
+- The dir lives **outside every upload/media root**; `/media/upload`'s
+  extension whitelist has no executable types and its basename
+  sanitizer cannot traverse. install.sh re-runs never touch the dir's
+  content.
+- The screen only lists files **owned by the UI's uid (root) and not
+  group/world-writable** — nothing a kid or an unprivileged process
+  can plant or edit qualifies.
+- The launch sits behind the deliberately undiscoverable X+Y hold plus
+  an A-confirm; the settings menu carries no trace of it.
+
 ## Non-goals / accepted risks (current)
 
 - Playback control (pause/next/volume) stays open on the LAN by design —
