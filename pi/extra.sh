@@ -22,6 +22,7 @@ set -u
 
 SYSTEMCTL="${TAPBOX_SYSTEMCTL:-systemctl}"
 RFKILL="${TAPBOX_RFKILL:-rfkill}"
+IW="${TAPBOX_IW:-iw}"
 API="${TAPBOX_DAEMON:-http://127.0.0.1:3679}"
 
 # Stopped on handoff: the display/button owner, the auto-power-off (a
@@ -82,6 +83,10 @@ case "${1:-}" in
     # across reboots, so a crashed script could leave the box offline
     # for good — the return trip always hands back both radios.
     $RFKILL unblock wifi bluetooth 2>/dev/null || true
+    # ...and undo a script's wifi softening: a fixed txpower would
+    # otherwise persist into normal operation (power_save is already
+    # governed dynamically by tapboxd, no reset needed there)
+    $IW dev wlan0 set txpower auto 2>/dev/null || true
     # re-park the CPU to whatever mode --run found (battery default)
     prev="$(cat "$GOV_STATE" 2>/dev/null || echo powersave)"
     for g in "$CPUS"/cpu*/cpufreq/scaling_governor; do

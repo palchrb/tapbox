@@ -95,10 +95,17 @@ systemctl stop tapbox-bt-reconnect 2>/dev/null || true
 # RF quiet for gaming: wifi off (coex + input latency on the shared
 # radio) and hang up BT AUDIO sinks — the controller (HID) keeps the
 # radio to itself; game sound goes out the jack anyway. NB: wifi off =
-# no SSH / screen -x until the session ends — set KEEP_WIFI=1 in the
-# environment when you need live debugging. Safe either way: the
-# TapBox return trip always rfkill-unblocks both radios.
-[ "${KEEP_WIFI:-0}" = 1 ] || rfkill block wifi
+# no SSH / screen -x until the session ends — set KEEP_WIFI=1 when you
+# need live debugging: wifi then stays up but is SOFTENED instead
+# (power-save + 5 dBm), which hands BT most of the airtime. Safe either
+# way: the TapBox return trip rfkill-unblocks both radios and resets
+# txpower to auto.
+if [ "${KEEP_WIFI:-0}" = 1 ]; then
+  iw dev wlan0 set power_save on 2>/dev/null || true
+  iw dev wlan0 set txpower fixed 500 2>/dev/null || true
+else
+  rfkill block wifi
+fi
 for d in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
   bluetoothctl info "$d" | grep -q "Audio Sink" \
     && bluetoothctl disconnect "$d" >/dev/null
