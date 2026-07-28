@@ -32,8 +32,12 @@ API="${TAPBOX_DAEMON:-http://127.0.0.1:3679}"
 # a linked phone) while the extra runs. Low-battery poweroff (PiSugar)
 # is untouched.
 HANDOFF="tapbox-idle tapbox-buttons tapbox-ui"
-RESTORE="go-librespot tapbox-daemon tapbox-mpris tapbox-bt-reconnect
-         tapbox-buttons tapbox-idle tapbox-ui"
+# The restore set is the whole audio chain, not just what --run stopped:
+# a script may stop bluetooth/bluealsa to use the radio itself, and the
+# box must still come back whole. Anything OUTSIDE this set that a
+# script stops is the script's own business.
+RESTORE="bluetooth bluealsa go-librespot tapbox-daemon tapbox-mpris
+         tapbox-bt-reconnect tapbox-buttons tapbox-idle tapbox-ui"
 
 case "${1:-}" in
   --run)
@@ -49,8 +53,13 @@ case "${1:-}" in
     ;;
   --restore)
     # unmask FIRST: a script that masked units would otherwise survive
-    # the start below and brick the box (QA invariant)
+    # the start below and brick the box (QA invariant). Then re-enable:
+    # start heals NOW, but a script's 'disable' would survive to the
+    # next boot — the contract says never disable, this is the belt.
+    # (tapbox-btsnoop is deliberately outside the set: it ships
+    # disabled/opt-in and must stay whatever the owner chose.)
     $SYSTEMCTL unmask $RESTORE >/dev/null 2>&1 || true
+    $SYSTEMCTL enable $RESTORE >/dev/null 2>&1 || true
     for u in $RESTORE; do
       $SYSTEMCTL start "$u" 2>/dev/null || true
     done

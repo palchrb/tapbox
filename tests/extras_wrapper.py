@@ -70,20 +70,25 @@ assert "tapbox-daemon" not in before_script, \
     "--run must leave the daemon (remote escape hatch) alone"
 print("1. --run: /stop + hardware owners freed before the script OK")
 
-# 2. --restore: unmask BEFORE any start, full set started (incl. units
-#    --run never stopped)
+# 2. --restore: unmask BEFORE enable BEFORE any start, full audio-chain
+#    set started (incl. units --run never stopped — bluetooth/bluealsa
+#    cover a script that used the radio itself; enable heals a
+#    contract-breaking 'disable' before the next boot)
 os.unlink(LOG)
 r = subprocess.run(["bash", WRAPPER, "--restore"], env=env,
                    capture_output=True, text=True, timeout=30)
 assert r.returncode == 0, r.stderr
 calls = open(LOG).read().splitlines()
 assert calls[0].startswith("unmask "), "unmask must run first (QA)"
+assert calls[1].startswith("enable "), "enable heals a script's disable"
 started = [c.split()[1] for c in calls if c.startswith("start ")]
 for unit in ("tapbox-ui", "tapbox-idle", "tapbox-buttons",
              "tapbox-daemon", "go-librespot", "tapbox-mpris",
-             "tapbox-bt-reconnect"):
+             "tapbox-bt-reconnect", "bluetooth", "bluealsa"):
     assert unit in started, f"restore must start {unit}: {started}"
-print("2. --restore: unmask first, full deterministic set OK")
+assert "tapbox-btsnoop" not in " ".join(calls), \
+    "the opt-in snoop ring must stay however the owner left it"
+print("2. --restore: unmask, enable, full audio-chain set OK")
 
 # 3. a crashing extra: the wrapper execs the script, so its exit code IS
 #    the unit result — systemd still runs ExecStopPost (pinned in
