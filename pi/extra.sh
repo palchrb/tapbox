@@ -80,26 +80,40 @@ case "${1:-}" in
       echo "Extra failed (${EXIT_STATUS:-?}) — see journalctl -u tapbox-extra" \
         > "$MSG_FILE" 2>/dev/null || true
     fi
-    # unmask FIRST: a script that masked units would otherwise survive
-    # the start below and brick the box (QA invariant). Then re-enable:
-    # start heals NOW, but a script's 'disable' would survive to the
-    # next boot — the contract says never disable, this is the belt.
+    # Radios FIRST — everything below may pull network-online, and
+    # starting go-librespot with wifi still rfkill-blocked stalled the
+    # whole synchronous start queue 60s on NM-wait-online, with
+    # tapbox-ui stuck BEHIND it (field 2026-07-29: ~90s of black
+    # screen, box unreachable over ssh). systemd-rfkill also PERSISTS
+    # a block across reboots, so this line is what saves a crashed
+    # script from leaving the box offline for good. txpower likewise
+    # (a script's 5dBm softening must not follow us home).
+    $RFKILL unblock wifi bluetooth 2>/dev/null || true
+    $IW dev wlan0 set txpower auto 2>/dev/null || true
+    # Heal mask/disable ONLY where the state calls for it: the blanket
+    # unmask+enable ran four daemon-reloads (~2s each on a Zero 2) to
+    # heal units that needed nothing. Scripts still must never
+    # disable/mask — this belt is now free when unneeded.
     # (tapbox-btsnoop is deliberately outside the set: it ships
     # disabled/opt-in and must stay whatever the owner chose.)
-    $SYSTEMCTL unmask $RESTORE >/dev/null 2>&1 || true
-    $SYSTEMCTL enable $RESTORE >/dev/null 2>&1 || true
     for u in $RESTORE; do
+      case "$($SYSTEMCTL is-enabled "$u" 2>/dev/null || true)" in
+        masked)
+          $SYSTEMCTL unmask "$u" >/dev/null 2>&1 || true
+          $SYSTEMCTL enable "$u" >/dev/null 2>&1 || true ;;
+        disabled)
+          $SYSTEMCTL enable "$u" >/dev/null 2>&1 || true ;;
+      esac
+    done
+    # Start the HUMAN-facing pieces first (the screen must be back the
+    # moment the extra ends), network-independent audio plumbing next,
+    # and go-librespot ASYNC last: its unit pulls network-online, and
+    # nobody needs to wait for a Spotify login to see the menu.
+    for u in tapbox-ui tapbox-idle tapbox-buttons tapbox-daemon \
+             tapbox-mpris tapbox-bt-reconnect bluetooth bluealsa; do
       $SYSTEMCTL start "$u" 2>/dev/null || true
     done
-    # Radio baseline: extras (games especially) often rfkill wifi for
-    # coex/latency on the shared radio. systemd-rfkill PERSISTS a block
-    # across reboots, so a crashed script could leave the box offline
-    # for good — the return trip always hands back both radios.
-    $RFKILL unblock wifi bluetooth 2>/dev/null || true
-    # ...and undo a script's wifi softening: a fixed txpower would
-    # otherwise persist into normal operation (power_save is already
-    # governed dynamically by tapboxd, no reset needed there)
-    $IW dev wlan0 set txpower auto 2>/dev/null || true
+    $SYSTEMCTL start --no-block go-librespot 2>/dev/null || true
     # re-park the CPU to whatever mode --run found (battery default)
     prev="$(cat "$GOV_STATE" 2>/dev/null || echo powersave)"
     for g in "$CPUS"/cpu*/cpufreq/scaling_governor; do

@@ -21,10 +21,13 @@ WRAPPER = os.path.join(REPO, "pi", "extra.sh")
 TMP = tempfile.mkdtemp()
 LOG = os.path.join(TMP, "calls.log")
 
-# fake systemctl: append verb+args to the log
+# fake systemctl: append verb+args to the log; is-enabled answers with
+# the state from FAKE_ENABLED_STATE (default: healthy 'enabled')
 FAKE = os.path.join(TMP, "systemctl")
 with open(FAKE, "w") as f:
-    f.write(f'#!/bin/sh\necho "$@" >> {LOG}\n')
+    f.write(f'#!/bin/sh\necho "$@" >> {LOG}\n'
+            '[ "$1" = is-enabled ] && echo "${FAKE_ENABLED_STATE:-enabled}"\n'
+            'exit 0\n')
 os.chmod(FAKE, 0o755)
 
 # fake daemon capturing the playback-stop call
@@ -53,10 +56,10 @@ srv = HTTPServer(("127.0.0.1", 0), Daemon)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 # fake rfkill + iw: record the radio-baseline handback
-RFKILL_LOG = os.path.join(TMP, "rfkill.log")
+RFKILL_LOG = LOG  # same log as systemctl so ORDER is assertable
 FAKE_RFKILL = os.path.join(TMP, "rfkill")
 with open(FAKE_RFKILL, "w") as f:
-    f.write(f'#!/bin/sh\necho "$@" >> {RFKILL_LOG}\n')
+    f.write(f'#!/bin/sh\necho "rfkill $@" >> {LOG}\n')
 os.chmod(FAKE_RFKILL, 0o755)
 IW_LOG = os.path.join(TMP, "iw.log")
 FAKE_IW = os.path.join(TMP, "iw")
@@ -109,30 +112,45 @@ assert governors() == ["ondemand", "ondemand"], \
     "the powersave park (600MHz) must lift for the extra"
 print("1. --run: /stop + hardware freed + CPU unparked OK")
 
-# 2. --restore: unmask BEFORE enable BEFORE any start, full audio-chain
-#    set started (incl. units --run never stopped — bluetooth/bluealsa
-#    cover a script that used the radio itself; enable heals a
-#    contract-breaking 'disable' before the next boot)
+# 2. --restore: radios come back BEFORE any unit start (a blocked wifi
+#    stalled the start queue 60s on network-online with the SCREEN
+#    stuck behind it — field 2026-07-29), the screen starts first,
+#    go-librespot goes async, and a healthy system needs NO
+#    unmask/enable (each cost a ~2s daemon-reload)
 os.unlink(LOG)
 r = subprocess.run(["bash", WRAPPER, "--restore"], env=env,
                    capture_output=True, text=True, timeout=30)
 assert r.returncode == 0, r.stderr
 calls = open(LOG).read().splitlines()
-assert calls[0].startswith("unmask "), "unmask must run first (QA)"
-assert calls[1].startswith("enable "), "enable heals a script's disable"
-started = [c.split()[1] for c in calls if c.startswith("start ")]
+first_start = next(i for i, c in enumerate(calls) if c.startswith("start "))
+unblock = next(i for i, c in enumerate(calls)
+               if c.startswith("rfkill unblock"))
+assert unblock < first_start, "radios must return before any unit starts"
+assert calls[first_start] == "start tapbox-ui", \
+    f"the screen must be the first unit back: {calls[first_start]}"
+started = [c.split()[-1] for c in calls if c.startswith("start")]
 for unit in ("tapbox-ui", "tapbox-idle", "tapbox-buttons",
              "tapbox-daemon", "go-librespot", "tapbox-mpris",
              "tapbox-bt-reconnect", "bluetooth", "bluealsa"):
     assert unit in started, f"restore must start {unit}: {started}"
+assert "start --no-block go-librespot" in calls, \
+    "go-librespot must not block the restore on network-online"
+assert not any(c.startswith(("unmask", "enable")) for c in calls), \
+    "healthy units must not be re-enabled (daemon-reload cost)"
 assert "tapbox-btsnoop" not in " ".join(calls), \
     "the opt-in snoop ring must stay however the owner left it"
 assert governors() == ["powersave", "powersave"], \
     "--restore must re-park the CPU to the snapshotted mode"
-assert "unblock wifi bluetooth" in open(RFKILL_LOG).read(), \
-    "--restore must hand back both radios (rfkill blocks persist!)"
 assert "dev wlan0 set txpower auto" in open(IW_LOG).read(), \
     "--restore must undo a script's fixed txpower softening"
+# a MASKED unit (contract breach) is still healed — unmask + enable
+os.unlink(LOG)
+subprocess.run(["bash", WRAPPER, "--restore"],
+               env=dict(env, FAKE_ENABLED_STATE="masked"),
+               capture_output=True, timeout=30)
+calls = open(LOG).read().splitlines()
+assert any(c.startswith("unmask tapbox-ui") for c in calls)
+assert any(c.startswith("enable tapbox-ui") for c in calls)
 # ...and the snapshot honors a box that was in perf mode before the game
 for n in range(2):
     with open(os.path.join(CPUS, f"cpu{n}", "cpufreq",
@@ -144,7 +162,7 @@ subprocess.run(["bash", WRAPPER, "--restore"], env=env,
                capture_output=True, timeout=30)
 assert governors() == ["ondemand", "ondemand"], \
     "a perf-mode box must return to perf, not be forced to powersave"
-print("2. --restore: unmask, enable, full set + governor snapshot OK")
+print("2. --restore: radios-first, screen-first, async spotify, lazy heal OK")
 
 # 3. a crashing extra: the wrapper execs the script, so its exit code IS
 #    the unit result — systemd still runs ExecStopPost (pinned in
