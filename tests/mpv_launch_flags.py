@@ -38,4 +38,12 @@ for f in ("--ao=alsa", "--no-config", "--load-scripts=no", "--no-ytdl"):
 assert "--no-video" in cmd and "--really-quiet" in cmd
 print("3. startup trims present (ao=alsa, no-config, no scripts, no ytdl) OK")
 
+# 4. the 0.5s audio ring (2026-07-29): over A2DP the default ~0.2s
+# request gave a ~100ms device buffer — every coex hiccup on the shared
+# radio clicked audibly. NB: this is mpv's real ring, NOT bluealsa's
+# 'delay' knob (which only adjusts the REPORTED delay, a common
+# misreading).
+assert "--audio-buffer=0.5" in cmd, "the RF-gap audio cushion is missing"
+print("4. 0.5s audio buffer flag present OK")
+
 print("MPV LAUNCH FLAGS OK — audio-critical flags pinned; trims are additive.")

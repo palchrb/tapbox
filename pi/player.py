@@ -198,6 +198,14 @@ def mpv_command(urls, volume, sock, pcm):
         # arrive at 16000 Hz which the BT link can't deliver (silence).
         # Resample everything to 44100 stereo so any source rate plays.
         "--audio-samplerate=44100", "--audio-channels=stereo",
+        # A 0.5s audio ring instead of mpv's ~0.2s default: over A2DP the
+        # device buffer was ~100ms (field: 'Selected HW buffer ... 17640
+        # bytes'), so any coex hiccup on the shared radio clicked
+        # immediately. Half a second rides out short RF gaps; track
+        # changes flush the ring, so skips stay instant, and the local
+        # I2S path doesn't care. (The often-cited bluealsa 'delay' knob
+        # is NOT this — it only adjusts the delay REPORTED to apps.)
+        "--audio-buffer=0.5",
         f"--volume={volume}",
         f"--audio-device=alsa/{pcm}",
         f"--input-ipc-server={sock}",
