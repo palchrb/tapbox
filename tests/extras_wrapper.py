@@ -139,6 +139,8 @@ assert not any(c.startswith(("unmask", "enable")) for c in calls), \
     "healthy units must not be re-enabled (daemon-reload cost)"
 assert "tapbox-btsnoop" not in " ".join(calls), \
     "the opt-in snoop ring must stay however the owner left it"
+assert "reset-failed tapbox-extra" in calls, \
+    "restore must clear the failed-unit remnant (journal spam otherwise)"
 assert governors() == ["powersave", "powersave"], \
     "--restore must re-park the CPU to the snapshotted mode"
 assert "dev wlan0 set txpower auto" in open(IW_LOG).read(), \

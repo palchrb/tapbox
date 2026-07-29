@@ -120,6 +120,11 @@ case "${1:-}" in
       echo "$prev" > "$g" 2>/dev/null || true
     done
     rm -f "$GOV_STATE" 2>/dev/null || true
+    # Clear the failed-unit remnant: after an extra exits nonzero,
+    # anything that later probes the unit makes systemd re-attempt
+    # loading the deleted transient file and log 'Failed to open ...'
+    # (field 2026-07-29: twice a minute, forever).
+    $SYSTEMCTL reset-failed tapbox-extra >/dev/null 2>&1 || true
     ;;
   *)
     echo "usage: tapbox-extra --run <script> | --restore" >&2

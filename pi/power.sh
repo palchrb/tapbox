@@ -336,8 +336,13 @@ PY
     # design; plug in for sustained performance.
     while true; do
       plugged="$(pisugar_get battery_power_plugged || true)"
+      # The extras guard reads the wrapper's governor-snapshot marker,
+      # NOT systemctl: probing a dead transient unit made systemd log
+      # 'Failed to open /run/systemd/transient/...' twice per minute
+      # forever (field 2026-07-29). The marker exists exactly while an
+      # extra owns the governor — which is precisely the question.
       if [[ "$plugged" == true || "$plugged" == false ]] \
-          && ! systemctl is-active --quiet tapbox-extra 2>/dev/null; then
+          && [[ ! -e "${TAPBOX_RUN:-/run}/tapbox-extra-governor" ]]; then
         want=powersave
         [[ "$plugged" == true ]] && want=ondemand
         cur="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor \
