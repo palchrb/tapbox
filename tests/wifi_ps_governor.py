@@ -264,5 +264,34 @@ calls = run_governor(["Power save: off\n"], [True, False])
 assert calls == [], f"perf mode must stay untouched: {calls}"
 print("12. deliberate PS-off (perf mode, no marker) still stands down OK")
 
-print("WIFI PS GOVERNOR OK — power save off only while streaming, "
-      "battery naps when idle, operator choice respected.")
+# 13. the charger rule (2026-07-29): idle ON THE CHARGER keeps PS off
+# (the doze buys no battery on wall power, costs PWA/SSH latency) —
+# and PS comes back on when the plug is pulled
+daemon.plugged_cached = lambda **k: True
+daemon._bt_playback_active = lambda: False
+calls = run_governor(["Power save: on\n"], [False, False])
+sets = [c[-1] for c in calls]
+assert sets == ["off"], f"plugged idle must hold PS off: {sets}"
+daemon.plugged_cached = lambda **k: None
+calls = run_governor(["Power save: on\n"], [True, False])
+sets = [c[-1] for c in calls]
+assert sets == ["off", "on"], f"unplugged behavior must be unchanged: {sets}"
+print("13. charger keeps PS off at idle; unplugged unchanged OK")
+
+# 13b. THE COEX INVARIANT: the charger rule must never override the
+# cached-playback-keeps-PS-on optimization — BT audio active means PS
+# stays governed by streaming alone, plugged or not (less wifi airtime
+# helps A2DP; charging doesn't change the RF physics)
+daemon.plugged_cached = lambda **k: True
+daemon._bt_playback_active = lambda: True
+calls = run_governor(["Power save: on\n"], [True, False, False])
+sets = [c[-1] for c in calls]
+assert sets == ["off", "on"], \
+    f"BT audio must veto the charger rule: {sets}"
+daemon.plugged_cached = lambda **k: None
+daemon._bt_playback_active = lambda: False
+print("13b. BT audio vetoes the charger rule (coex optimization holds) OK")
+
+print("WIFI PS GOVERNOR OK — power save off only while streaming or "
+      "plugged-and-BT-quiet, battery naps when idle, operator choice "
+      "respected.")

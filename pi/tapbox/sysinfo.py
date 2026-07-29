@@ -258,6 +258,21 @@ def _runtime_step(delta, charging_now, confirmed, rose, prev_accum, pct):
     return int((prev_accum or 0) + delta), pct
 
 
+# Last charger reading from the runtime tracker's 60s tick — a free
+# cache for other daemon policies (the wifi-ps governor's charger rule)
+# so they don't add yet another pisugar poller.
+_PLUGGED = [None, 0.0]  # (bool, monotonic stamp of the reading)
+
+
+def plugged_cached(max_age_s=180.0):
+    """The tracker's last charger reading; None when unknown or stale
+    (tracker not running yet, or a box without a PiSugar)."""
+    val, at = _PLUGGED
+    if val is None or time.monotonic() - at > max_age_s:
+        return None
+    return val
+
+
 def _battery_runtime_tracker():
     """60s ticks: while on battery, add the elapsed powered-on time to the
     persisted counter; reset it whenever the box is (or was) charging.
@@ -281,6 +296,7 @@ def _battery_runtime_tracker():
             plugged = pisugar_get("battery_power_plugged")
             if plugged is None:
                 continue  # no pisugar on this box (or a transient read miss)
+            _PLUGGED[0], _PLUGGED[1] = plugged == "true", now
             charging = pisugar_get("battery_charging")
             pct = _safe_pct(pisugar_get("battery"))
             prev_accum, prev_pct = _load_runtime()

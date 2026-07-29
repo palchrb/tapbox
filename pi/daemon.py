@@ -239,8 +239,8 @@ from tapbox.output import (  # noqa: E402
     reopen_go_output, _retarget_go_librespot)
 from tapbox import sysinfo as _sysinfo  # noqa: E402 — cache-size invalidation
 from tapbox.sysinfo import (  # noqa: E402
-    load_settings, shutdown, system_status, update_settings,
-    _battery_runtime_tracker)
+    load_settings, plugged_cached, shutdown, system_status,
+    update_settings, _battery_runtime_tracker)
 
 MAC_RE = _bt.MAC_RE
 bt_status = _bt.bt_status
@@ -3579,7 +3579,8 @@ def _ps_mark(off):
 
 
 def _ps_govern():
-    log("wifi ps governor: managing (ps off while streaming, on when idle)")
+    log("wifi ps governor: managing (ps off while streaming or on the "
+        "charger, on when idle on battery)")
     ps_off = False  # current state we set (baseline = on)
     idle_since = None  # when continuous not-streaming began (PS still off)
     none_since = None  # when the 'unknown' verdict began (PS still off)
@@ -3612,6 +3613,17 @@ def _ps_govern():
                 want_off = False
             else:
                 none_since = None
+            charger_off = False
+            if not want_off and plugged_cached() \
+                    and not _bt_playback_active():
+                # Charger rule (owner 2026-07-29): on wall power the
+                # idle doze buys no battery and costs PWA/SSH snappiness
+                # — keep PS off while plugged. NEVER over BT audio
+                # though: cached-playback-keeps-PS-on is a deliberate
+                # coex optimization (less wifi airtime helps A2DP on the
+                # shared antenna), and charging doesn't change the RF
+                # physics.
+                want_off, charger_off = True, True
             if want_off:
                 idle_since = None
             elif ps_off:
@@ -3633,7 +3645,8 @@ def _ps_govern():
                            stderr=subprocess.DEVNULL)
             ps_off = want_off
             _ps_mark(want_off)
-            log("wifi power save off (streaming)" if want_off
+            log("wifi power save off (charging)" if charger_off
+                else "wifi power save off (streaming)" if want_off
                 else "wifi power save on (idle)")
         except Exception as e:
             log(f"wifi ps governor error: {e!r}")
