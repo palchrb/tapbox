@@ -932,15 +932,25 @@ class Orchestrator:
             log(f"resume -> {', '.join(acted) if acted else 'nothing loaded'}")
             return {"resumed": acted}
 
-    def stop(self):
+    def stop(self, keep_bookmark=False):
         """Stop = done: also clear the resume bookmark, so the next play
-        starts from the top. (Pause / power-off keep the position.)"""
+        starts from the top. (Pause / power-off keep the position.)
+
+        keep_bookmark=True is the extras-handoff variant (2026-07-29):
+        the player must DIE — a merely paused mpv keeps the ALSA device
+        open, which the extra needs — but the kid's position must
+        survive the gaming session. Field: the wrapper's plain /stop
+        logged 'bookmark cleared' and wiped the audiobook position on
+        every RetroPie launch."""
         with self.lock:
             self._stop_child()
             try:
                 go("/player/pause")
             except OSError:
                 pass
+            if keep_bookmark:
+                log("stop (bookmark kept — handoff)")
+                return {"stopped": True, "bookmark": "kept"}
             # Clear ONLY the current target's bookmark: stopping a podcast
             # must not wipe the Spotify playlist's position (or vice versa)
             if self.target and is_spotify(self.target):
@@ -2306,7 +2316,8 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"media: removed {coll}" + (f"/{name}" if name else ""))
                 self._send(200, {"ok": True})
             elif self.path == "/stop":
-                self._send(200, ORCH.stop())
+                self._send(200, ORCH.stop(
+                    keep_bookmark=bool(body.get("keep"))))
             else:
                 self._send(404, {"error": "not found"})
         except Exception as e:  # never let one request kill the daemon

@@ -1733,13 +1733,34 @@ class App:
             self.dirty = True
             return
         log(f"extras: handing the box to {ex['path']}")
-        self.draw_message(f"Starting {ex['name']} ...")
-        subprocess.Popen([
+        self.draw_message(f"Starting {ex['name']} ...\n"
+                          "(first run can take a minute)")
+        p = subprocess.Popen([
             "systemd-run", "--unit=tapbox-extra", "--collect",
             "--property=Restart=no",
             f"--property=ExecStopPost={EXTRA_WRAPPER} --restore",
             EXTRA_WRAPPER, "--run", ex["path"]])
-        # the wrapper stops tapbox-ui within seconds; nothing more here
+        try:
+            rc = p.wait(timeout=10)  # systemd-run exits once the unit is up
+        except Exception:
+            rc = 0
+        if rc:
+            self.draw_message("Could not start — see journalctl "
+                              "-u tapbox-extra")
+            time.sleep(4)
+            self.dirty = True
+            return
+        # HOLD this frame until the wrapper kills us: returning to the
+        # render loop repainted the MENU over it, and the panel then
+        # froze on the menu for the whole handoff — read in the field
+        # as 'it jumped back to extras and ignores buttons'
+        # (2026-07-29). The ceiling is only the escape hatch for a
+        # launch that silently never stops us.
+        end = time.monotonic() + float(
+            os.environ.get("TAPBOX_EXTRA_HOLD_S", "90"))
+        while time.monotonic() < end:
+            time.sleep(0.5)
+        self.dirty = True
 
     def select_bt(self):
         # Label-based like select_setting: the action rows above the

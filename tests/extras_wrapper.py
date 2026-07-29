@@ -33,7 +33,12 @@ STOPS = []
 
 class Daemon(BaseHTTPRequestHandler):
     def do_POST(self):
-        STOPS.append((self.path, self.headers.get("Content-Type")))
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            payload = {}
+        STOPS.append((self.path, self.headers.get("Content-Type"), payload))
         out = json.dumps({"ok": True}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(out)))
@@ -90,7 +95,10 @@ os.chmod(script, 0o755)
 r = subprocess.run(["bash", WRAPPER, "--run", script], env=env,
                    capture_output=True, text=True, timeout=30)
 assert r.returncode == 0, r.stderr
-assert STOPS and STOPS[0] == ("/stop", "application/json"), STOPS
+assert STOPS and STOPS[0] == ("/stop", "application/json",
+                              {"keep": True}), STOPS
+# keep:true is the bookmark-preserving stop — a plain /stop wipes the
+# kid's audiobook position on every extra launch (field 2026-07-29)
 with open(MARK) as f:
     before_script = f.read()
 assert "stop tapbox-idle tapbox-buttons tapbox-ui" in before_script

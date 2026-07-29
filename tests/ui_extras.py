@@ -82,8 +82,19 @@ print("4. chord opens the menu, no double-push OK")
 # 5. launch: A-confirm required, and the systemd-run recipe carries the
 #    transient unit + ExecStopPost restore (the return guarantee)
 LAUNCHED = []
+RC = [0]
+
+
+class FakeProc:
+    def wait(self, timeout=None):
+        return RC[0]
+
+
 ui.subprocess = type("S", (), {"Popen": staticmethod(
-    lambda argv, **k: LAUNCHED.append(argv))})()
+    lambda argv, **k: (LAUNCHED.append(argv), FakeProc())[1])})()
+os.environ["TAPBOX_EXTRA_HOLD_S"] = "0"  # no 90s hold in the gate
+MSGS = []
+a.draw_message = lambda text, *k, **kw: MSGS.append(text)
 a.sel = 1  # RetroPie
 a.confirm = lambda timeout=5: False
 a.select()
@@ -99,12 +110,26 @@ assert "--property=Restart=no" in argv, \
 assert any(p.startswith("--property=ExecStopPost=") and "--restore" in p
            for p in argv), "ExecStopPost restore is the return guarantee"
 assert argv[-2:] == ["--run", os.path.join(EXTRAS, "retropie.sh")]
+assert any("Starting" in m for m in MSGS), \
+    "the Starting frame must be the one held on screen"
 print("5. launch: confirm-gated, transient unit + ExecStopPost OK")
+
+# 5b. systemd-run failing to start the unit must SAY so instead of
+#     holding a 'Starting ...' frame forever
+RC[0] = 1
+MSGS.clear()
+_real_sleep = ui.time.sleep
+ui.time.sleep = lambda s: None
+a.select()
+ui.time.sleep = _real_sleep
+assert any("Could not start" in m for m in MSGS), MSGS
+RC[0] = 0
+print("5b. failed launch reports instead of freezing OK")
 
 # 6. select on the extras view with a stale sel is harmless
 a.sel = 99
 a.select()
-assert len(LAUNCHED) == 1
+assert len(LAUNCHED) == 2  # the two launches from 5/5b, no third
 print("6. stale selection: no launch OK")
 
 # 6b. THE BLACK-MENU REGRESSION (field 2026-07-29): the extras view

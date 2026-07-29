@@ -62,11 +62,12 @@ case "${1:-}" in
     for g in "$CPUS"/cpu*/cpufreq/scaling_governor; do
       echo ondemand > "$g" 2>/dev/null || true
     done
-    # Stop playback first — the bookmark machinery preserves the exact
-    # episode/track position for the return. SAFE endpoint; the CSRF
-    # gate wants the JSON content type.
-    curl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{}' \
-         "$API/stop" >/dev/null 2>&1 || true
+    # Stop playback first — keep:true preserves the position bookmark
+    # (a plain /stop clears it: 'stop = start over' is the kid-facing
+    # semantic; the handoff must not cost the audiobook position —
+    # field 2026-07-29). SAFE endpoint; CSRF gate wants the JSON type.
+    curl -s -m 5 -X POST -H 'Content-Type: application/json' \
+         -d '{"keep":true}' "$API/stop" >/dev/null 2>&1 || true
     $SYSTEMCTL stop $HANDOFF
     $SYSTEMCTL stop go-librespot 2>/dev/null || true  # frees I2S/ALSA
     exec "$script"
