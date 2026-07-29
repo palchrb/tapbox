@@ -47,6 +47,12 @@ while.
 - Low-battery power-off (PiSugar) stays active while you run.
 - There is no timeout. The physical PiSugar button is the last-resort
   exit.
+- **Want a word on the box screen when you bail?** Write one line to
+  `/run/tapbox-extra.msg` before exiting — TapBox's UI shows it for a
+  few seconds on its next start, then deletes it. If your script dies
+  without leaving one, the wrapper writes a generic
+  "Extra failed (N)" note. (The RetroPie example uses this for its
+  "no TV found" abort.)
 - **The CPU is unparked for you**: TapBox boots in power-save (the
   governor pinned to powersave = 600 MHz flat). The wrapper lifts it
   to ondemand for the duration and puts the previous mode back on

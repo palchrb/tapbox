@@ -43,10 +43,15 @@ RESTORE="bluetooth bluealsa go-librespot tapbox-daemon tapbox-mpris
 
 CPUS="${TAPBOX_CPUFREQ:-/sys/devices/system/cpu}"
 GOV_STATE="${TAPBOX_RUN:-/run}/tapbox-extra-governor"
+# One human line for the box screen: tapbox-ui shows-and-deletes this on
+# its next start (docs/extras.md). Scripts write their own reason;
+# --restore fills in a generic one when the unit failed silently.
+MSG_FILE="${TAPBOX_RUN:-/run}/tapbox-extra.msg"
 
 case "${1:-}" in
   --run)
     script="${2:?usage: tapbox-extra --run <script>}"
+    rm -f "$MSG_FILE" 2>/dev/null || true  # no stale note from last time
     # Unpark the CPU: boot runs 'tapbox-power save', which pins the
     # governor to powersave (= 600 MHz flat on the Zero 2 W) — great
     # for podcasts, hopeless for an emulator. Snapshot whatever mode
@@ -67,6 +72,13 @@ case "${1:-}" in
     exec "$script"
     ;;
   --restore)
+    # A silent failure still deserves a word on the screen: systemd
+    # hands ExecStopPost the unit's outcome — if the script died
+    # without leaving its own message, write a generic one.
+    if [ "${SERVICE_RESULT:-success}" != success ] && [ ! -s "$MSG_FILE" ]; then
+      echo "Extra failed (${EXIT_STATUS:-?}) — see journalctl -u tapbox-extra" \
+        > "$MSG_FILE" 2>/dev/null || true
+    fi
     # unmask FIRST: a script that masked units would otherwise survive
     # the start below and brick the box (QA invariant). Then re-enable:
     # start heals NOW, but a script's 'disable' would survive to the

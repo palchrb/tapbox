@@ -16,6 +16,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
 EXTRAS = os.path.join(TMP, "extras")
 os.environ["TAPBOX_EXTRAS"] = EXTRAS
+os.environ["TAPBOX_RUN"] = TMP
 os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
@@ -105,5 +106,22 @@ a.sel = 99
 a.select()
 assert len(LAUNCHED) == 1
 print("6. stale selection: no launch OK")
+
+# 7. the startup message contract: fresh note is returned once and the
+#    file deleted; a stale note is deleted UNSHOWN (must never greet
+#    tomorrow's boot)
+with open(ui.EXTRA_MSG_FILE, "w") as f:
+    f.write("RetroPie: no TV found — connect HDMI and try again\n")
+msg = ui.consume_extra_msg()
+assert msg == "RetroPie: no TV found — connect HDMI and try again", msg
+assert not os.path.exists(ui.EXTRA_MSG_FILE), "consuming must delete"
+assert ui.consume_extra_msg() is None, "second read: nothing"
+with open(ui.EXTRA_MSG_FILE, "w") as f:
+    f.write("old news")
+old = ui.time.time() - ui.EXTRA_MSG_FRESH_S - 10
+os.utime(ui.EXTRA_MSG_FILE, (old, old))
+assert ui.consume_extra_msg() is None, "stale note must not show"
+assert not os.path.exists(ui.EXTRA_MSG_FILE), "stale note still deleted"
+print("7. extras screen-message: fresh shown once, stale swallowed OK")
 
 print("\nall ui_extras checks passed")

@@ -163,6 +163,31 @@ BACKLIGHT_PIN = 13  # Pirate Audio backlight (BCM13, PWM1-capable)
 # Deliberately OUTSIDE every upload/media root; the API has no route.
 EXTRAS_DIR = os.environ.get("TAPBOX_EXTRAS", "/etc/tapbox/extras")
 EXTRA_WRAPPER = "/usr/local/bin/tapbox-extra"
+# The extras message contract: a script (or the wrapper's restore, for
+# generic failures) writes ONE human line here; the UI shows it on its
+# next startup and deletes it. Without this, a failing extra just
+# bounced back to the home screen with the reason buried in journalctl
+# (owner 2026-07-29: 'no TV on HDMI' deserved to be ON the screen).
+EXTRA_MSG_FILE = os.path.join(_paths.RUN_DIR, "tapbox-extra.msg")
+EXTRA_MSG_FRESH_S = 300  # older = a stale leftover, delete unshown
+
+
+def consume_extra_msg():
+    """The pending extras message, or None. Consuming DELETES the file
+    either way — a stale message must never greet tomorrow's boot."""
+    try:
+        st = os.stat(EXTRA_MSG_FILE)
+        with open(EXTRA_MSG_FILE, errors="ignore") as f:
+            msg = f.read().strip()
+    except OSError:
+        return None
+    try:
+        os.unlink(EXTRA_MSG_FILE)
+    except OSError:
+        pass
+    if not msg or time.time() - st.st_mtime > EXTRA_MSG_FRESH_S:
+        return None
+    return msg[:200]
 
 
 class PngDisplay:
@@ -2420,6 +2445,12 @@ class App:
         except (OSError, ValueError):
             pass  # refresh() fills it in on the next tick
         self.display.set_brightness(self.settings.get("screen_brightness", 100))
+        msg = consume_extra_msg()
+        if msg:
+            # an extra (or its wrapper) left a word for the human — say
+            # it now, while "why am I back at the music box?" is fresh
+            self.draw_message(msg)
+            time.sleep(6)
         self.load_library()
         threading.Thread(target=self._prewarm_art, daemon=True).start()
         # Come back where we were: a live session (boot resume) or a

@@ -150,6 +150,31 @@ r = subprocess.run(["bash", WRAPPER, "--run", bad], env=env,
 assert r.returncode == 7, "the extra's exit must propagate (exec)"
 print("3. crash propagates through exec (unit sees the failure) OK")
 
+# 3b. the screen-message contract: a FAILED unit leaves a generic note
+#     for tapbox-ui unless the script wrote its own; success leaves
+#     nothing; --run clears last time's leftover
+MSG = os.path.join(TMP, "tapbox-extra.msg")
+env_fail = dict(env, SERVICE_RESULT="exit-code", EXIT_STATUS="1")
+subprocess.run(["bash", WRAPPER, "--restore"], env=env_fail,
+               capture_output=True, timeout=30)
+assert "Extra failed (1)" in open(MSG).read(), \
+    "a silent failure must leave a word for the screen"
+os.unlink(MSG)
+with open(MSG, "w") as f:
+    f.write("RetroPie: no TV found\n")
+subprocess.run(["bash", WRAPPER, "--restore"], env=env_fail,
+               capture_output=True, timeout=30)
+assert open(MSG).read().strip() == "RetroPie: no TV found", \
+    "a script's own message must never be overwritten"
+subprocess.run(["bash", WRAPPER, "--run", script], env=env,
+               capture_output=True, timeout=30)
+assert not os.path.exists(MSG), "--run must clear a stale note"
+subprocess.run(["bash", WRAPPER, "--restore"], env=env,
+               capture_output=True, timeout=30)
+assert not os.path.exists(MSG), "a clean exit leaves no note"
+print("3b. screen-message contract: generic on failure, script's own "
+      "kept, stale cleared OK")
+
 # 4. a dead daemon must not block the handoff (curl is best-effort)
 srv.shutdown()
 env_dead = dict(env, TAPBOX_DAEMON="http://127.0.0.1:9")

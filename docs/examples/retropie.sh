@@ -85,6 +85,10 @@ else
   if [ -x "$FBCP_BIN" ]; then
     "$FBCP_BIN" & FBCP_PID=$!
   else
+    # leave the reason ON THE BOX SCREEN (tapbox-ui shows this file on
+    # its next start), then bail so TapBox comes right back
+    echo "RetroPie: no TV found — connect HDMI and try again" \
+      > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
     echo "retropie: no TV on HDMI — aborting so TapBox comes right back"
     exit 1
   fi
