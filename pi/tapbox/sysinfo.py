@@ -156,6 +156,17 @@ def _safe_volts(raw):
     return round(v, 2) if 2.0 <= v <= 6.0 else None
 
 
+def _safe_amps(raw):
+    """JSON-safe battery current (A). PiSugar signs it by direction
+    (charge vs discharge); anything outside a plausible pack current is
+    a glitch (nan/inf fail the compare)."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 2) if -5.0 <= v <= 5.0 else None
+
+
 def _safe_pct(raw):
     """A JSON-safe battery percentage: pisugar can return nan/inf while
     the charger toggles, and json.dumps(nan) is invalid JSON."""
@@ -347,6 +358,7 @@ def invalidate_dir_sizes():
 def system_status():
     batt = pisugar_get("battery")
     volts = pisugar_get("battery_v")
+    amps = pisugar_get("battery_i")
     plugged = pisugar_get("battery_power_plugged")
     disk = None
     try:
@@ -372,6 +384,7 @@ def system_status():
         on_battery_s = _battery_runtime()
     return {"battery": _smoothed_pct(_safe_pct(batt), plugged == "true"),
             "battery_v": _safe_volts(volts),
+            "battery_i": _safe_amps(amps),
             "on_battery_s": on_battery_s,
             "plugged": plugged == "true",
             "disk": disk, "caches": caches, "cpu_temp": temp,

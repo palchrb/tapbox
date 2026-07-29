@@ -766,6 +766,12 @@ async function loadSystem() {
   if (sys.battery_v != null) {
     rows.push(["Battery voltage", `${sys.battery_v.toFixed(2)} V`]);
   }
+  if (sys.battery_i != null) {
+    /* PiSugar signs the current by direction; the plugged flag names it
+       so the row reads as a rate, not a mystery sign */
+    rows.push([sys.plugged ? "Charge current" : "Power draw",
+      `${Math.abs(sys.battery_i).toFixed(2)} A`]);
+  }
   if (sys.on_battery_s != null) {
     const h = Math.floor(sys.on_battery_s / 3600);
     const m = Math.floor((sys.on_battery_s % 3600) / 60);
