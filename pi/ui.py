@@ -560,6 +560,22 @@ def battery_corner(draw, system):
     if pct is not None:
         fill = max(2, int((w - 4) * min(pct, 100) / 100))
         draw.rectangle([x + 2, y + 2, x + 2 + fill, y + h - 2], fill=color)
+    if plugged:
+        # a small bolt over the gauge: charging must be readable at a
+        # glance — color alone only said it when the pack was LOW
+        # (plugged forces green), a charging 50% looked identical to an
+        # idle 50% (owner 2026-07-29). Orange with a dark halo reads on
+        # both the filled and the empty half, and can't be mistaken for
+        # the low-battery orange (the gauge itself is green while
+        # plugged).
+        cx, cy = x + w // 2, y + h // 2
+        strokes = [((cx + 2, y + 1), (cx - 1, cy)),
+                   ((cx - 1, cy), (cx + 2, cy)),
+                   ((cx + 2, cy), (cx - 1, y + h - 1))]
+        for a, b in strokes:
+            draw.line([a, b], fill=BG, width=3)
+        for a, b in strokes:
+            draw.line([a, b], fill=HILITE, width=1)
     _conn_icons(draw, system, x - 6, y, h)
 
 
