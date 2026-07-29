@@ -75,13 +75,18 @@ if [ "$hdmi" = connected ] && command -v cec-client >/dev/null; then
   echo 'on 0' | cec-client -s -d 1 >/dev/null 2>&1 || true
   echo 'as'   | cec-client -s -d 1 >/dev/null 2>&1 || true
 else
-  # SPI fallback: mirror /dev/fb0 onto the Pirate Audio ST7789
-  # (build fbcp-ili9341 yourself; without it, no picture)
+  # No TV. The design intent is HDMI-only — launching ES with no
+  # picture would just brick the box for a kid until someone SSHed in.
+  # Optional SPI experiment (small-screen cores like GB at 160x144):
+  # provide a mirror yourself via FBCP_BIN — NB: classic fbcp-ili9341
+  # needs the legacy dispmanx stack, which KMS-era Trixie lacks; the
+  # realistic route there is a runtime panel-mipi-dbi/fbtft overlay.
   FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
   if [ -x "$FBCP_BIN" ]; then
     "$FBCP_BIN" & FBCP_PID=$!
   else
-    echo "retropie: WARNING: no HDMI and $FBCP_BIN missing — no picture"
+    echo "retropie: no TV on HDMI — aborting so TapBox comes right back"
+    exit 1
   fi
 fi
 
