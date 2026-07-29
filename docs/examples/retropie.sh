@@ -23,6 +23,20 @@ set -u
 RP_USER="${RP_USER:-palchrb}"   # the user RetroPie-Setup installed for
 SESSION=retropie
 
+# --- first-run dependency bootstrap -----------------------------------
+# MUST run before the RF-quiet block below cuts wifi. Idempotent: once
+# everything is present this is a no-op. RetroPie itself is NOT
+# auto-installed — that's a deliberate owner action (RetroPie-Setup).
+need=""
+command -v screen >/dev/null || need="$need screen"
+python3 -c "import evdev" 2>/dev/null || need="$need python3-evdev"
+command -v cec-client >/dev/null || need="$need cec-utils"
+if [ -n "$need" ]; then
+  echo "retropie: first run — installing:$need"
+  apt-get update -qq && apt-get install -y -qq $need \
+    || echo "retropie: WARNING: dependency install failed (offline?) — continuing"
+fi
+
 # quiet the BT pager while pairing/using a BT controller (the wrapper's
 # restore starts it again). Uncomment the daemon line if a core needs
 # the RAM — the phone's remote escape hatch is gone while it's down.
@@ -46,14 +60,29 @@ for d in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
     && bluetoothctl disconnect "$d" >/dev/null
 done
 
-# mirror /dev/fb0 onto the Pirate Audio ST7789 (build fbcp-ili9341
-# yourself; without it nothing reaches the SPI display)
-FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
+# --- display: TV over HDMI when plugged, else the SPI screen ----------
+# With a TV attached, KMS renders straight to HDMI — no fbcp mirroring
+# needed at all (this sidesteps the SPI path's biggest uncertainty).
+# CEC then wakes the TV and grabs its input: 'as' (active source) makes
+# the TV switch to WHICHEVER port the Pi occupies — CEC negotiates
+# physical addresses over the cable, so no port is ever configured
+# (same proven pair as palchrb/retropie_wrapper: 'on 0' + 'as').
+TV=0
 FBCP_PID=""
-if [ -x "$FBCP_BIN" ]; then
-  "$FBCP_BIN" & FBCP_PID=$!
+hdmi="$(cat /sys/class/drm/card*-HDMI-A-*/status 2>/dev/null | head -1)"
+if [ "$hdmi" = connected ] && command -v cec-client >/dev/null; then
+  TV=1
+  echo 'on 0' | cec-client -s -d 1 >/dev/null 2>&1 || true
+  echo 'as'   | cec-client -s -d 1 >/dev/null 2>&1 || true
 else
-  echo "retropie: WARNING: $FBCP_BIN missing — no picture on the SPI display"
+  # SPI fallback: mirror /dev/fb0 onto the Pirate Audio ST7789
+  # (build fbcp-ili9341 yourself; without it, no picture)
+  FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
+  if [ -x "$FBCP_BIN" ]; then
+    "$FBCP_BIN" & FBCP_PID=$!
+  else
+    echo "retropie: WARNING: no HDMI and $FBCP_BIN missing — no picture"
+  fi
 fi
 
 # Emergency button (ported from wrapper.py): hold BTN_MODE 3s -> one
@@ -101,6 +130,9 @@ fi
 cleanup() {
   [ -n "$EMERG_PID" ] && kill "$EMERG_PID" 2>/dev/null || true
   [ -n "$FBCP_PID" ] && kill "$FBCP_PID" 2>/dev/null || true
+  # polite TV standby on the way out (the old wrapper.py behavior)
+  [ "$TV" = 1 ] && { echo 'standby 0' | cec-client -s -d 1 \
+    >/dev/null 2>&1 || true; }
   screen -S "$SESSION" -X quit 2>/dev/null || true
 }
 trap cleanup EXIT
