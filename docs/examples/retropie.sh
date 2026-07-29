@@ -109,4 +109,13 @@ trap cleanup EXIT
 # wrapper.py lesson) run attached-in-foreground, so this script blocks
 # until EmulationStation exits. The moment it does, the trap cleans up
 # and the tapbox-extra wrapper takes the box back.
-screen -Dm -S "$SESSION" runuser -u "$RP_USER" -- emulationstation
+#
+# Why not the proven `screen -X stuff 'emulationstation\n'` from
+# wrapper.py: stuff is fire-and-forget into a pre-existing session —
+# right for a forever-daemon that never needs to know when ES ends,
+# wrong here where THIS script's exit IS the give-the-box-back signal.
+# -Dm keeps both properties that made stuff work: the real pty, and
+# (via `runuser -l`, a full LOGIN environment: HOME/PATH/XDG as the
+# user — plain `runuser -u` leaked HOME=/root and ES wrote its config
+# to the wrong home) the interactive-shell surroundings.
+screen -Dm -S "$SESSION" runuser -l "$RP_USER" -c emulationstation
