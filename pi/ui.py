@@ -2447,10 +2447,16 @@ class App:
         self.display.set_brightness(self.settings.get("screen_brightness", 100))
         msg = consume_extra_msg()
         if msg:
-            # an extra (or its wrapper) left a word for the human — say
-            # it now, while "why am I back at the music box?" is fresh
+            # An extra (or its wrapper) left a word for the human — say
+            # it now, while "why am I back at the music box?" is fresh.
+            # Same draw_message primitive as every other error screen
+            # (bt connect, network) and dismissable like them: any
+            # button ends the 6s early.
             self.draw_message(msg)
-            time.sleep(6)
+            end = time.monotonic() + 6
+            while time.monotonic() < end:
+                if self.inputs.poll(0.2):
+                    break
         self.load_library()
         threading.Thread(target=self._prewarm_art, daemon=True).start()
         # Come back where we were: a live session (boot resume) or a
