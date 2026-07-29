@@ -318,25 +318,33 @@ PY
                      echo "get $p" 2>/dev/null; sleep 0.2
                    done) | nc -q1 127.0.0.1 8423 2>/dev/null )" && [[ -n $vals ]]; then
         echo "$(date +'%F %T'),$(val battery_v),$(val battery_i),$(val battery),$(val battery_power_plugged)" >> "$LOG_FILE"
-        # Charger-follow (owner request 2026-07-29): the 600MHz powersave
-        # park exists FOR the battery — on wall power it is pure
-        # sluggishness (slow menus, glacial syncs/installs). Follow the
-        # plug: ondemand on charger, powersave on battery. Guards:
-        # never while a tapbox-extra runs (its wrapper owns the
-        # governor for the session), and only on real transitions so
-        # the journal stays quiet. Note: 'tapbox-power perf' on BATTERY
-        # is re-parked within a tick — plug in for sustained perf.
-        plugged_now="$(val battery_power_plugged)"
-        if [[ "$plugged_now" == true || "$plugged_now" == false ]] \
-            && ! systemctl is-active --quiet tapbox-extra 2>/dev/null; then
-          want=powersave
-          [[ "$plugged_now" == true ]] && want=ondemand
-          cur="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor \
-                 2>/dev/null || true)"
-          if [[ -n "$cur" && "$cur" != "$want" ]]; then
-            set_governor "$want" || true
-            echo "charger-follow: governor -> $want (plugged=$plugged_now)"
-          fi
+      fi
+      sleep 60
+    done
+    ;;
+  _followloop)  # internal: run by tapbox-chargefollow.service
+    # Charger-follow (owner 2026-07-29): the 600MHz powersave park
+    # exists FOR the battery — on wall power it is pure sluggishness
+    # (slow menus, glacial syncs/installs). Follow the plug: ondemand
+    # on charger, powersave on battery. STANDALONE on purpose: plugged
+    # state comes straight from pisugar-server, so this must never
+    # depend on the opt-in battery logger. Guards: act only on a
+    # definite reading (a hiccuping pisugar-server skips the tick),
+    # only on real transitions (quiet journal), and never while a
+    # tapbox-extra runs — its wrapper owns the governor then. Note:
+    # 'tapbox-power perf' on BATTERY is re-parked within a tick by
+    # design; plug in for sustained performance.
+    while true; do
+      plugged="$(pisugar_get battery_power_plugged || true)"
+      if [[ "$plugged" == true || "$plugged" == false ]] \
+          && ! systemctl is-active --quiet tapbox-extra 2>/dev/null; then
+        want=powersave
+        [[ "$plugged" == true ]] && want=ondemand
+        cur="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor \
+               2>/dev/null || true)"
+        if [[ -n "$cur" && "$cur" != "$want" ]]; then
+          set_governor "$want" || true
+          echo "charger-follow: governor -> $want (plugged=$plugged)"
         fi
       fi
       sleep 60

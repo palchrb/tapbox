@@ -787,6 +787,26 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
+# Charger-follow: the CPU governor tracks the power plug (ondemand on
+# charger, powersave on battery — tapbox-power _followloop). Standalone
+# by design: it reads pisugar-server directly and must never depend on
+# the OPT-IN battery logger. Meaningless without a PiSugar, hence the
+# config-file condition.
+write_if_changed /etc/systemd/system/tapbox-chargefollow.service <<'EOF' && CHARGE_CHANGED=1
+[Unit]
+Description=TapBox charger-follow (CPU governor tracks the power plug)
+After=pisugar-server.service
+Wants=pisugar-server.service
+ConditionPathExists=/etc/pisugar-server/config.json
+
+[Service]
+ExecStart=/usr/local/bin/tapbox-power _followloop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
 # btsnoop ring (OPT-IN diagnostic, installed disabled): HCI capture into a
 # RAM ring so the next `hci0: hardware error 0x00` can be attributed to the
 # right layer — the kernel synthesizes that exact event on a dead UART link
@@ -972,7 +992,8 @@ chmod 644 /etc/systemd/system/tapbox-*.service \
   /etc/systemd/system/go-librespot.service 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service tapbox-mpris.service \
-  tapbox-buttons.service tapbox-daemon.service tapbox-idle.service
+  tapbox-buttons.service tapbox-daemon.service tapbox-idle.service \
+  tapbox-chargefollow.service
 # One-time migration: earlier installs enabled tapbox-rfid before the PN532
 # existed. Switch it to the same opt-in contract as tapbox-ui — but only
 # once, so an enable after wiring the reader sticks across installs.
@@ -988,6 +1009,7 @@ fi
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
 [[ ${MPRIS_CHANGED:-0} -eq 1 ]] && { echo "    mpris bridge changed — restarting"; systemctl restart tapbox-mpris.service; }
 [[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart tapbox-idle.service; }
+[[ ${CHARGE_CHANGED:-0} -eq 1 ]] && { echo "    charger-follow changed — restarting"; systemctl restart tapbox-chargefollow.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null \
   && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
