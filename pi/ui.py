@@ -1872,6 +1872,13 @@ class App:
             rolls = draw_list(d, "Nearby devices", self.current_items(),
                               self.sel, self.system,
                               hint="A: pair and connect   B: back")
+        elif self.view == "extras":
+            # same list chrome as every other menu — the field bug that
+            # forced this comment: the view existed (chord opened it, A
+            # confirmed a launch) but had no render branch, so the
+            # "menu" was a black screen (owner 2026-07-29)
+            rolls = draw_list(d, "Extras", self.current_items(), self.sel,
+                              self.system, hint="A: start   B: back")
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "link":

@@ -107,6 +107,32 @@ a.select()
 assert len(LAUNCHED) == 1
 print("6. stale selection: no launch OK")
 
+# 6b. THE BLACK-MENU REGRESSION (field 2026-07-29): the extras view
+#     must actually RENDER — it existed and handled input (A asked
+#     'Start RetroPie?') but had no render branch, so the menu was a
+#     black screen. Pin: render() on view=extras draws a non-empty
+#     frame containing a highlighted list row.
+class FakeDisplay:
+    last = None
+
+    def show(self, img):
+        FakeDisplay.last = img
+
+
+a.view = "extras"
+a.sel = 0
+a.display = FakeDisplay()
+a.status = {}
+a.system = {}
+a.marquee_active = False
+a.render()
+frame = FakeDisplay.last
+assert frame is not None, "render must show a frame"
+colors = {frame.getpixel((x, y)) for x in range(0, ui.W, 8)
+          for y in range(0, ui.H, 8)}
+assert len(colors) > 2, "extras menu must not render as a blank screen"
+print("6b. extras view renders a real list (black-menu regression) OK")
+
 # 7. the startup message contract: fresh note is returned once and the
 #    file deleted; a stale note is deleted UNSHOWN (must never greet
 #    tomorrow's boot)
