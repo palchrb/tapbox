@@ -38,6 +38,17 @@ from tapbox.paths import last_activity, read_settings  # noqa: E402
 
 IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 CHECK_S = 60
+
+
+def describe(minutes):
+    """'0' means DISABLED — say so. The old line printed 'will power
+    off after 0 min', which read as an instant-shutdown bug and sent
+    the owner hunting in the wrong daemon (field 2026-07-29: the real
+    culprit was a pisugar-server tap shell)."""
+    if minutes <= 0:
+        return "idle auto-shutdown DISABLED (idle_shutdown_min=0)"
+    return (f"will power off after {minutes} min without playback or "
+            "button presses")
 # A button press younger than this counts as 'in use'. Two check
 # periods: a press can land anywhere between samples, and one extra
 # cycle of grace is cheaper than a box dying in a kid's hands.
@@ -82,8 +93,8 @@ def _cycle(idle):
 
 def main():
     idle = 0
-    print(f"tapbox-idle: will power off after {idle_minutes()} min without "
-          "playback or button presses (live from settings.json)", flush=True)
+    print(f"tapbox-idle: {describe(idle_minutes())} "
+          "(live from settings.json)", flush=True)
     while True:
         idle = _cycle(idle)
         if idle is None:
