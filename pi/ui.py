@@ -604,6 +604,25 @@ def battery_corner(draw, system):
     _conn_icons(draw, system, x - 6, y, h)
 
 
+def wrap_text(d, text, font, max_w):
+    """Word-wrap for message screens: explicit \\n is a hard break;
+    within a paragraph, words fill lines up to max_w pixels (measured,
+    not guessed). A single word wider than the panel stays on its own
+    line — clipped beats an infinite loop."""
+    lines = []
+    for para in text.split("\n"):
+        cur = ""
+        for word in para.split():
+            cand = (cur + " " + word).strip()
+            if not cur or d.textlength(cand, font=font) <= max_w:
+                cur = cand
+            else:
+                lines.append(cur)
+                cur = word
+        lines.append(cur)
+    return lines or [""]
+
+
 MARQUEE_STEP_S = 0.35  # how fast a too-long selected label slides
 
 
@@ -1852,7 +1871,15 @@ class App:
     def draw_message(self, text):
         img = Image.new("RGB", (W, H), BG)
         d = ImageDraw.Draw(img)
-        d.text((W // 2, H // 2), text, font=F_MED, fill=FG, anchor="mm")
+        # word-wrap to the panel: long one-liners (the extras 'no TV
+        # found' note, verbose bt errors) ran off the 240px edge
+        # (field 2026-07-30). Explicit \n stays a hard break.
+        lines = wrap_text(d, text, F_MED, W - 16)
+        line_h = 24
+        y = H // 2 - (len(lines) - 1) * line_h // 2
+        for ln in lines:
+            d.text((W // 2, y), ln, font=F_MED, fill=FG, anchor="mm")
+            y += line_h
         battery_corner(d, self.system)
         self.display.show(img)
 
