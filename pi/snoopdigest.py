@@ -41,6 +41,7 @@ NOISE_EVENTS = ("Number of Completed Packets",)
 
 TAIL_N = 30        # control packets shown before each crash
 NEAR_S = 10.0      # "final seconds" window for rate comparison
+MEDIA_GAP_S = 5.0  # outbound-ACL silence longer than this splits segments
 # Link-policy events — the baseband things a peer can do to a live ACL
 # (sniff mode, role switch, packet-type renegotiation) that combo-chip
 # firmware is notoriously sensitive to. Became the prime suspect when
@@ -101,8 +102,19 @@ def classify(hdr, sublines):
 
 
 def parse(lines):
-    """btmon text -> list of (ts, direction, kind, tag), crash list."""
+    """btmon text -> (control packets, crash ts list, media segments).
+
+    Media = UNCLASSIFIED outbound ACL — the A2DP payload btmon shows no
+    protocol layer for. Per-packet it is noise (and stays out of the
+    control tail), but its ENVELOPE answers the one question the control
+    plane can't: when did the audio stream actually flow, and when did
+    it silently freeze. Field 2026-07-30 12:11: the stream died ~3min
+    before the kernel's stall detector logged a word — a 1MB capture in
+    a 15MB-per-window session was the only tell. Kept as [start, end,
+    frames] segments (split on MEDIA_GAP_S) so a 90k-frame capture
+    costs a handful of lists, not 90k tuples."""
     packets, crashes = [], []
+    media = []  # [start, end, frames] outbound-ACL flow segments
     cur = None  # (hdr_tuple, ts, sublines)
 
     def flush():
@@ -116,6 +128,12 @@ def parse(lines):
         c = classify((direction, desc), subs)
         if c:
             packets.append((ts, c[0], c[1], c[2]))
+        elif direction == "<" and desc.startswith("ACL Data"):
+            if media and ts - media[-1][1] <= MEDIA_GAP_S:
+                media[-1][1] = ts
+                media[-1][2] += 1
+            else:
+                media.append([ts, ts, 1])
 
     for raw in lines:
         m = HDR.match(raw.rstrip("\n"))
@@ -125,7 +143,7 @@ def parse(lines):
         elif cur is not None:
             cur[2].append(raw)
     flush()
-    return packets, crashes
+    return packets, crashes, media
 
 
 def hist(items):
@@ -136,14 +154,33 @@ def hist(items):
 
 
 def digest(name, lines):
-    packets, crashes = parse(lines)
-    if not packets:
+    packets, crashes, media = parse(lines)
+    if not packets and not media:
         print(f"== {name}: no parseable btmon packets (wrong file?)")
         return
-    t0, t1 = packets[0][0], packets[-1][0]
+    # capture bounds include the media flow: a frozen link's last control
+    # packet can sit minutes past the last audio frame (or vice versa),
+    # and the control-only span hid exactly that (field 2026-07-30: '92.3s
+    # of traffic' was really a 5min window with a stream dead from ~20s in)
+    ends = ([packets[0][0], packets[-1][0]] if packets else []) + \
+           ([media[0][0], media[-1][1]] if media else [])
+    t0, t1 = min(ends), max(ends)
     span = max(t1 - t0, 1e-9)
     print(f"== {name}: {span:.1f}s of traffic, "
           f"{len(packets)} control packets, {len(crashes)} Hardware Error")
+
+    if media:
+        print(f"   outbound ACL flow (the audio payload; a gap > "
+              f"{MEDIA_GAP_S:.0f}s splits segments):")
+        for seg in media[:10]:
+            print(f"     {seg[0] - t0:8.1f}s -> {seg[1] - t0:8.1f}s  "
+                  f"{seg[2]} frames")
+        if len(media) > 10:
+            print(f"     ... and {len(media) - 10} more segments")
+        dead = t1 - media[-1][1]
+        if dead > MEDIA_GAP_S:
+            print(f"     stream SILENT for the final {dead:.1f}s of the "
+                  "capture")
 
     avrcp = [p for p in packets if p[2] == "avrcp"]
     avdtp = [p for p in packets if p[2] == "avdtp"]
