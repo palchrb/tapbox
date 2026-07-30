@@ -75,7 +75,13 @@ def classify(hdr, sublines):
         if desc.startswith(("HCI Event:", "HCI Command:")):
             name = desc.split(":", 1)[1].strip()
             name = re.sub(r"\s*\(0x[0-9a-fx|]+\)\s*plen\s+\d+$", "", name)
-            if name in NOISE_EVENTS:
+            # btmon elides long names to '..' once the packet-number
+            # column widens (field 2026-07-30: 'Number of Completed
+            # Pack..' from ~#10000 on — 15817 of them flooded the
+            # histogram past the exact-match filter)
+            if name in NOISE_EVENTS or (
+                    name.endswith("..")
+                    and any(n.startswith(name[:-2]) for n in NOISE_EVENTS)):
                 return None
             kind = "event" if desc.startswith("HCI Event") else "cmd"
             tag = (kind, f"{'EVT' if kind == 'event' else 'CMD'} {name}")
@@ -102,7 +108,7 @@ def classify(hdr, sublines):
 
 
 def parse(lines):
-    """btmon text -> (control packets, crash ts list, media segments).
+    """btmon text -> (control packets, crash ts, media segments, nocp).
 
     Media = UNCLASSIFIED outbound ACL — the A2DP payload btmon shows no
     protocol layer for. Per-packet it is noise (and stays out of the
@@ -115,6 +121,11 @@ def parse(lines):
     costs a handful of lists, not 90k tuples."""
     packets, crashes = [], []
     media = []  # [start, end, frames] outbound-ACL flow segments
+    # Completion events pair with the media flow: 'who stopped first'
+    # separates a host that quit sending from a chip/peer that quit
+    # ACKing (credit starvation). Matched on substring, immune to the
+    # '..' elision. [acks, last ack ts, outbound frames since it]
+    nocp = [0, None, 0]
     cur = None  # (hdr_tuple, ts, sublines)
 
     def flush():
@@ -125,10 +136,16 @@ def parse(lines):
             crashes.append(ts)
             packets.append((ts, direction, "crash", "EVT Hardware Error"))
             return
+        if direction == ">" and "Number of Completed Pack" in desc:
+            nocp[0] += 1
+            nocp[1] = ts
+            nocp[2] = 0
+            return
         c = classify((direction, desc), subs)
         if c:
             packets.append((ts, c[0], c[1], c[2]))
         elif direction == "<" and desc.startswith("ACL Data"):
+            nocp[2] += 1
             if media and ts - media[-1][1] <= MEDIA_GAP_S:
                 media[-1][1] = ts
                 media[-1][2] += 1
@@ -143,7 +160,7 @@ def parse(lines):
         elif cur is not None:
             cur[2].append(raw)
     flush()
-    return packets, crashes, media
+    return packets, crashes, media, nocp
 
 
 def hist(items):
@@ -154,7 +171,7 @@ def hist(items):
 
 
 def digest(name, lines):
-    packets, crashes, media = parse(lines)
+    packets, crashes, media, nocp = parse(lines)
     if not packets and not media:
         print(f"== {name}: no parseable btmon packets (wrong file?)")
         return
@@ -181,6 +198,17 @@ def digest(name, lines):
         if dead > MEDIA_GAP_S:
             print(f"     stream SILENT for the final {dead:.1f}s of the "
                   "capture")
+        if nocp[0]:
+            line = (f"     completions (NOCP): {nocp[0]} acks, "
+                    f"last at {nocp[1] - t0:.1f}s")
+            if nocp[2]:
+                # frames the host sent that the chip never completed —
+                # nonzero at a freeze means the CHIP/peer stopped acking
+                # while the host was still pushing (credit starvation),
+                # not the host going quiet on its own
+                line += (f" — {nocp[2]} outbound frames after the "
+                         "last ack")
+            print(line)
 
     avrcp = [p for p in packets if p[2] == "avrcp"]
     avdtp = [p for p in packets if p[2] == "avdtp"]

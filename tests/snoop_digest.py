@@ -124,15 +124,17 @@ print("7. link-policy timeline + direction + per-crash delta OK")
 FREEZE = """\
 < ACL Data TX: Handle 11 flags 0x00 dlen 400             #1 [hci0] 10.000000
       Channel: 66 len 396 [PSM 25 mode Basic (0x00) {chan 1}]
-< ACL Data TX: Handle 11 flags 0x00 dlen 400             #2 [hci0] 10.500000
+> HCI Event: Number of Completed Packets (0x13) plen 5   #2 [hci0] 10.100000
+< ACL Data TX: Handle 11 flags 0x00 dlen 400             #3 [hci0] 10.500000
       Channel: 66 len 396 [PSM 25 mode Basic (0x00) {chan 1}]
-< ACL Data TX: Handle 11 flags 0x00 dlen 400             #3 [hci0] 30.000000
+> HCI Event: Number of Completed Pack.. (0x13) plen 5  #10001 [hci0] 10.600000
+< ACL Data TX: Handle 11 flags 0x00 dlen 400          #10002 [hci0] 30.000000
       Channel: 66 len 396 [PSM 25 mode Basic (0x00) {chan 1}]
-< ACL Data TX: Handle 11 flags 0x00 dlen 400             #4 [hci0] 31.000000
+< ACL Data TX: Handle 11 flags 0x00 dlen 400          #10003 [hci0] 31.000000
       Channel: 66 len 396 [PSM 25 mode Basic (0x00) {chan 1}]
-> ACL Data RX: Handle 11 flags 0x02 dlen 400             #5 [hci0] 200.000000
+> ACL Data RX: Handle 11 flags 0x02 dlen 400          #10004 [hci0] 200.000000
       Channel: 67 len 396 [PSM 25 mode Basic (0x00) {chan 2}]
-< HCI Command: Disconnect (0x01|0x0006) plen 3           #6 [hci0] 300.000000
+< HCI Command: Disconnect (0x01|0x0006) plen 3        #10005 [hci0] 300.000000
 """
 buf = io.StringIO()
 with redirect_stdout(buf):
@@ -142,10 +144,20 @@ assert "outbound ACL flow" in out, out
 flat = " ".join(out.split())
 assert "0.0s -> 0.5s 2 frames" in flat, out
 assert "20.0s -> 21.0s 2 frames" in flat, out
-assert out.count("frames") == 2, "the 20s gap must split the segments"
+assert sum(1 for ln in out.splitlines()
+           if ln.strip().endswith("frames")) == 2, \
+    "the 20s gap must split the segments"
 assert "SILENT for the final 269.0s" in out, out
 assert "290.0s of traffic" in out.split("\n")[0], \
     "the span must cover media, not just control packets"
-print("8. media envelope: segments, gap split, silent tail, RX ignored OK")
+# completion tracking: both the full and the '..'-elided form count
+# (btmon elides long names once the packet-number column widens — 15817
+# leaked past the exact-match noise filter in the 2026-07-30 capture),
+# they stay out of the control histogram, and the unacked tail is named
+assert "completions (NOCP): 2 acks, last at 0.6s" in out, out
+assert "2 outbound frames after the last ack" in out, out
+assert "Completed Pack.." not in out, "elided NOCP must not leak"
+assert "1 control packets" in out.split("\n")[0], out.split("\n")[0]
+print("8. media envelope: segments, gap split, silent tail, NOCP OK")
 
 print("all snoop_digest checks passed")
