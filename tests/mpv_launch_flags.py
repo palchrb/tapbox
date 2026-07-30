@@ -46,4 +46,21 @@ print("3. startup trims present (ao=alsa, no-config, no scripts, no ytdl) OK")
 assert "--audio-buffer=0.5" in cmd, "the RF-gap audio cushion is missing"
 print("4. 0.5s audio buffer flag present OK")
 
+# 5. bookmark resume launches PAUSED (silent until the seek lands —
+# field 2026-07-30: episode start played audibly for a few seconds
+# before the jump); a fresh start must NOT carry the flag. Deliberately
+# --pause + IPC seek, NOT a per-file --start group: playlist wraps
+# (next at the end, double-prev) re-enter slot 0 and a --start group
+# would re-apply the stale bookmark mid-playthrough.
+paused_cmd = player.mpv_command(["/cache/show/e1.mp3"], 40,
+                                "/run/tapbox-mpv.sock", "tapbox_bt",
+                                paused=True)
+assert "--pause" in paused_cmd, "bookmark resume must load silent"
+assert paused_cmd.index("--pause") < paused_cmd.index("/cache/show/e1.mp3"), \
+    "--pause must precede the queue (global option)"
+assert "--pause" not in cmd, "a fresh start must not launch paused"
+assert "--start" not in " ".join(paused_cmd), \
+    "never a --start group (playlist wraps re-apply it)"
+print("5. resume loads paused, fresh start does not OK")
+
 print("MPV LAUNCH FLAGS OK — audio-critical flags pinned; trims are additive.")

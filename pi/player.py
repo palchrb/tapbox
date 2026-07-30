@@ -181,13 +181,20 @@ def _stop_sync_child():
             pass
 
 
-def mpv_command(urls, volume, sock, pcm):
+def mpv_command(urls, volume, sock, pcm, paused=False):
     """The mpv argv for a play. Extracted so a test can pin the
     audio-critical flags — dropping --audio-samplerate/--audio-channels
     plays low-bitrate audiobooks SILENTLY over A2DP, so they must never be
-    lost to a 'startup trim'."""
+    lost to a 'startup trim'.
+
+    paused=True for a bookmark resume: load silent, seek over IPC, then
+    unpause — the audible dance played EPISODE START for a few seconds
+    before the seek landed (field 2026-07-30). A per-file --start group
+    would be instant but poisons playlist wraps: next/prev re-enter slot
+    0 and would re-apply the stale bookmark mid-playthrough."""
     return [
         "mpv", "--no-video", "--really-quiet",
+    ] + (["--pause"] if paused else []) + [
         # Startup trims (shave cold-spawn; none change what plays):
         #  --ao=alsa   : straight to ALSA, skip the AO autoprobe
         #  --no-config : no mpv.conf exists — skip the config scans
@@ -555,7 +562,8 @@ def main():
         # remote stream: claim the radio, let an in-flight BT page finish
         radio.touch_busy()
         radio.wait_paging_clear()
-    proc = subprocess.Popen(mpv_command(urls, volume, sock, output_pcm()))
+    proc = subprocess.Popen(mpv_command(urls, volume, sock, output_pcm(),
+                                        paused=bool(start_pos)))
     terminated = []  # set when WE are told to stop (reboot/daemon restart)
 
     def _stop(*_args):
@@ -598,10 +606,18 @@ def main():
             pass
         time.sleep(0.2)
     if start_pos:
+        # mpv was launched --pause so the episode start never plays out
+        # loud; the unpause is a SEPARATE try so a failed seek still
+        # unsticks playback (from 0:00 — the old behavior, not silence).
         try:
             ipc(sock, "seek", start_pos, "absolute")
         except OSError:
             log("could not seek to resume position — playing from start")
+        try:
+            ipc(sock, "set_property", "pause", False)
+        except OSError:
+            log("could not unpause after the resume seek — "
+                "play/pause button will")
 
     # Background episode caching starts ONLY now — AFTER mpv is up. Launched
     # before the IPC wait it competed with mpv's own file open for the (cold,
