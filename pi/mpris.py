@@ -120,15 +120,33 @@ def carry_position(old, new):
     while playing. Treating a positionless poll as 0 made every IPC
     hiccup look like a seek-to-start: the car's progress bar slammed to
     0:00 (remaining = full length) and back on alternating polls (field
-    2026-07-27, Skoda display)."""
-    if new.get("Position") is not None:
-        return new
-    base = (old or {}).get("Position") or 0
-    if old and old.get("PlaybackStatus") == "Playing" \
-            and new.get("PlaybackStatus") == "Playing":
-        base += int(POLL_S * 1_000_000)
-    out = dict(new)
-    out["Position"] = base
+    2026-07-27, Skoda display).
+
+    mpris:length rides the SAME mpv IPC, so the same hiccup also
+    delivers a durationless poll — the Metadata then flapped
+    with/without length on alternating ticks, and a length-less track
+    renders as a zeroed progress bar on the head unit even with a good
+    Position (field 2026-07-30: the display still flapped correct/0
+    after the position carry). Carry the old length too, but only while
+    the TITLE is unchanged: a real track change must never inherit the
+    previous track's duration."""
+    out = new
+    if new.get("Position") is None:
+        base = (old or {}).get("Position") or 0
+        if old and old.get("PlaybackStatus") == "Playing" \
+                and new.get("PlaybackStatus") == "Playing":
+            base += int(POLL_S * 1_000_000)
+        out = dict(new)
+        out["Position"] = base
+    meta = new.get("Metadata") or {}
+    old_meta = (old or {}).get("Metadata") or {}
+    if meta.get("xesam:title") and "mpris:length" not in meta \
+            and old_meta.get("xesam:title") == meta.get("xesam:title") \
+            and "mpris:length" in old_meta:
+        if out is new:
+            out = dict(new)
+        out["Metadata"] = dict(meta,
+                               **{"mpris:length": old_meta["mpris:length"]})
     return out
 
 
@@ -136,8 +154,7 @@ def props_changed(old, new):
     """The keys worth signalling: track/status always; position only when
     it jumped off the extrapolation (a seek/track change), because BlueZ
     extrapolates steady playback by itself."""
-    if new.get("Position") is None:  # direct callers may skip the carry
-        new = carry_position(old, new)
+    new = carry_position(old, new)  # idempotent; direct callers skip it
     if old is None:
         return dict(new)
     out = {}

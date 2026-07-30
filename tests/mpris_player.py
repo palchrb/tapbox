@@ -120,6 +120,33 @@ assert mpris.props_changed(old, carried) == {}, \
 assert mpris.props_changed(old, raw) == {}
 print("3e. positionless poll: carried forward, no phantom seek OK")
 
+# 3f. a DURATIONLESS poll (same IPC hiccup, other property): Metadata
+#     must keep the old mpris:length while the title is unchanged and
+#     emit NOTHING — a length-less track renders as a zeroed progress
+#     bar on the head unit even with a good Position (field 2026-07-30:
+#     the Skoda display still flapped correct/0 after the position
+#     carry). A REAL track change must never inherit the old length.
+nodur_st = {k: v for k, v in st.items() if k != "duration"}
+raw = mpris.status_to_props(dict(nodur_st, position=43.5))
+assert "mpris:length" not in raw["Metadata"]
+carried = mpris.carry_position(old, raw)
+assert carried["Metadata"]["mpris:length"] == old["Metadata"]["mpris:length"]
+assert mpris.props_changed(old, carried) == {}, \
+    "a durationless poll must not flap Metadata"
+assert mpris.props_changed(old, raw) == {}, "belt for direct callers"
+# hiccup hitting BOTH properties at once: still nothing emitted
+both = mpris.carry_position(old, mpris.status_to_props(
+    dict(nodur_st, position=None)))
+assert both["Metadata"]["mpris:length"] == old["Metadata"]["mpris:length"]
+assert mpris.props_changed(old, both) == {}
+# track change WITHOUT a duration yet: new title, no inherited length
+next_raw = mpris.status_to_props(
+    dict(nodur_st, title="Neste sang", position=0.5))
+assert "mpris:length" not in \
+    mpris.carry_position(old, next_raw)["Metadata"], \
+    "a new track must not wear the old track's length"
+print("3f. durationless poll: length carried, no flap, no inheritance OK")
+
 # 3d. pause/resume emits PlaybackStatus
 paused = dict(st, playing=False)
 changed = mpris.props_changed(old, mpris.status_to_props(paused))
