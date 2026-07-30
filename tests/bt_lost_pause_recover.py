@@ -208,4 +208,32 @@ REAL_HEAL()
 assert RECHECKS == [], "healthy controller: no re-probe scheduled"
 print("5e. crash inside cooldown: one delayed re-probe, then heals OK")
 
+# 5f. a CLEAN probe (no signature yet) arms one silent re-probe — the
+#     command-timeout wedge signature matures ~50s after the
+#     transport-died notify (field 2026-07-30 12:14: the kernel killed
+#     the stalled car link, the probe ran with ONE timeout in the
+#     journal, the third came at +50s, and with output fallen back to
+#     local nothing ever probed again — wedged until reboot). The
+#     re-probe itself (rearm=False) must never chain, or every plain
+#     headset power-off would tick probes forever.
+RECHECKS.clear()
+daemon._BT_HEAL["recheck"] = False
+daemon._bt._hci_crashed = lambda: False
+daemon._BT_HEAL["last"] = 0.0  # far past any cooldown
+REAL_HEAL()
+assert RECHECKS == [daemon.BT_HEAL_REPROBE_S], \
+    f"a clean probe must arm one re-probe: {RECHECKS}"
+assert daemon._BT_HEAL["recheck"], "the armed flag must be set"
+REAL_HEAL()  # second clean trigger while armed
+assert len(RECHECKS) == 1, "re-probes must never stack"
+daemon._BT_HEAL["recheck"] = False  # what _fire() does first
+REAL_HEAL(rearm=False)  # the re-probe fires, still clean
+assert len(RECHECKS) == 1, "a clean re-probe must not chain another"
+# ...and when the signature HAS matured by fire time, it heals
+daemon._bt._hci_crashed = lambda: True
+RECOVERS.clear()
+REAL_HEAL(rearm=False)
+assert RECOVERS == ["recover"], "a matured signature heals on the re-probe"
+print("5f. clean probe arms one re-probe, no chaining, matured wedge heals OK")
+
 print("\nall bt_lost_pause_recover checks passed")

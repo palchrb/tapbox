@@ -2709,9 +2709,13 @@ _BT_HEAL = {"lock": threading.Lock(), "last": 0.0}
 BT_HEAL_SUCCESS_COOLDOWN_S = float(
     os.environ.get("TAPBOX_BT_HEAL_OK_COOLDOWN", "45"))
 BT_HEAL_COOLDOWN_S = float(os.environ.get("TAPBOX_BT_HEAL_COOLDOWN", "300"))
+# A clean probe re-checks once after this long — the command-timeout
+# wedge signature needs ~50s to reach _hci_crashed's threshold (see the
+# clean-exit comment below), so the delay must comfortably clear that.
+BT_HEAL_REPROBE_S = float(os.environ.get("TAPBOX_BT_HEAL_REPROBE", "90"))
 
 
-def _heal_crashed_controller():
+def _heal_crashed_controller(rearm=True):
     """btwatchd is deliberately passive on adapter loss (PLAN-bt-dbus.md
     §1), so a kick can't fix a CRASHED firmware — its Connect just keeps
     failing NotReady. Field log 2026-07-17: 'hardware error 0x00' left
@@ -2744,6 +2748,19 @@ def _heal_crashed_controller():
                 _schedule_heal_recheck(wait + 5)
             return
         if not _bt._hci_crashed():
+            # The wedge signature MATURES after the trigger: btwatchd's
+            # transport-died notify lands seconds after the kernel kills
+            # a stalled link, when the journal holds ONE 'command tx
+            # timeout' — the third only arrives with the next connect
+            # attempts, ~50s in (field 2026-07-30 12:14: probe ran
+            # clean, the signature completed at +50s, and with output
+            # fallen back to local no play intent ever probed again —
+            # the controller sat wedged until reboot). Arm ONE silent
+            # re-probe; the re-probe itself runs with rearm=False so a
+            # plain speaker-away can never chain probes forever.
+            if rearm and not _BT_HEAL.get("recheck"):
+                _BT_HEAL["recheck"] = True
+                _schedule_heal_recheck(BT_HEAL_REPROBE_S)
             return  # plain speaker-away: btwatchd's job, not ours
         _BT_HEAL["last"] = time.monotonic()
         log("bt heal: crashed controller found — recovering")
@@ -2786,7 +2803,7 @@ def _schedule_heal_recheck(delay):
     the test gate can stub the timer)."""
     def _fire():
         _BT_HEAL["recheck"] = False
-        _heal_crashed_controller()
+        _heal_crashed_controller(rearm=False)
     t = threading.Timer(delay, _fire)
     t.daemon = True
     t.start()
