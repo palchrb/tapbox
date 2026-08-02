@@ -738,6 +738,7 @@ class App:
         self.bt_connecting_until = 0.0  # popup X pressed: full connect running
         self.wifi_connecting_until = 0.0  # X pressed: wifi reconnect running
         self.catch_up_until = 0.0   # repaint every tick until this time
+        self.play_offline = False   # _play_async parked a no-internet verdict
         self._pp_expect = None      # optimistic play/pause: expected playing
         self._pp_until = 0.0        #   state, held until a poll confirms it
         self.last_status = 0.0
@@ -1297,6 +1298,39 @@ class App:
             self._force_poll()  # kick the poller so the icon confirms fast
         threading.Thread(target=go, daemon=True).start()
 
+    def _play_async(self, body):
+        """Start playback off the UI thread, optimistically.
+
+        /play is the SLOWEST endpoint the screen calls: for a Spotify
+        target it runs `systemctl is-active` (10s budget) plus two
+        go_status() round-trips (5s each) before it answers, so its
+        worst case is far past CONTROL_TIMEOUT. Called inline it froze
+        the panel mid-press and then gave up without even entering
+        now-playing, so the box looked both stuck and idle while
+        playback was in fact starting (field 2026-08-02: 6s freeze on
+        an album tile, the retry hit the daemon's resume shortcut and
+        felt instant).
+
+        So: enter now-playing IMMEDIATELY (the screen shows intent),
+        POST in the background, and let the poller confirm — the same
+        contract as _control_async. The one answer the UI still needs
+        is 'no-internet': a background thread must not draw, so it
+        parks the verdict and the main loop runs the reconnect flow."""
+        self._enter_now()
+
+        def go():
+            try:
+                r = api_post("/play", body, timeout=CONTROL_TIMEOUT)
+            except OSError as e:
+                log(f"play failed: {e}")
+                return
+            if isinstance(r, dict) and r.get("error") == "no-internet":
+                # wifi is up but the WAN is down — the daemon's probe is
+                # the authority (the screen's local check can't tell)
+                self.play_offline = True
+            self._force_poll()
+        threading.Thread(target=go, daemon=True).start()
+
     def _open_episodes(self):
         """Hold-Y in now-playing: the episode picker for whatever is
         playing — the same list view the full menus use. In kid mode this
@@ -1434,14 +1468,7 @@ class App:
                 if "spotify" in e["target"] and self._no_internet():
                     self._reconnect_for_spotify()  # try to GET the net
                     return
-                r = api_post("/play", {"id": e["id"]},
-                             timeout=CONTROL_TIMEOUT)
-                if r.get("error") == "no-internet":
-                    # wifi is up but the WAN is down — the daemon's probe
-                    # is the authority (the local check above can't tell)
-                    self._reconnect_for_spotify()
-                    return
-                self._enter_now()
+                self._play_async({"id": e["id"]})
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
         except OSError as e:
@@ -1597,12 +1624,7 @@ class App:
                     if self.expanded["kind"] == "spotify" and self._no_internet():
                         self._reconnect_for_spotify()  # get the net now
                         return
-                    r = api_post("/play", {"id": self.entry["id"]})
-                    if r.get("error") == "no-internet":
-                        # wifi up, WAN down — the daemon's probe knows
-                        self._reconnect_for_spotify()
-                        return
-                    self._enter_now()
+                    self._play_async({"id": self.entry["id"]})
                 else:
                     self.push("episodes")
             elif self.view == "episodes":
@@ -1611,8 +1633,7 @@ class App:
                     ep = self.expanded["episodes"][self.sel - 1]
                     if ep.get("id"):
                         body["episode"] = ep["id"]
-                api_post("/play", body)
-                self._enter_now()
+                self._play_async(body)
             elif self.view == "settings":
                 self.select_setting()
             elif self.view == "extras":
@@ -2558,6 +2579,17 @@ class App:
         threading.Thread(target=self._poller, daemon=True).start()  # P1
         while True:
             self._loop_beat = time.monotonic()
+            if self.play_offline:
+                # _play_async's background POST came back 'no-internet'.
+                # The reconnect flow DRAWS (and sleeps), so it belongs on
+                # this thread, never on the poster's.
+                self.play_offline = False
+                if self.view == "now":
+                    # leave the optimistic now-playing view — but only if
+                    # the user hasn't already navigated somewhere else,
+                    # or back() would eat a level they chose themselves
+                    self.back()
+                self._reconnect_for_spotify()
             self.inputs.gesture_mode = (self.view == "now")
             # arm hold-B up-navigation in the category carousel (mode 2):
             # short B still flips tiles, a held B steps up a level
