@@ -125,7 +125,7 @@ fi
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
-GO_LIBRESPOT_VERSION="v0.1.5"  # v0.0.8 Fast skip: debounced next/prev (a
+GO_LIBRESPOT_VERSION="v0.1.6"  # v0.0.8 Fast skip: debounced next/prev (a
 # burst of N presses costs 2 audio-key requests instead of N) + a circuit
 # breaker on throttled keys (aes code 2 -> one retry + stop, never the
 # 51-track walk that kept the account rate-limited); /status gains
@@ -142,7 +142,13 @@ GO_LIBRESPOT_VERSION="v0.1.5"  # v0.0.8 Fast skip: debounced next/prev (a
 # PCM open, so a speaker swap's rewritten asound.conf is honored by the
 # running process — the silent-box bug 2026-07-27 — on both the play and
 # live-reopen paths. This is what made the daemon's swap-restart guard
-# deletable.
+# deletable. v0.1.6: skip_debounce_ms default 400 -> 800 (fork #17) —
+# the first skip of a burst still loads inline, so a single press is as
+# fast as ever; the wider window just catches more of a mash in one
+# audio-key request. We deliberately do NOT pin the value in config.yml:
+# the fork's default is the tuning knob. Also adds debug-level logging
+# of each debounce decision (silent at our log level, there when
+# tuning).
 GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
 
 if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \
