@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
@@ -95,15 +96,16 @@ NEW = "https://open.spotify.com/playlist/bbbbbbbbbbbbbbbbbbbbbb"
 NEW_URI = "spotify:playlist:bbbbbbbbbbbbbbbbbbbbbb"
 sp.save_bookmark({"context_uri": NEW_URI, "uri": "spotify:track:b3",
                   "position": 120000, "duration": 200000,
-                  "name": "Regnvaersanger", "artists": [],
+                  "name": "Regnvaersanger", "artists": ["Alf Proeysen"],
                   "artwork": "http://scdn/b3.jpg", "updated": 1})
 mosaic = content.spotify_art_path(NEW)
 os.makedirs(os.path.dirname(mosaic), exist_ok=True)
 open(mosaic, "wb").write(b"jpg")
-daemon.go_status = lambda **_k: {"track": {"uri": "spotify:track:OLD",
-                                      "name": "Gammel sang",
-                                      "position": 5000, "duration": 100000,
-                                      "album_cover_url": "http://scdn/old.jpg"},
+OLD_TRACK = {"uri": "spotify:track:OLD", "name": "Gammel sang",
+             "artist_names": ["Forrige Artist"], "album_name": "Gammelt album",
+             "position": 5000, "duration": 100000,
+             "album_cover_url": "http://scdn/old.jpg"}
+daemon.go_status = lambda **_k: {"track": dict(OLD_TRACK),
                             "paused": False, "stopped": False,
                             "play_origin": "go-librespot"}
 orch._stop_child = lambda: None
@@ -113,7 +115,32 @@ st = orch.status()
 assert st["title"] == "Regnvaersanger", f"old context leaked: {st['title']}"
 assert st["artwork"] == mosaic, st["artwork"]
 assert st["position"] == 120.0 and st["playing"] is True
+# ...and the SUBTITLE too: the screen's artist line reads
+# spotify.artists, which this guard used to leave describing the
+# outgoing track — the new album's name above the previous album's
+# artist (field 2026-08-02, carousel album -> album)
+assert st["spotify"]["artists"] == ["Alf Proeysen"], \
+    f"previous context's artist leaked: {st['spotify']['artists']}"
+assert st["spotify"]["track"] == "Regnvaersanger", st["spotify"]["track"]
+assert st["spotify"]["track_uri"] == "spotify:track:b3", \
+    "the song picker must not mark the OLD context's row"
+assert st["spotify"]["album"] != "Gammelt album", st["spotify"]["album"]
+assert st["spotify"]["artwork"] == mosaic, st["spotify"]["artwork"]
 print("6. new spotify tap shows ITS identity, not the old context OK")
+
+# 6b. no bookmark yet (a never-played album): show NOTHING under the
+# title rather than the previous album's artist
+sp.clear_bookmark(NEW_URI)
+orch.spot_pending = {"pre_uri": "spotify:track:OLD", "at": time.monotonic()}
+st = orch.status()
+assert st["spotify"]["artists"] == [], \
+    f"a fresh album must not borrow an artist: {st['spotify']['artists']}"
+assert st["spotify"]["track"] is None, st["spotify"]["track"]
+sp.save_bookmark({"context_uri": NEW_URI, "uri": "spotify:track:b3",
+                  "position": 120000, "duration": 200000,
+                  "name": "Regnvaersanger", "artists": ["Alf Proeysen"],
+                  "artwork": "http://scdn/b3.jpg", "updated": 1})
+print("6b. never-played album: blank subtitle, never a borrowed artist OK")
 
 # 7. ...and the moment the loaded track changes, live status takes over
 daemon.go_status = lambda **_k: {"track": {"uri": "spotify:track:b3",

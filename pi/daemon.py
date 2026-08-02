@@ -1477,6 +1477,21 @@ class Orchestrator:
                         or (bm or {}).get("artwork")
                 except Exception:
                     out["artwork"] = (bm or {}).get("artwork")
+                # The card's SUBTITLE reads out['spotify']['artists'],
+                # which this guard used to leave describing the OUTGOING
+                # track — so the new album's name sat above the previous
+                # album's artist for the second or two before the load
+                # landed (field 2026-08-02, carousel album -> album).
+                # Present this context's own bookmark instead, and show
+                # NOTHING rather than something wrong when there is none
+                # (a never-played album). track_uri goes too: the song
+                # picker marks the playing row with it.
+                out["spotify"] = dict(out["spotify"],
+                                      track=(bm or {}).get("name"),
+                                      track_uri=(bm or {}).get("uri"),
+                                      artists=(bm or {}).get("artists") or [],
+                                      album=None,
+                                      artwork=out["artwork"])
         # Ghost sessions: nothing is live, but a bookmarked target is
         # remembered -> present it as paused-at-position instead of
         # "nothing playing". Pressing play resumes exactly there.
