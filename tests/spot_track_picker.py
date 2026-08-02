@@ -10,15 +10,19 @@ podcasts — and picking one starts it via /play {id, episode:<track uri>}
   sweep-pending entries (track: null) are skipped, not rendered blank.
 - tracks stays OPT-IN: without it a spotify entry expands to the same
   leaf card as before — a browse tap must PLAY, never open a list.
-- albums list too (v0.1.2; snapshot_id null, complete first call);
-  artist/show (HTTP 400) and a pre-v0.1.2 fork (404) degrade to the
-  leaf card, no crash.
+- albums list too (v0.1.2); a non-listable uri (HTTP 400) and a
+  pre-v0.1.2 fork (404) degrade to the leaf card, no crash.
+- v0.1.7: the endpoint answers WITHOUT waiting on the network, so the
+  first call for an unknown context is ready=false + empty. The
+  wrapper polls until the listing is renderable — rendered straight it
+  opened the picker on nothing.
 - play_spotify(start_uri=...) plays {uri, skip_to_uri=<pick>} from the
   top: no position, and the bookmark is neither read nor cleared."""
 import io
 import os
 import sys
 import tempfile
+import time
 import urllib.error
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +37,7 @@ from tapbox import library, spotify  # noqa: E402
 
 PL = "https://open.spotify.com/playlist/0hgSZmY9xhzx51hlLB2arI"
 LISTING = {"uri": "spotify:playlist:0hgSZmY9xhzx51hlLB2arI",
-           "snapshot_id": "abc", "length": 3, "cached": 2,
+           "ready": True, "length": 3, "cached": 2,
            "tracks": [
                {"uri": "spotify:track:a",
                 "track": {"name": "Blue Monday '88",
@@ -43,6 +47,8 @@ LISTING = {"uri": "spotify:playlist:0hgSZmY9xhzx51hlLB2arI",
                {"uri": "spotify:track:c",
                 "track": {"name": "Shout", "artist_names": []}},
            ]}
+
+REAL_CONTEXT_TRACKS = spotify.context_tracks  # restored for section 5
 
 asked = []
 spotify.context_tracks = lambda uri, timeout=5: (asked.append(uri),
@@ -60,10 +66,10 @@ assert eps[0]["image"] == "https://i.scdn.co/a"
 assert eps[1]["title"] == "Shout", eps[1]  # no artists: bare name
 print("1. tracks=True: fork listing mapped to picker rows OK")
 
-# 1b. albums (v0.1.2): same mapping — complete first call, null snapshot
+# 1b. albums (v0.1.2): same mapping
 AL = "https://open.spotify.com/album/4rxfprnLYz3592ZGaeqcON"
 ALBUM = {"uri": "spotify:album:4rxfprnLYz3592ZGaeqcON",
-         "snapshot_id": None, "length": 1, "cached": 1,
+         "ready": True, "length": 1, "cached": 1,
          "tracks": [{"uri": "spotify:track:d",
                      "track": {"name": "Un poco loco",
                                "artist_names": ["Coco"],
@@ -125,5 +131,77 @@ assert "position" not in BODY, f"a pick starts from the top: {BODY}"
 assert bookmark_calls == [], \
     f"a pick must neither read nor clear the bookmark: {bookmark_calls}"
 print("4. picked track: /player/play {uri, skip_to_uri}, bookmark alone OK")
+
+# 5. the v0.1.7 settle contract. The endpoint no longer waits on the
+#    network: the first call for an unknown context is ready=false with
+#    an EMPTY listing, so rendering the first answer opened the picker
+#    on nothing. context_tracks polls until the listing is renderable.
+import json as _json  # noqa: E402
+import urllib.request as _ureq  # noqa: E402
+
+
+class _Resp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _serve(pages):
+    """urlopen stub replaying one JSON body per call (last one repeats)."""
+    calls = []
+
+    def _open(url, timeout=None):
+        calls.append(url)
+        page = pages[min(len(calls) - 1, len(pages) - 1)]
+        return _Resp(_json.dumps(page).encode())
+    return _open, calls
+
+
+spotify.context_tracks = REAL_CONTEXT_TRACKS  # sections 1-3 stubbed it out
+spotify.CONTEXT_SETTLE_S = 3.0
+_ureq.urlopen, calls = _serve([
+    {"uri": "spotify:album:x", "ready": False, "length": 0,
+     "cached": 0, "tracks": []},                    # enumerating
+    {"uri": "spotify:album:x", "ready": True, "length": 2,
+     "cached": 0, "tracks": [{"uri": "t1", "track": None},
+                             {"uri": "t2", "track": None}]},  # meta filling
+    {"uri": "spotify:album:x", "ready": True, "length": 2, "cached": 2,
+     "tracks": [{"uri": "t1", "track": {"name": "A"}},
+                {"uri": "t2", "track": {"name": "B"}}]},      # done
+])
+d = spotify.context_tracks("spotify:album:x")
+assert d["cached"] == 2 and len(calls) == 3, (d, calls)
+print("5. not-ready and metadata-filling answers are polled through OK")
+
+# 5b. a ready-but-EMPTY listing (a show: episodes are omitted) returns
+#     at once — there is nothing to wait for
+_ureq.urlopen, calls = _serve([{"uri": "spotify:show:s", "ready": True,
+                                "length": 0, "cached": 0, "tracks": []}])
+d = spotify.context_tracks("spotify:show:s")
+assert d["length"] == 0 and len(calls) == 1, (d, calls)
+print("5b. ready-but-empty (show) returns immediately OK")
+
+# 5c. version skew: a pre-v0.1.7 binary has no 'ready' field, and must
+#     behave exactly as before instead of polling out the whole budget
+_ureq.urlopen, calls = _serve([{"uri": "spotify:playlist:p", "length": 1,
+                                "cached": 1,
+                                "tracks": [{"uri": "t", "track": {}}]}])
+d = spotify.context_tracks("spotify:playlist:p")
+assert len(calls) == 1, f"old fork must not be polled: {calls}"
+print("5c. pre-v0.1.7 binary (no 'ready' field) is not polled OK")
+
+# 5d. a context that never settles is bounded — the picker's 'Fetching
+#     episodes ...' frame must not outlive the UI's own budget
+_ureq.urlopen, calls = _serve([{"uri": "spotify:playlist:q", "ready": False,
+                                "length": 0, "cached": 0, "tracks": []}])
+spotify.CONTEXT_SETTLE_S = 0.5
+t0 = time.monotonic()
+d = spotify.context_tracks("spotify:playlist:q")
+took = time.monotonic() - t0
+assert 0.4 < took < 2.0, f"settle wait unbounded/absent: {took:.2f}s"
+assert d["ready"] is False, "the last answer is still returned"
+print("5d. a never-settling context is bounded by settle_s OK")
 
 print("\nall spot_track_picker checks passed")

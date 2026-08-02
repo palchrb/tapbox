@@ -266,18 +266,42 @@ PREV_RESTART_MS = 5000  # >5s into the track: prev restarts it — the same
                         # semantics the mpv side uses (daemon command())
 
 
-def context_tracks(uri, timeout=5):
-    """Fork v0.1.2: a playlist's or album's track listing straight from
-    go-librespot (GET /context/tracks) — names, artists and cover urls
-    with NO Web API involved. Playlist entries the metadata cache
-    doesn't know yet come back with track=null and the request itself
-    kicks a background sweep, so a re-open shortly after is complete;
-    album listings are complete on the first call. Raises OSError when
-    unreachable; HTTPError 400 = not a listable uri (artist/show),
-    404 = a pre-v0.1.2 fork."""
+CONTEXT_SETTLE_S = float(os.environ.get("TAPBOX_CONTEXT_SETTLE", "4"))
+
+
+def context_tracks(uri, timeout=5, settle_s=None):
+    """A context's track listing straight from go-librespot (GET
+    /context/tracks) — names, artists and cover urls with NO Web API
+    involved. Playlists, albums and (since fork v0.1.7) artists all
+    enumerate the same way; shows list empty (episodes are omitted).
+
+    v0.1.7 answers WITHOUT waiting on the network: the first call for
+    an unknown context kicks off enumeration and returns ready=false
+    with an EMPTY listing, and metadata fills in behind that. Rendered
+    straight, that opens the song picker on nothing and makes the kid
+    back out and try again. So poll the documented way — until the
+    listing is ready AND something is actually renderable — bounded by
+    settle_s, with the picker's 'Fetching episodes ...' frame already
+    on screen.
+
+    A listing that is ready but EMPTY (a show) returns at once: there
+    is nothing to wait for. And 'ready' defaults to True when absent,
+    so a pre-v0.1.7 binary (version skew, a rollback) behaves exactly
+    as it did instead of polling out the whole budget.
+
+    Raises OSError when unreachable; HTTPError 400 = not a listable
+    uri, 404 = a pre-v0.1.2 fork."""
     url = API + "/context/tracks?uri=" + urllib.parse.quote(uri, safe="")
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    deadline = time.monotonic() + (CONTEXT_SETTLE_S if settle_s is None
+                                   else settle_s)
+    while True:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            d = json.loads(r.read().decode())
+        ready = d.get("ready", True)  # pre-v0.1.7: always ready
+        renderable = d.get("cached") or not d.get("length")
+        if (ready and renderable) or time.monotonic() >= deadline:
+            return d
+        time.sleep(0.25)
 
 
 def skip(action, timeout=10):
