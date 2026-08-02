@@ -204,4 +204,19 @@ assert 0.4 < took < 2.0, f"settle wait unbounded/absent: {took:.2f}s"
 assert d["ready"] is False, "the last answer is still returned"
 print("5d. a never-settling context is bounded by settle_s OK")
 
+# 6. the Liked Songs collection (fork v0.1.9): the URI form must parse
+#    — it is the gate for play, bookmarks, pre-cache and the listing.
+#    No share link exists for it, so the URI is what a card carries.
+assert spotify.to_uri("spotify:user:palchrb:collection") == \
+    "spotify:user:palchrb:collection"
+assert spotify.to_uri("spotify:user:11x.y-z_9:collection") == \
+    "spotify:user:11x.y-z_9:collection", "user ids carry ./-/_"
+assert spotify.is_spotify("spotify:user:palchrb:collection")
+# ...and the shapes that must NOT sneak through the new alternative
+assert spotify.to_uri("spotify:user:palchrb:playlist") is None
+assert spotify.to_uri("spotify:user::collection") is None
+# a collection bookmark file is hash-named — any URI shape is safe
+assert spotify.bm_path("spotify:user:palchrb:collection").endswith(".json")
+print("6. Liked Songs collection URI parses (and impostors do not) OK")
+
 print("\nall spot_track_picker checks passed")

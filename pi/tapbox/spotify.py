@@ -15,8 +15,11 @@ from tapbox.paths import STATE_DIR
 API = os.environ.get("TAPBOX_GO_API", "http://127.0.0.1:3678")
 CONFIG = os.environ.get("TAPBOX_GO_CONFIG", "")
 
+# spotify:user:<id>:collection is Liked Songs (fork v0.1.9 lists and
+# plays it). It has no share link — the URI is what a card carries.
 URI_RE = re.compile(
-    r"^spotify:(track|album|playlist|artist|episode|show):[A-Za-z0-9]+$")
+    r"^spotify:(?:(?:track|album|playlist|artist|episode|show)"
+    r":[A-Za-z0-9]+|user:[^:\s]+:collection)$")
 LINK_RE = re.compile(
     r"open\.spotify\.com/(?:intl-[a-z-]+/)?"
     r"(track|album|playlist|artist|episode|show)/([A-Za-z0-9]+)")
@@ -272,8 +275,9 @@ CONTEXT_SETTLE_S = float(os.environ.get("TAPBOX_CONTEXT_SETTLE", "4"))
 def context_tracks(uri, timeout=5, settle_s=None):
     """A context's track listing straight from go-librespot (GET
     /context/tracks) — names, artists and cover urls with NO Web API
-    involved. Playlists, albums and (since fork v0.1.7) artists all
-    enumerate the same way; shows list empty (episodes are omitted).
+    involved. Playlists, albums, artists (fork v0.1.7), shows (their
+    episodes) and the Liked Songs collection (both v0.1.9) all
+    enumerate the same way.
 
     v0.1.7 answers WITHOUT waiting on the network: the first call for
     an unknown context kicks off enumeration and returns ready=false
