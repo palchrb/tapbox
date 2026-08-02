@@ -125,7 +125,7 @@ fi
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
-GO_LIBRESPOT_VERSION="v0.1.7"  # v0.0.8 Fast skip: debounced next/prev (a
+GO_LIBRESPOT_VERSION="v0.1.8"  # v0.0.8 Fast skip: debounced next/prev (a
 # burst of N presses costs 2 audio-key requests instead of N) + a circuit
 # breaker on throttled keys (aes code 2 -> one retry + stop, never the
 # 51-track walk that kept the account rate-limited); /status gains
@@ -157,6 +157,14 @@ GO_LIBRESPOT_VERSION="v0.1.7"  # v0.0.8 Fast skip: debounced next/prev (a
 # that, or the song picker opens empty. Also: only the FIRST deferral
 # of a skip burst PUTs connect state upstream, which is what was
 # drawing 429s during a mash — local /status still sees every move.
+# v0.1.8: upstream sync (fork #23) — two SESSION fixes (a permanently
+# lost AP/dealer connection tears down and rebuilds the session like a
+# logout instead of leaving the zombie behind 'spotify session is
+# empty' replays; session management made atomic), plus podcast resume
+# (server-side, episodes only — an explicit play position still wins:
+# the API seek runs AFTER the resume lookup), an MP3 decoder (what
+# many Spotify podcast episodes actually ship as) and codec/bitrate
+# fields in /status (additive; nothing here reads them yet).
 GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
 
 if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \
