@@ -149,10 +149,13 @@ async function loadQueue(target) {
   const card = $("#queue-card");
   const wrap = $("#queue");
   wrap.textContent = "";
-  if (!target || target.includes("spotify")) {  // spotify = leaf, no listing
+  if (!target) {
     card.hidden = true;
     return;
   }
+  // Spotify contexts list their songs too (fork v0.1.1 metadata cache,
+  // via /expand tracks=1) — same rows, same tap-to-play as podcasts.
+  const spot = target.includes("spotify");
   try {
     // Prefer the library entry: /expand?id applies its play order,
     // which is the order the box actually queues in.
@@ -163,6 +166,7 @@ async function loadQueue(target) {
         if (e.target === target) url = `/expand?id=${encodeURIComponent(e.id)}`;
       }
     } catch (e) { /* no library — fall back to target expand */ }
+    if (spot) url += "&tracks=1";
     const r = await api(url);
     const eps = r.episodes || [];
     for (const ep of eps) {
@@ -236,7 +240,8 @@ async function pollStatus() {
     $("#btn-play").textContent = st.playing ? "⏸" : "▶";
     currentTarget = st.target || null;
     if (st.target !== queueTarget) loadQueue(st.target);
-    markQueuePlaying(st.episode_id);
+    markQueuePlaying(st.episode_id ||
+      (st.spotify && st.spotify.track_uri));
     $("#btn-shuffle").classList.toggle("on", !!st.shuffle);
     $("#btn-shuffle").dataset.on = st.shuffle ? "1" : "";
     const out = document.querySelector(`input[name=output][value=${st.output}]`);
