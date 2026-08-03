@@ -101,7 +101,14 @@ library.spotify.context_tracks = \
     lambda uri, timeout=5: (_ for _ in ()).throw(OSError("down"))
 r = library.expand_target(PL, tracks=True)
 assert r["episodes"] == [], r["episodes"]
-print("3. artist/old-fork/down: degrades to the leaf card OK")
+# a session drop mid-listing answers 204/empty body -> json.loads(b"")
+# raises ValueError, which must degrade the same way (QA 2026-08-03:
+# it escaped the OSError-only catch and 502'd the /expand route)
+library.spotify.context_tracks = \
+    lambda uri, timeout=5: (_ for _ in ()).throw(ValueError("empty body"))
+r = library.expand_target(PL, tracks=True)
+assert r["episodes"] == [], r["episodes"]
+print("3. artist/old-fork/down/204-mid-poll: degrades to the leaf card OK")
 
 # 4. play_spotify(start_uri): {uri, skip_to_uri}, from the top, bookmark
 #    untouched

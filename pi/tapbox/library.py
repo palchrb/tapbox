@@ -639,8 +639,13 @@ def expand_target(target, order="auto", name=None, tracks=False):
                          "url": t.get("uri"),
                          "image": meta.get("album_cover_url"),
                          "cached": False})
-            except OSError:
-                episodes = []  # artist/show (400), pre-v0.1.2 fork, down
+            except (OSError, ValueError):
+                # OSError: not listable (400), pre-v0.1.2 fork, api down.
+                # ValueError: a session drop mid-listing answers 204/empty
+                # body and json.loads(b"") raises it — same degradation
+                # as down, not a crash bubbling to the /expand route
+                # (QA audit 2026-08-03).
+                episodes = []
         return {"kind": "spotify", "name": name, "target": target,
                 "order": "auto", "image": image, "episodes": episodes}
     key = (target, order, name)
