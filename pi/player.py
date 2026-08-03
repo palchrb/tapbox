@@ -38,6 +38,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -569,6 +570,16 @@ def main():
     def _stop(*_args):
         terminated.append(True)
         proc.terminate()
+        # A TERM'd mpv blocked in a write to a dead BT transport never
+        # exits — and the poll loop below waits for it, eating tapboxd's
+        # 10s patience until only this python parent got SIGKILLed and
+        # the mpv survived as an orphan HOLDING the bluealsa PCM (field
+        # 2026-08-03: 'Device or resource busy' for every later spawn).
+        # Escalate: SIGKILL the mpv after 8s — inside the daemon's 10s,
+        # so the loop still exits HERE and the bookmark still flushes.
+        t = threading.Timer(8, proc.kill)
+        t.daemon = True
+        t.start()
         _stop_sync_child()  # the per-play sync dies WITH us — otherwise it
         # keeps downloading as an orphan while the NEXT source streams
         # (field 2026-07-18: a 336-episode feed sync survived a switch to

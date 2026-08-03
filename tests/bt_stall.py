@@ -184,6 +184,63 @@ wait_for("frozen-position stall -> respawn", lambda: SPAWNED)
 assert RECOVERED == [], "ready output must not trigger BT recovery"
 print("6. frozen position restarts without touching the radio OK")
 
+# 6b. the SECOND consecutive frozen stall on bt escalates to a link
+#     rebuild — a dead-but-CONNECTED transport (headset died, chip never
+#     reported it) freezes every respawn at the same content point while
+#     bluez keeps lying (field 2026-08-03: 12 identical restart cycles).
+#     The respawn resumes ~3s EARLIER from the bookmark, so escalation
+#     must anchor on 'no progress past the freeze point', never on exact
+#     position equality.
+MPV["pos"] = max(0.0, MPV["pos"] - 3.0)  # bookmark drift backwards
+start_playing()  # the respawn (harness leaves ALIVE False after stop)
+wait_for("2nd frozen stall -> escalation", lambda: RECOVERED)
+assert RECOVERED == ["reconnect"], (
+    f"2nd consecutive frozen stall must rebuild the link: {RECOVERED}")
+assert len(SPAWNED) == 2, SPAWNED
+print("6b. 2nd frozen stall on bt (with bookmark drift) rebuilds link OK")
+
+# 6c. real progress PAST the freeze point resets the streak: the next
+#     frozen stall is a FIRST again — no radio surgery
+reset()
+set_output("bt")
+MPV["tick"] = 0.0
+TX["step"] = 1750
+start_playing()
+wait_for("first frozen stall", lambda: SPAWNED)
+assert RECOVERED == []
+MPV.update(pos=MPV["pos"] + 60.0, tick=1.0)  # plays well past the anchor
+start_playing()
+time.sleep(0.3)  # let the watchdog see the progress
+MPV["tick"] = 0.0  # then a NEW freeze
+wait_for("second (reset) frozen stall", lambda: len(SPAWNED) >= 2)
+assert RECOVERED == [], (
+    f"progress past the anchor must reset the streak: {RECOVERED}")
+print("6c. progress past the freeze point resets the escalation OK")
+
+# 6d. frozen twice on the LOCAL output: never any radio surgery
+reset()
+set_output("local")
+MPV["tick"] = 0.0
+start_playing()
+wait_for("local frozen stall", lambda: SPAWNED)
+start_playing()
+wait_for("2nd local frozen stall", lambda: len(SPAWNED) >= 2)
+assert RECOVERED == [], "local output must never trigger BT recovery"
+print("6d. repeated frozen stalls on local never touch the radio OK")
+
+# 6e. a stable respawn hands the crash-heal budget back (field
+#     2026-08-03: the 2/boot cap burned out mid-evening; the next real
+#     crash then stayed dead until reboot)
+reset()
+set_output("bt")
+daemon.ORCH._crash_respawns = 2
+MPV["tick"] = 1.0
+TX["step"] = 1750
+start_playing()
+wait_for("stable child resets the budget",
+         lambda: daemon.ORCH._crash_respawns == 0)
+print("6e. stable respawned child resets the crash budget OK")
+
 # 7. paused: TX legitimately flat -> never a stall
 reset()
 MPV.update(pause=True, tick=0.0)

@@ -172,6 +172,15 @@ BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
 STALL_S = float(os.environ.get("TAPBOX_STALL_S", "30"))
 # how often the stall watchdog samples position + radio TX counters
 STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
+# frozen-position stalls on the BT output escalate to a link rebuild on
+# the Nth CONSECUTIVE one (field 2026-08-03: a headset died without the
+# chip ever reporting the disconnect — bluez kept listing the transport,
+# _audio_ready kept saying yes, and the plain restart looped 12 times).
+# 'Consecutive' anchors on the freeze POINT, not the exact position: each
+# respawn resumes ~3s earlier from the bookmark, so equality never holds;
+# progress PAST the anchor by FREEZE_PROGRESS_S is what proves life.
+FREEZE_ESCALATE = int(os.environ.get("TAPBOX_FREEZE_ESCALATE", "2"))
+FREEZE_PROGRESS_S = float(os.environ.get("TAPBOX_FREEZE_PROGRESS", "10"))
 # resume-position display hold (see Orchestrator._settle_position): a
 # bookmark below RESUME_MIN_S is never resumed, so nothing to hold; the
 # hold releases once live is within TOL of the target, and never lasts
@@ -339,6 +348,7 @@ class Orchestrator:
         last_pos, last_change = None, time.monotonic()
         last_tx, last_tx_change = None, time.monotonic()
         crashed_since = 0.0  # first poll that saw the crashed child dead
+        frz_streak, frz_anchor = 0, None  # consecutive bt frozen stalls
         while True:
             _tick(STALL_POLL_S)
             try:
@@ -352,6 +362,14 @@ class Orchestrator:
                     last_tx, last_tx_change = None, time.monotonic()
                     continue
                 crashed_since = 0.0
+                if self._crash_respawns:
+                    # a respawned child that SURVIVED the startup grace is
+                    # a success — hand the healer its budget back. Without
+                    # this the 2/boot cap burned out permanently (field
+                    # 2026-08-03: cap hit mid-evening, the next real crash
+                    # stayed dead until reboot).
+                    log("respawned player is stable — crash budget reset")
+                    self._crash_respawns = 0
                 paused = mpv_get("pause")
                 pos = mpv_get("playback-time")
                 now = time.monotonic()
@@ -364,6 +382,11 @@ class Orchestrator:
                     continue
                 zombie = False
                 if pos is not None and pos != last_pos:
+                    if frz_anchor is not None \
+                            and pos > frz_anchor + FREEZE_PROGRESS_S:
+                        # played PAST the old freeze point — that is real
+                        # progress, not the bookmark re-approaching it
+                        frz_streak, frz_anchor = 0, None
                     last_pos, last_change = pos, now
                     # the clock moves — but does anything leave the radio?
                     # (only the bt output routes through the controller)
@@ -386,8 +409,41 @@ class Orchestrator:
                     stalled = now - last_change
                     if stalled < STALL_S:
                         continue
-                    log(f"playback stalled {int(stalled)}s (position "
-                        f"frozen) — restarting player")
+                    # Frozen position on the BT output: a dead-but-
+                    # CONNECTED transport looks exactly like this — the
+                    # chip never reported the disconnect, bluez keeps
+                    # listing the PCM, _audio_ready below answers yes,
+                    # and a plain restart just freezes at the same spot
+                    # (field 2026-08-03: 12 identical cycles against a
+                    # powered-off headset). The Nth consecutive freeze
+                    # with no progress past the anchor escalates to the
+                    # zombie cure: tear the link down and rebuild it, so
+                    # btwatchd/UI finally see a real speaker-away.
+                    # (A wifi rebuffer can false-positive here — frozen
+                    # position, healthy link — but only after
+                    # FREEZE_ESCALATE whole stall windows, and the
+                    # reconnect costs a beat, not the bookmark.)
+                    if current_output()["output"] == "bt":
+                        same = (frz_anchor is not None
+                                and (pos is None
+                                     or pos <= frz_anchor
+                                     + FREEZE_PROGRESS_S))
+                        frz_streak = frz_streak + 1 if same else 1
+                        if not same:
+                            frz_anchor = pos
+                        if frz_streak >= FREEZE_ESCALATE:
+                            zombie = True
+                            frz_streak, frz_anchor = 0, None
+                    else:
+                        frz_streak, frz_anchor = 0, None
+                    if zombie:
+                        log(f"playback stalled {int(stalled)}s (position "
+                            f"frozen on bt again — dead-but-connected "
+                            f"transport) — rebuilding the bluetooth link "
+                            f"and restarting player")
+                    else:
+                        log(f"playback stalled {int(stalled)}s (position "
+                            f"frozen) — restarting player")
                 with self.lock:
                     self._stop_child()  # bookmark survives (terminated flag)
                 ready = False
@@ -489,11 +545,38 @@ class Orchestrator:
 
     def _stop_child(self):
         if self._mpv_alive():
-            self.child.terminate()
+            child = self.child
+            child.terminate()
             try:
-                self.child.wait(timeout=10)
+                child.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                self.child.kill()
+                # A wedged player is almost always an mpv grandchild
+                # blocked in a write to a dead BT transport; its own 8s
+                # escalation (player._stop) should have fired, so getting
+                # here means the python parent itself is stuck. Kill the
+                # WHOLE process group (start_new_session in _spawn) —
+                # SIGKILLing just the parent orphaned the mpv, which kept
+                # the bluealsa PCM held and turned every later spawn into
+                # a 'Device or resource busy' cascade (field 2026-08-03).
+                # The killpg runs BEFORE the wait() reaps the leader, so
+                # the pgid cannot have been reused.
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+                # the PCM must actually be FREE before the next spawn:
+                # wait out the group (grandchildren reap via init fast) —
+                # signal 0 probes membership, sends nothing
+                for _ in range(20):
+                    try:
+                        os.killpg(child.pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
         self.child = None
 
     def _ensure_spotify_backend(self):
@@ -538,7 +621,11 @@ class Orchestrator:
         if is_spotify(target) or target.startswith(("http://", "https://")):
             _radio.touch_busy()  # network-heavy start: blind BT pages yield
             _PS_KICK.set()       # and wifi power save flips off NOW
-        self.child = subprocess.Popen(args)
+        # Own process group: _stop_child can then SIGKILL the WHOLE tree
+        # when the player wedges — killing just the python parent left a
+        # write-blocked mpv grandchild holding the bluealsa PCM (field
+        # 2026-08-03: every later spawn hit 'Device or resource busy').
+        self.child = subprocess.Popen(args, start_new_session=True)
         self.child_started = time.monotonic()
 
     def play(self, target, fresh=False, episode=None, reverse=False,
