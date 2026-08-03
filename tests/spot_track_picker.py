@@ -64,6 +64,8 @@ assert [e["id"] for e in eps] == ["spotify:track:a", "spotify:track:c"], eps
 assert eps[0]["title"] == "Blue Monday '88 — New Order", eps[0]
 assert eps[0]["image"] == "https://i.scdn.co/a"
 assert eps[1]["title"] == "Shout", eps[1]  # no artists: bare name
+assert r["pending"] is True, \
+    "cached < length = metadata sweep still filling -> pending"
 print("1. tracks=True: fork listing mapped to picker rows OK")
 
 # 1b. albums (v0.1.2): same mapping
@@ -77,8 +79,17 @@ ALBUM = {"uri": "spotify:album:4rxfprnLYz3592ZGaeqcON",
 library.spotify.context_tracks = lambda uri, timeout=5: ALBUM
 r = library.expand_target(AL, name="Coco", tracks=True)
 assert [e["id"] for e in r["episodes"]] == ["spotify:track:d"], r["episodes"]
+assert r["pending"] is False, "a complete listing is not pending"
+# still enumerating (settle timed out): empty rows, but SAY so — the
+# screen used to read this as 'no list exists' and the PWA pinned an
+# empty queue card (architect review 2026-08-03)
+library.spotify.context_tracks = lambda uri, timeout=5: {
+    "uri": "spotify:album:cold", "ready": False, "length": 0,
+    "cached": 0, "tracks": []}
+r = library.expand_target(AL, name="Cold", tracks=True)
+assert r["episodes"] == [] and r["pending"] is True, r
 library.spotify.context_tracks = spotify.context_tracks
-print("1b. album listing maps the same way OK")
+print("1b. album listing maps the same way; not-ready is pending OK")
 
 # 2. default (browse) expansion: unchanged leaf card, fork NOT queried
 asked.clear()
@@ -108,6 +119,8 @@ library.spotify.context_tracks = \
     lambda uri, timeout=5: (_ for _ in ()).throw(ValueError("empty body"))
 r = library.expand_target(PL, tracks=True)
 assert r["episodes"] == [], r["episodes"]
+assert r["pending"] is False, \
+    "a FAILURE must not be pending — retrying a 400 forever is wrong"
 print("3. artist/old-fork/down/204-mid-poll: degrades to the leaf card OK")
 
 # 4. play_spotify(start_uri): {uri, skip_to_uri}, from the top, bookmark

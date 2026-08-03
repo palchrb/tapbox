@@ -142,6 +142,7 @@ function renderProgress() {
 }
 
 let queueTarget;   // undefined = never loaded; null = no queue
+let queueRetried = null;   // target already re-fetched once while pending
 let currentTarget = null;  // what /status says is (or would be) playing
 
 async function loadQueue(target) {
@@ -191,6 +192,18 @@ async function loadQueue(target) {
       wrap.appendChild(row);
     }
     card.hidden = eps.length === 0;
+    // The daemon's bounded settle can time out on a cold context and
+    // hand back a partial/empty listing with pending=true. One delayed
+    // re-fetch completes it; without this an empty first load pinned an
+    // empty queue card until the target changed. Once per target, so a
+    // context that never settles cannot loop.
+    if (r.pending && queueRetried !== target) {
+      queueRetried = target;
+      setTimeout(() => (queueTarget === target ? loadQueue(target) : null),
+                 4000);
+    } else if (!r.pending) {
+      queueRetried = null;
+    }
   } catch (e) {
     card.hidden = true;
   }

@@ -63,7 +63,8 @@ global.location = { hash: "", pathname: "/", search: "", origin: "http://t" };
 global.history = { replaceState() {} };
 global.localStorage = { getItem: () => "", setItem: () => {},
                         removeItem: () => {} };
-global.setTimeout = () => 0;
+const timers = [];
+global.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return 0; };
 global.setInterval = () => 0;
 global.clearTimeout = () => {};
 global.clearInterval = () => {};
@@ -80,7 +81,8 @@ global.fetch = async (path, opts = {}) => {
       { id: "pl1", name: "80s", target: SPOT, order: "auto",
         cache: 0, resume: true }] }] });
   if (path.startsWith("/expand"))
-    return ok({ kind: "spotify", episodes: [
+    return ok({ kind: "spotify", pending: global.EXPAND_PENDING || false,
+                episodes: global.EXPAND_EMPTY ? [] : [
       { id: "spotify:track:a", title: "Blue Monday '88 — New Order",
         url: "spotify:track:a", cached: false },
       { id: "spotify:track:c", title: "Shout", url: "spotify:track:c",
@@ -143,6 +145,33 @@ const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
   await t.loadQueue(null);
   assert(card.hidden === true, "no target must hide the card");
   console.log("5. no target: card hidden OK");
+
+  // 6. a pending (settle-timeout) listing schedules EXACTLY ONE delayed
+  //    re-fetch per target — an empty first load used to pin an empty
+  //    card until the target changed; a never-settling context must not
+  //    loop either
+  global.EXPAND_PENDING = true;
+  global.EXPAND_EMPTY = true;
+  timers.length = 0;
+  await t.loadQueue(SPOT);
+  let retries = timers.filter((x) => x.ms === 4000);
+  assert(retries.length === 1, "one retry must be scheduled, got "
+         + retries.length);
+  assert(card.hidden === true, "empty pending listing shows no card yet");
+  await t.loadQueue(SPOT);  // still pending on the retry
+  retries = timers.filter((x) => x.ms === 4000);
+  assert(retries.length === 1, "pending retries must never stack/loop");
+  // the retry callback only refires while the target is still current
+  global.EXPAND_PENDING = false;
+  global.EXPAND_EMPTY = false;
+  const before = created.length;
+  await retries[0].fn();  // the callback returns loadQueue's promise
+  const fresh = created.slice(before)
+    .filter((e) => e.className === "entry queue-ep");
+  assert(fresh.length === 2,
+         "the completed retry must render the rows, got " + fresh.length);
+  assert(card.hidden === false, "…and show the card");
+  console.log("6. pending listing: one bounded retry, completes to rows OK");
 
   console.log("PWA SPOTIFY QUEUE OK — songs listed, tappable, marked.");
 })().catch((e) => { console.error("FAIL: " + e.message); process.exit(1); });

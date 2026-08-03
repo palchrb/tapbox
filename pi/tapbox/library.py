@@ -614,6 +614,7 @@ def expand_target(target, order="auto", name=None, tracks=False):
         except Exception:
             image = None
         episodes = []
+        pending = False
         if tracks:
             # Fork v0.1.2: playlists AND albums are expandable —
             # go-librespot lists the tracks (no Web API). Opt-in via
@@ -626,6 +627,17 @@ def expand_target(target, order="auto", name=None, tracks=False):
             try:
                 uri = spotify.to_uri(target)
                 listing = spotify.context_tracks(uri) if uri else {}
+                # The settle-poll is bounded (4s): a cold 800-track
+                # context can time out still enumerating (ready=false)
+                # or still sweeping metadata (cached < length). Say so —
+                # without the flag the screen read an empty listing as
+                # "no list exists" and the PWA pinned an empty queue
+                # card until the target changed (architect review
+                # 2026-08-03). A retry completes it; a FAILURE below
+                # stays pending=False: retrying a 400 forever is wrong.
+                pending = (not listing.get("ready", True)
+                           or (listing.get("cached") or 0)
+                           < (listing.get("length") or 0))
                 for t in listing.get("tracks") or []:
                     meta = t.get("track")
                     if not meta:
@@ -645,9 +657,10 @@ def expand_target(target, order="auto", name=None, tracks=False):
                 # body and json.loads(b"") raises it — same degradation
                 # as down, not a crash bubbling to the /expand route
                 # (QA audit 2026-08-03).
-                episodes = []
+                episodes, pending = [], False
         return {"kind": "spotify", "name": name, "target": target,
-                "order": "auto", "image": image, "episodes": episodes}
+                "order": "auto", "image": image, "episodes": episodes,
+                "pending": pending}
     key = (target, order, name)
     hit = _EXPAND_CACHE.get(key)
     if hit and time.monotonic() - hit[0] < EXPAND_TTL_S:

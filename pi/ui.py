@@ -1356,7 +1356,24 @@ class App:
                     time.sleep(1)
                     return
                 if not self.expanded.get("episodes"):
-                    return  # albums / pre-v0.1.1 fork: no list exists
+                    if not self.expanded.get("pending"):
+                        return  # no list exists (pre-v0.1.1 fork)
+                    # Still enumerating/sweeping (the daemon's bounded
+                    # settle timed out — a cold 800-track context): one
+                    # more round usually completes it, with "Fetching
+                    # episodes ..." still on screen. If it is STILL
+                    # empty, say so — the silent bail read as "hold-Y
+                    # does nothing" (architect review 2026-08-03).
+                    try:
+                        self.expanded = api_get(
+                            f"/expand?id={e['id']}&tracks=1")
+                    except (OSError, ValueError):
+                        self.expanded = {}
+                    if not self.expanded.get("episodes"):
+                        self.draw_message("Episodes are still loading —"
+                                          "\ntry again in a moment")
+                        time.sleep(1.2)
+                        return
                 self.section, self.entry = sec, e
                 self.push("episodes")
                 now_id = (self.status or {}).get("episode_id") \
