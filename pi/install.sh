@@ -125,7 +125,7 @@ fi
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
-GO_LIBRESPOT_VERSION="v0.1.9"  # v0.0.8 Fast skip: debounced next/prev (a
+GO_LIBRESPOT_VERSION="v0.2.0"  # v0.0.8 Fast skip: debounced next/prev (a
 # burst of N presses costs 2 audio-key requests instead of N) + a circuit
 # breaker on throttled keys (aes code 2 -> one retry + stop, never the
 # 51-track walk that kept the account rate-limited); /status gains
@@ -170,6 +170,13 @@ GO_LIBRESPOT_VERSION="v0.1.9"  # v0.0.8 Fast skip: debounced next/prev (a
 # tapbox change; and the Liked Songs collection
 # (spotify:user:<id>:collection) is accepted, matched by to_uri here.
 # Audiobooks are wired upstream but untested (unavailable market).
+# v0.2.0 (fork #25): upstream sync — the API server is now CODEGENED
+# from api-spec.yml (verified: every field tapbox reads keeps its json
+# name — track/artist_names/album_cover_url/pending_track/next_track/
+# ready/cached etc.), unsupported URIs are rejected early with the
+# user-scoped collection form recognized explicitly, richer track
+# metadata in the CONNECT state (phone display, not our API), and an
+# MP3-decoder build fix.
 GL_VERSION_FILE=/usr/local/bin/.go-librespot.version
 
 if [[ -x /usr/local/bin/go-librespot && $UPDATE -eq 0 \
