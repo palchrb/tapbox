@@ -450,7 +450,11 @@ function pickSectionLogo(s) {
   input.click();
 }
 
-const NEW_SECTION = " new";  // sentinel: "move to a new category…"
+// \u0000 as an ESCAPE, not a raw byte: a literal NUL in the source
+// makes every search tool classify this file as binary and skip it
+// silently. Same value at runtime, still uncollidable with a real
+// category name.
+const NEW_SECTION = "\u0000new";  // sentinel: "move to a new category…"
 
 function entryRow(e, sectionName, locked) {
   const row = document.createElement("div");
