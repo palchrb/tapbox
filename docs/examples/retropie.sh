@@ -14,6 +14,45 @@
 #   sudo chmod 755 /etc/tapbox/extras/retropie.sh
 # Deps: apt install screen python3-evdev  (+ build fbcp-ili9341)
 #
+# --- WHAT HAD TO BE TRUE BEFORE ANY OF THIS WORKED --------------------
+# None of the following is managed by install.sh. It is hand-made state
+# on the box, so it survives no reflash and no fresh SD card. Written
+# down because every item cost a field session to find (2026-08-04).
+#
+# 1. KMS graphics, in /boot/firmware/config.txt, then REBOOT:
+#      dtoverlay=vc4-kms-v3d
+#      gpu_mem=16
+#    This is the one that matters. Without the overlay there is no
+#    /dev/dri at all, so Mesa software-rasterises through llvmpipe and
+#    every texture lives in system RAM: ES ballooned past what this
+#    512 MB box has, exhausted swap, and the OOM killer took it ~28s
+#    in, every time. With KMS the GPU holds them and ES sits around a
+#    fifth of RAM. It also gives HDMI detection something honest to
+#    ask (see the display section) — on the legacy stack there is no
+#    supported probe left at all, tvservice having been dropped from
+#    trixie. gpu_mem=16 is right for KMS, NOT the 64-128 the old
+#    firmware stack wanted; the vc4 driver allocates as it goes.
+#
+# 2. RetroPie itself, installed as RP_USER via RetroPie-Setup. This
+#    script deliberately does not auto-install it — it is a big,
+#    opinionated, owner-level decision, not a side effect of pressing
+#    A on a menu.
+#
+# 3. ROMs owned by RP_USER (~/RetroPie/roms/...). That IS correct and
+#    not a permissions mistake: ES runs as that user, so root-owned
+#    ROMs are the broken case, not the other way round.
+#
+# 4. A controller paired the normal way (bluetoothctl or the RetroPie
+#    menu). Note it then shows up in the TapBox PWA's BT list as a
+#    device — it is filtered out of the SPEAKER list (d.audio), so it
+#    cannot be picked as an audio output by accident.
+#
+# 5. Audio out of the TV, set INSIDE RetroPie's own menus (the games
+#    obey that). ES's own menu sounds are separate and still come out
+#    the TapBox speaker; the proposed fix is an ~/.asoundrc for
+#    RP_USER pointing default at the vc4hdmi card. UNVERIFIED — never
+#    tested on real hardware, so treat it as a hypothesis.
+#
 # The tapbox-extra wrapper has ALREADY: stopped tapbox-ui/idle/buttons,
 # stopped playback (bookmarked) and go-librespot, and lifted the CPU
 # governor. On exit — however this script ends — the wrapper restores
