@@ -56,11 +56,22 @@ systemctl stop tapbox-daemon tapbox-mpris 2>/dev/null || true
 systemctl stop tapbox-btsnoop 2>/dev/null || true
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
-# RF quiet for gaming: the controller (HID) gets the shared radio to
-# itself. Default: wifi OFF (no SSH until the session ends). With
-# KEEP_WIFI=1 wifi stays up but is softened (power-save + 5 dBm) so you
-# can watch live via:   screen -x retropie
-if [ "${KEEP_WIFI:-0}" = 1 ]; then
+# RF: wifi STAYS UP by default (power save on — latency, not range).
+#
+# It used to be rfkill'd for the controller's sake, but that is a bad
+# default for a box you are still learning to run: the menu launch
+# (X+Y) cannot pass KEEP_WIFI, so every session from the screen killed
+# the network. Worse, it does not LOOK like that — 'rfkill block' does
+# not tear down TCP, so live ssh sessions freeze mid-keystroke without
+# disconnecting and only wake when the session ends (field
+# 2026-08-04: an evening spent suspecting the screen session). No
+# remote log reading, no PWA, no way to see what a failing game says.
+#
+# Set RF_QUIET=1 to get the old behaviour when a controller genuinely
+# needs the radio to itself. The wrapper's restore unblocks either way.
+if [ "${RF_QUIET:-0}" = 1 ]; then
+  rfkill block wifi
+else
   # power save is cheap coexistence help: it costs latency, not range.
   iw dev wlan0 set power_save on 2>/dev/null || true
   # txpower is NOT softened by default any more. 'fixed 500' (5 dBm,
@@ -71,8 +82,6 @@ if [ "${KEEP_WIFI:-0}" = 1 ]; then
   # txpower back to auto either way.
   [ -n "${WIFI_TXPOWER:-}" ] \
     && { iw dev wlan0 set txpower fixed "$WIFI_TXPOWER" 2>/dev/null || true; }
-else
-  rfkill block wifi
 fi
 # hang up BT AUDIO sinks (JBL/car) — HID controllers are left alone;
 # game sound goes out the I2S jack anyway

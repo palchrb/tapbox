@@ -66,8 +66,9 @@ while.
 [`docs/examples/retropie.sh`](examples/retropie.sh)** — copy it to
 `/etc/tapbox/extras/retropie.sh` on the box (root-owned, mode 755).
 It carries: screen-session launch (ES needs a real CLI session),
-runuser to the install user, RF quiet (wifi off — or softened with
-`KEEP_WIFI=1` for live `screen -x` debugging), hangup of BT audio
+runuser to the install user, wifi left UP so `screen -x` and the logs
+stay reachable (`RF_QUIET=1` rfkills it instead, when a controller
+needs the radio to itself), hangup of BT audio
 sinks (controllers untouched), fbcp mirroring, and the emergency
 hold-the-MODE-button-3s -> Ctrl-C rescue ported from
 [palchrb/retropie_wrapper](https://github.com/palchrb/retropie_wrapper).
