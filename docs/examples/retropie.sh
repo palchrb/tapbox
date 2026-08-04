@@ -72,6 +72,12 @@ FBCP_PID=""
 hdmi="$(cat /sys/class/drm/card*-HDMI-A-*/status 2>/dev/null | head -1)"
 if [ "$hdmi" = connected ] && command -v cec-client >/dev/null; then
   TV=1
+  # tapbox-power save blanks the HDMI SIGNAL at every boot
+  # (vcgencmd display_power 0) — the connector still reads
+  # 'connected', so without this the TV wakes to a black screen
+  # (field 2026-08-04: boot sequence visible, then dark, ES
+  # launched into the void)
+  vcgencmd display_power 1 >/dev/null 2>&1 || true
   echo 'on 0' | cec-client -s -d 1 >/dev/null 2>&1 || true
   echo 'as'   | cec-client -s -d 1 >/dev/null 2>&1 || true
 else
@@ -139,9 +145,12 @@ fi
 cleanup() {
   [ -n "$EMERG_PID" ] && kill "$EMERG_PID" 2>/dev/null || true
   [ -n "$FBCP_PID" ] && kill "$FBCP_PID" 2>/dev/null || true
-  # polite TV standby on the way out (the old wrapper.py behavior)
+  # polite TV standby on the way out (the old wrapper.py behavior),
+  # and blank the HDMI signal again — that is the box's power-save
+  # steady state (tapbox-power save sets it at every boot)
   [ "$TV" = 1 ] && { echo 'standby 0' | cec-client -s -d 1 \
-    >/dev/null 2>&1 || true; }
+    >/dev/null 2>&1 || true;
+    vcgencmd display_power 0 >/dev/null 2>&1 || true; }
   screen -S "$SESSION" -X quit 2>/dev/null || true
 }
 trap cleanup EXIT
