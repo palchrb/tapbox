@@ -394,14 +394,26 @@ def connect(mac):
         log("Debug with: bluealsa-aplay -L   and   journalctl -u bluealsa -n 20")
 
     os.makedirs(os.path.dirname(MAC_FILE), exist_ok=True)
-    # tmp+rename: a battery brown-out mid-write must never leave a
-    # truncated MAC file (= no remembered speaker, btwatchd goes idle)
-    with open(MAC_FILE + ".tmp", "w") as f:
-        f.write(mac + "\n")
-    os.replace(MAC_FILE + ".tmp", MAC_FILE)
+    _persist_mac(mac)
     _route_alsa(mac)
     _disconnect_others(mac)
     return True
+
+
+def _persist_mac(mac):
+    """Write the configured-speaker file so it SURVIVES a power cut.
+    tmp+rename alone was not enough: on ext4 the rename can reach disk
+    before the data, and a hard cut then leaves an EMPTY file — field
+    2026-08-04: the box rebooted from a car-trip cut with 'btwatchd:
+    target (none)', no BT icon, no remembered speaker (the file had
+    just been rewritten by the follow-the-connector adopt). fsync the
+    DATA before the rename; if the rename itself is lost, the old MAC
+    survives — a fine fallback, unlike an empty file."""
+    with open(MAC_FILE + ".tmp", "w") as f:
+        f.write(mac + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(MAC_FILE + ".tmp", MAC_FILE)
 
 
 def _disconnect_others(mac):
@@ -444,6 +456,10 @@ pcm.tapbox_local {{
     slave.pcm "hw:sndrpihifiberry"
 }}
 ''')
+        f.flush()
+        os.fsync(f.fileno())  # same power-cut hole as _persist_mac — an
+        # empty asound.conf is WORSE: both pcms gone, every output
+        # silent, and nothing heals it
     os.replace(ASOUND + ".tmp", ASOUND)
     log(f"==> ALSA output routed to {mac}")
     # The new tapbox_bt->MAC mapping only matters to a RUNNING go-librespot
