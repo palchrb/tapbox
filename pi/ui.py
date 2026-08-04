@@ -36,6 +36,7 @@ Dev mode (no HAT needed):
 
 import os
 import select
+import signal
 import subprocess
 import sys
 import threading
@@ -2702,11 +2703,40 @@ def _boot_splash(display):
         log(f"boot splash skipped: {e!r}")
 
 
+def blank_screen(display):
+    """Leave the panel DARK. The ST7789 holds its last frame forever and
+    the backlight is ours to drive, so a plain exit left a frozen TapBox
+    picture lit for the whole handoff — field 2026-08-04: the screen sat
+    on the last menu through an entire RetroPie session. Backlight off
+    FIRST (instant), then black pixels so nothing stale can flash if
+    something lights the panel again."""
+    try:
+        display.set_backlight(False)
+    except Exception:
+        pass
+    try:
+        display.show(Image.new("RGB", (W, H), (0, 0, 0)))
+    except Exception:
+        pass
+
+
 def main():
     display = make_display()
     _boot_splash(display)          # screen lights up now, not after input init
+
+    def _term(*_a):
+        # systemd stops us for a handoff (extras), a service restart or
+        # shutdown — every one of those should leave a dark screen.
+        blank_screen(display)
+        sys.stderr.flush()
+        os._exit(0)
+    signal.signal(signal.SIGTERM, _term)
+
     app = App(display, make_input())
-    app.run()
+    try:
+        app.run()
+    finally:
+        blank_screen(display)
 
 
 if __name__ == "__main__":
