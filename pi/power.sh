@@ -2,7 +2,7 @@
 #
 # TapBox power tuning for the Pi Zero 2 W (installed as tapbox-power).
 #   sudo tapbox-power save      battery mode: 2 CPU cores off, powersave
-#                               governor, ACT LED + HDMI off, Wi-Fi powersave
+#                               governor, ACT LED off, Wi-Fi powersave
 #   sudo tapbox-power perf      undo everything (back to defaults)
 #   sudo tapbox-power status    show current state (+ PiSugar battery if present)
 #   sudo tapbox-power boot-on   apply 'save' automatically at every boot
@@ -117,7 +117,15 @@ case "${1:-}" in
     fi
     set_governor powersave
     set_leds none 0
-    vcgencmd display_power 0 >/dev/null 2>&1 || true
+    # NO HDMI blanking. 'vcgencmd display_power 0' is a ONE-WAY door on
+    # this box (field 2026-08-04): it blanks, but display_power 1 only
+    # flips the firmware flag — no mode is re-negotiated, so the TV
+    # stays dark until a reboot. This box has no KMS at all (empty
+    # /sys/class/drm, no /dev/dri, no vc4 overlay in config.txt) and
+    # tvservice is gone from trixie, so there is no supported way to
+    # bring the output back. The saving was a few mA on an output
+    # nobody was using; the cost was a TV that could not be woken and a
+    # RetroPie session with no picture.
     if [[ $WIFI_POWERSAVE -eq 1 ]]; then
       iw dev wlan0 set power_save on 2>/dev/null || true
     fi

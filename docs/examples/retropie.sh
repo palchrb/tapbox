@@ -60,35 +60,48 @@ for d in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
     && bluetoothctl disconnect "$d" >/dev/null
 done
 
-# --- display: TV over HDMI when plugged, else the SPI screen ----------
-# With a TV attached, KMS renders straight to HDMI — no fbcp mirroring
-# needed at all (this sidesteps the SPI path's biggest uncertainty).
-# CEC then wakes the TV and grabs its input: 'as' (active source) makes
-# the TV switch to WHICHEVER port the Pi occupies — CEC negotiates
-# physical addresses over the cable, so no port is ever configured
-# (same proven pair as palchrb/retropie_wrapper: 'on 0' + 'as').
+# --- display: is there a TV on HDMI? ----------------------------------
+# Detection depends on which graphics stack the box booted:
+#
+#  * KMS (dtoverlay=vc4-kms-v3d): the DRM connector answers honestly.
+#  * LEGACY firmware stack (no /sys/class/drm, only /dev/fb0 — this
+#    box, field 2026-08-04): there is NO supported probe. tvservice,
+#    the old answer, was removed from trixie. So we CANNOT tell.
+#
+# When we cannot tell, PROCEED. The previous version read the DRM
+# connector unconditionally, found nothing on a legacy box, and
+# aborted with "no TV found" every single time — the abort WAS the
+# bug, and RetroPie never once got to start. Trusting the human is the
+# right default here: launching this is a deliberate X+Y chord plus a
+# confirm, the emergency MODE-hold still quits a session with no
+# picture, and the wrapper's ExecStopPost brings TapBox back whatever
+# happens. A wrong guess costs one confused minute; a wrong abort cost
+# the whole feature.
+#
+# CEC then wakes the TV and grabs its input: 'as' (active source)
+# makes the TV switch to WHICHEVER port the Pi occupies — CEC
+# negotiates physical addresses over the cable, so no port is ever
+# configured (the proven pair from palchrb/retropie_wrapper).
 TV=0
 FBCP_PID=""
-# Un-blank BEFORE probing: tapbox-power save runs 'vcgencmd
-# display_power 0' at every boot, and a blanked pipeline also reports
-# the connector as disconnected — so the probe below said "no TV"
-# even with the cable in (field 2026-08-04: the abort message on a
-# box wired to a live TV). Turning the signal on costs nothing when
-# no TV is attached; the probe still decides.
-vcgencmd display_power 1 >/dev/null 2>&1 || true
-sleep 2  # let KMS re-read the connector after the un-blank
 hdmi="$(cat /sys/class/drm/card*-HDMI-A-*/status 2>/dev/null | head -1)"
-if [ "$hdmi" = connected ] && command -v cec-client >/dev/null; then
+if [ -z "$hdmi" ]; then
+  hdmi=unknown   # legacy stack: no connector to ask
+fi
+if [ "$hdmi" != disconnected ]; then
   TV=1
-  echo 'on 0' | cec-client -s -d 1 >/dev/null 2>&1 || true
-  echo 'as'   | cec-client -s -d 1 >/dev/null 2>&1 || true
+  [ "$hdmi" = unknown ] && echo "retropie: no DRM connector (legacy" \
+    "graphics stack) — cannot probe HDMI, assuming a TV is attached"
+  if command -v cec-client >/dev/null; then
+    echo 'on 0' | cec-client -s -d 1 >/dev/null 2>&1 || true
+    echo 'as'   | cec-client -s -d 1 >/dev/null 2>&1 || true
+  fi
 else
-  # No TV. The design intent is HDMI-only — launching ES with no
-  # picture would just brick the box for a kid until someone SSHed in.
-  # Optional SPI experiment (small-screen cores like GB at 160x144):
-  # provide a mirror yourself via FBCP_BIN — NB: classic fbcp-ili9341
-  # needs the legacy dispmanx stack, which KMS-era Trixie lacks; the
-  # realistic route there is a runtime panel-mipi-dbi/fbtft overlay.
+  # The connector EXISTS and says nothing is plugged in — that is a
+  # real answer, so the old abort still applies. Optional SPI
+  # experiment: provide a mirror yourself via FBCP_BIN (classic
+  # fbcp-ili9341 wants the legacy dispmanx stack — which, note, is
+  # exactly what a box WITHOUT the vc4 overlay runs).
   FBCP_BIN="${FBCP_BIN:-/usr/local/bin/fbcp-ili9341}"
   if [ -x "$FBCP_BIN" ]; then
     "$FBCP_BIN" & FBCP_PID=$!
@@ -98,7 +111,6 @@ else
     echo "RetroPie: no TV found — connect HDMI and try again" \
       > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
     echo "retropie: no TV on HDMI — aborting so TapBox comes right back"
-    vcgencmd display_power 0 >/dev/null 2>&1 || true  # undo the probe
     exit 1
   fi
 fi
@@ -148,12 +160,12 @@ fi
 cleanup() {
   [ -n "$EMERG_PID" ] && kill "$EMERG_PID" 2>/dev/null || true
   [ -n "$FBCP_PID" ] && kill "$FBCP_PID" 2>/dev/null || true
-  # polite TV standby on the way out (the old wrapper.py behavior),
-  # and blank the HDMI signal again — that is the box's power-save
-  # steady state (tapbox-power save sets it at every boot)
-  [ "$TV" = 1 ] && { echo 'standby 0' | cec-client -s -d 1 \
-    >/dev/null 2>&1 || true;
-    vcgencmd display_power 0 >/dev/null 2>&1 || true; }
+  # polite TV standby on the way out (the old wrapper.py behavior).
+  # Deliberately NOT 'vcgencmd display_power 0': on this stack that is
+  # a one-way door — the output cannot be brought back without a
+  # reboot, so blanking here would strand the next session.
+  [ "$TV" = 1 ] && [ -n "${CEC:-1}" ] && { echo 'standby 0' \
+    | cec-client -s -d 1 >/dev/null 2>&1 || true; }
   screen -S "$SESSION" -X quit 2>/dev/null || true
 }
 trap cleanup EXIT
