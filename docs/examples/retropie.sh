@@ -37,11 +37,24 @@ if [ -n "$need" ]; then
     || echo "retropie: WARNING: dependency install failed (offline?) — continuing"
 fi
 
-# quiet the BT pager while pairing/using a BT controller (the wrapper's
-# restore starts it again). Uncomment the daemon line if a core needs
-# the RAM — the phone's remote escape hatch is gone while it's down.
+# Free the RAM EmulationStation needs. Field 2026-08-04: ES launched,
+# grew to ~275 MB resident, and the OOM killer took it 28s in — this
+# box has ~414 MB usable and swap was already exhausted. Everything
+# stopped here is restarted by the wrapper's ExecStopPost, so the box
+# always comes back whole:
+#   bt-reconnect  quiets the BT pager while a controller is in use
+#   daemon+mpris  the orchestration daemon and its AVRCP bridge. NOTE:
+#                 tapboxd is also the phone's remote escape hatch, so
+#                 while a game runs there is no PWA — the MODE-hold
+#                 emergency exit and SSH remain.
+#   btsnoop       the BT-crash capture ring writes to /run, i.e. RAM
+#                 (three segments). Only running if you enabled it for
+#                 a crash hunt; 'stop' does not disable it, so it comes
+#                 back on the next boot.
 systemctl stop tapbox-bt-reconnect 2>/dev/null || true
-# systemctl stop tapbox-daemon tapbox-mpris
+systemctl stop tapbox-daemon tapbox-mpris 2>/dev/null || true
+systemctl stop tapbox-btsnoop 2>/dev/null || true
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 # RF quiet for gaming: the controller (HID) gets the shared radio to
 # itself. Default: wifi OFF (no SSH until the session ends). With
