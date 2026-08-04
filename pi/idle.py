@@ -68,6 +68,24 @@ def daemon_playing():
         return None
 
 
+def ssh_active():
+    """Anyone logged in over ssh? An active session means a human is
+    working ON the box — powering off under them cost a debugging
+    evening (field 2026-08-03: the 5-min idle fired mid-journalctl,
+    and the wedged pisugar poweroff then needed a hard cut). utmp is
+    gone on trixie (systemd built with -UTMP), so `who` is blind —
+    count established TCP sessions on the sshd port instead. Errors
+    mean 'unknown': fail toward the OLD behavior (shutdown proceeds),
+    never toward a box that can't sleep because a probe broke."""
+    try:
+        out = subprocess.run(
+            ["ss", "-Htn", "state", "established", "( sport = :22 )"],
+            capture_output=True, text=True, timeout=5).stdout
+        return bool(out and out.strip())
+    except (OSError, subprocess.TimeoutExpired, AttributeError):
+        return False
+
+
 def _cycle(idle):
     """One check: the new idle-seconds count, or None after poweroff."""
     active = daemon_playing()
@@ -79,6 +97,8 @@ def _cycle(idle):
         # radio markers, treat it as no signal rather than fresh.
         if 0 <= age < ACTIVITY_FRESH_S:
             active = True  # someone is pressing buttons — in use
+    if not active and ssh_active():
+        active = True  # a human is on the box over ssh — hold auto-off
     idle = 0 if active else idle + CHECK_S
     limit = idle_minutes()
     if limit <= 0:

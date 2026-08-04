@@ -27,6 +27,8 @@ CALLS = []
 idle.subprocess.run = lambda argv, **kw: CALLS.append(argv[0])
 PLAYING = [True]
 idle.daemon_playing = lambda: PLAYING[0]
+SSH = [False]
+idle.ssh_active = lambda: SSH[0]  # hermetic — no real `ss` in the gate
 
 
 def set_limit(minutes):
@@ -96,6 +98,21 @@ time.sleep(0.05)
 paths.touch_activity()  # throttled — must NOT rewrite within 10s
 assert paths.last_activity() == first
 print("8. activity marker writes once per burst (throttled) OK")
+
+# 9. an ssh login HOLDS auto-off: powering the box off under someone
+#    debugging cost an evening (field 2026-08-03 — the 5-min idle fired
+#    mid-journalctl and the wedged pisugar poweroff needed a hard cut).
+#    Logout resumes the countdown from zero.
+PLAYING[0] = False
+SSH[0] = True
+CALLS.clear()
+stale = time.time() - idle.ACTIVITY_FRESH_S - 5  # test 8 touched the
+os.utime(paths.ACTIVITY_FILE, (stale, stale))    # marker — age it out
+assert idle._cycle(999999) == 0 and CALLS == [], \
+    "an active ssh session must hold the countdown at zero"
+SSH[0] = False
+assert idle._cycle(0) == idle.CHECK_S, "logout must resume counting"
+print("9. active ssh session holds auto-off; logout resumes OK")
 
 print("IDLE SHUTDOWN OK — playback or hands on the box keep it alive, "
       "'never' never counts, and it dies exactly at the parent's limit.")
