@@ -236,18 +236,35 @@ runuser -l "$RP_USER" -c \
 
 # Wait out the session. ES quitting is the give-the-box-back signal,
 # but the screen session SURVIVES it (the login shell just returns to
-# its prompt), so poll for the process instead. RetroPie's own
-# restart-ES loop briefly leaves no process behind, so only conclude
-# it is over after several consecutive misses — a restart from the ES
-# menu must not hand the box back mid-restart.
-gone=0
-sleep 10                      # ES needs a moment to appear at all
-while [ "$gone" -lt 4 ]; do
-  if pgrep -u "$RP_USER" -f emulationstation >/dev/null 2>&1; then
-    gone=0
-  else
-    gone=$((gone + 1))
-  fi
-  sleep 3
+# its prompt), so the ES PROCESS is what we watch.
+es_running() { pgrep -u "$RP_USER" -f emulationstation >/dev/null 2>&1; }
+
+# wait for it to appear at all (bounded — a launch that never happens
+# must not park the box forever)
+for _ in $(seq 1 30); do
+  es_running && break
+  sleep 1
+done
+if ! es_running; then
+  echo "retropie: EmulationStation never started — handing the box back" >&2
+  echo "RetroPie: did not start — see journalctl -u tapbox-extra" \
+    > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
+  exit 1
+fi
+
+# Then watch it. 2s polling costs a /proc scan every other second —
+# a few ms, invisible next to an emulator — and the exit still has to
+# be CONFIRMED before we act: RetroPie's own restart-ES loop relaunches
+# within a second or two, and a restart from the ES menu must not be
+# mistaken for quitting. Worst case ~6s from quit to the box coming
+# back (it was ~15s with a 4-strikes-at-3s counter).
+#
+# The confirmation window, not the poll, is what costs the seconds, so
+# blocking on procps' pidwait instead would buy ~2s for a dependency
+# and a second code path. Not worth it.
+while :; do
+  while es_running; do sleep 2; done
+  sleep 4                     # the restart window
+  es_running || break
 done
 echo "retropie: EmulationStation is gone — handing the box back"
