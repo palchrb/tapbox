@@ -870,9 +870,16 @@ EOF
 # copy so the generated unit's ExecStart points at /usr/local/bin.
 # NOTE: 'tapbox-power boot-off' removes the unit, but a later install.sh
 # run re-adds it (power save at boot is the tapbox default).
+# Migration: the first version ordered this After=multi-user.target,
+# which waits for network-online — a struggling wifi then kept the HDMI
+# signal on and the CPU unparked for the whole wait (field 2026-08-04).
+# Rewrite that unit; 'boot-off' users keep their choice (no unit file).
 if [[ ! -f /etc/systemd/system/tapbox-power.service ]]; then
   /usr/local/bin/tapbox-power boot-on >/dev/null \
     && echo "    power save applied at every boot (tapbox-power boot-on)"
+elif grep -q '^After=multi-user.target' /etc/systemd/system/tapbox-power.service; then
+  /usr/local/bin/tapbox-power boot-on >/dev/null \
+    && echo "    power save at boot no longer waits for the network"
 fi
 # The battery CSV logger (tapbox-power log-on) stays OPT-IN: it's a
 # calibration tool that writes the SD card every 60s forever — enable it

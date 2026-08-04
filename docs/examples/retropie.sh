@@ -69,15 +69,17 @@ done
 # (same proven pair as palchrb/retropie_wrapper: 'on 0' + 'as').
 TV=0
 FBCP_PID=""
+# Un-blank BEFORE probing: tapbox-power save runs 'vcgencmd
+# display_power 0' at every boot, and a blanked pipeline also reports
+# the connector as disconnected — so the probe below said "no TV"
+# even with the cable in (field 2026-08-04: the abort message on a
+# box wired to a live TV). Turning the signal on costs nothing when
+# no TV is attached; the probe still decides.
+vcgencmd display_power 1 >/dev/null 2>&1 || true
+sleep 2  # let KMS re-read the connector after the un-blank
 hdmi="$(cat /sys/class/drm/card*-HDMI-A-*/status 2>/dev/null | head -1)"
 if [ "$hdmi" = connected ] && command -v cec-client >/dev/null; then
   TV=1
-  # tapbox-power save blanks the HDMI SIGNAL at every boot
-  # (vcgencmd display_power 0) — the connector still reads
-  # 'connected', so without this the TV wakes to a black screen
-  # (field 2026-08-04: boot sequence visible, then dark, ES
-  # launched into the void)
-  vcgencmd display_power 1 >/dev/null 2>&1 || true
   echo 'on 0' | cec-client -s -d 1 >/dev/null 2>&1 || true
   echo 'as'   | cec-client -s -d 1 >/dev/null 2>&1 || true
 else
@@ -96,6 +98,7 @@ else
     echo "RetroPie: no TV found — connect HDMI and try again" \
       > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
     echo "retropie: no TV on HDMI — aborting so TapBox comes right back"
+    vcgencmd display_power 0 >/dev/null 2>&1 || true  # undo the probe
     exit 1
   fi
 fi

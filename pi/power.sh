@@ -150,7 +150,14 @@ case "${1:-}" in
     cat > /etc/systemd/system/tapbox-power.service <<EOF
 [Unit]
 Description=TapBox power save mode at boot
-After=multi-user.target
+# basic.target, NOT multi-user.target: multi-user waits for
+# network-online (go-librespot pulls it in), so a boot where wifi
+# struggles left the HDMI signal LIT and the CPU unparked for as long
+# as NM-wait-online took — field 2026-08-04: console visible on the TV
+# with 'Startup finished in 1min 17s'. Power save must not be a
+# hostage of the radio. Runtime wifi power save is the daemon's
+# governor anyway, so nothing here needs wlan0 to exist yet.
+After=basic.target
 
 [Service]
 Type=oneshot
