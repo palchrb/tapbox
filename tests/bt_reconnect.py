@@ -12,6 +12,14 @@ paths the bash poll loop could only cover with a 60s worst case:
      sink that connects ITSELF is adopted via POST /bt/connect — but
      only while the configured speaker is absent, only for bonded
      audio sinks, never while the target is alive
+  7. AVDTP refusal (field 2026-08-04): a peer that accepts every page
+     but never lets the audio channel up climbs the ladder and PARKS
+     instead of looping every 3s; a kick still revives one attempt
+
+Devices carry a PCM (SetPcm) wherever a connect should count as a real
+success: without it, every 'connected' here is ACL-only — exactly the
+refusal topology — and scenarios 1-5 would silently exercise the
+escalation path instead of the blip fast path they exist to pin.
 
 Run ON THE RIG (or any machine with python3-dbus/python3-gi):
     python3 tests/bt_reconnect.py
@@ -89,6 +97,7 @@ def main():
     tmp = tempfile.mkdtemp()
     mac_file = os.path.join(tmp, "bt-headset")
     lock_file = os.path.join(tmp, "bt.lock")
+    kick_file = os.path.join(tmp, "bt-connect-kick")
     with open(mac_file, "w") as f:
         f.write(GO + "\n")
 
@@ -103,6 +112,8 @@ def main():
                TAPBOX_RECON_BACKOFF_MIN="2", TAPBOX_RECON_BACKOFF_MAX="8",
                TAPBOX_RECON_DROP_RETRY="1", TAPBOX_RECON_DEBOUNCE="0.5",
                TAPBOX_RECON_LOCK_RETRY="1",
+               TAPBOX_BT_KICK=kick_file,
+               TAPBOX_RECON_REFUSAL_PARK="3",
                TAPBOX_RECON_ADOPT_CONFIRM="0.5",
                TAPBOX_RECON_ADOPT_DEBOUNCE="2")
 
@@ -122,6 +133,7 @@ def main():
 
     fake = start_fake()
     mock().AddDevice(GO, "JBL GO", True, False, 0)
+    mock().SetPcm(GO, True)  # a real speaker: audio follows the ACL
 
     daemon = subprocess.Popen(
         [sys.executable, os.path.join(REPO, "pi", "btwatchd.py")],
@@ -142,6 +154,7 @@ def main():
 
         # 3: retarget via the MAC file -> new device connects fast
         mock().AddDevice(JR, "JBL JR310BT", True, False, 0)
+        mock().SetPcm(JR, True)
         with open(mac_file, "w") as f:
             f.write(JR + "\n")
         wait_for("retarget connect", lambda: mock().GetConnected(JR),
@@ -154,6 +167,7 @@ def main():
         time.sleep(1)
         fake = start_fake()
         mock().AddDevice(JR, "JBL JR310BT", True, False, 0)
+        mock().SetPcm(JR, True)  # the fake restart wiped the PCM table
         wait_for("reconnect after bluez restart",
                  lambda: mock().GetConnected(JR), timeout=10)
         print("4. bluez-restart fast window OK")
@@ -206,6 +220,31 @@ def main():
                  timeout=6)
         assert len(adopts()) == 1, f"adopt must fire once: {POSTS}"
         print("6b. absent target + inbound paired sink: adopted OK")
+
+        # 7: AVDTP refusal end-to-end — the peer accepts every page but
+        # audio never appears (no PCM), and we drop the link right after
+        # each connect, like the Skoda with CarPlay holding its slot.
+        # REFUSAL_PARK=3 (env): the third refusal parks the pages.
+        mock().SetConnected(CAR, False)     # quiet the adopted car
+        mock().SetConnectResult(JR, "ok")   # pages succeed again
+        mock().SetPcm(JR, False)            # ...but audio never comes up
+        with open(kick_file, "w") as f:     # user intent: fresh window
+            f.write("x")
+        for i in range(3):
+            wait_for(f"refusal connect {i + 1}",
+                     lambda: mock().GetConnected(JR), timeout=25)
+            mock().SetConnected(JR, False)  # AVDTP refused -> link drops
+        count = int(mock().GetConnectCount(JR))
+        time.sleep(9)  # > BACKOFF_MAX (8s in this env) + margin
+        assert int(mock().GetConnectCount(JR)) == count, \
+            "a refusal-parked target must not be paged"
+        print("7a. three ACL-only connects park the pages OK")
+        with open(kick_file, "w") as f:     # play press while parked
+            f.write("x")
+        wait_for("kick revival",
+                 lambda: int(mock().GetConnectCount(JR)) == count + 1,
+                 timeout=6)
+        print("7b. a kick still revives exactly one attempt OK")
     finally:
         daemon.terminate()
         out, _ = daemon.communicate(timeout=5)

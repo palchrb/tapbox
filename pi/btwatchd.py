@@ -142,6 +142,22 @@ AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
 # quiet parked link beats fighting a reconnect loop with page storms.
 # The kick memory decays, so a fresh trip hours later gets a fresh kick.
 KICK_RETRY_S = float(os.environ.get("TAPBOX_RECON_KICK_RETRY", "3600"))
+# A peer that ACCEPTS the ACL page but never lets the audio channel up
+# (AVDTP refused: the car head unit whose single A2DP slot CarPlay
+# holds, or a headset with a stale session from before a reboot) used
+# to loop connect->drop every 3-7s for minutes — the ACL success reset
+# the ladder each round, so neither the 20->300s backoff nor the 1h
+# park could ever engage (field 2026-08-04, Skoda + JBL; the only code
+# that escalates lives in _attempt_failed, which never runs when the
+# page itself succeeds). Success is now COMMITTED only when the A2DP
+# PCM exists (or the nudge fallback announces); a drop before that is
+# a refusal that climbs the ladder, and after this many consecutive
+# refusals the pages park entirely. Revival: a kick (play press /
+# output switch), a retarget, an inbound connect, or boot — NOT nearby
+# evidence, because the refusing car is nearby and chatty by
+# definition. Threshold is a field heuristic — tune on the box via the
+# env, not by redeploying.
+REFUSAL_PARK_N = int(os.environ.get("TAPBOX_RECON_REFUSAL_PARK", "5"))
 
 BLUEZ = "org.bluez"
 ADAPTER_PATH = "/org/bluez/hci0"
@@ -176,6 +192,8 @@ class Reconnector:
         self.disconnected_since = None  # when the target went away
         self._pcm_waiting = False    # a bt announcement awaits the PCM
         self._nudged = False         # one A2DP nudge per steady period
+        self._committed = False      # this steady period reached audio
+        self.refusals = 0            # consecutive steadies with no audio
         self.boot_fails = 0          # real page failures this boot window
         self._yield_logged = False   # log the first radio-yield only
         self.adopt_seen = {}         # mac -> monotonic of last adopt look
@@ -217,17 +235,46 @@ class Reconnector:
                 if changed["Connected"]:
                     self.enter_steady("device connected")
                 else:
-                    # a blip reconnects fast; a powered-off speaker fails
-                    # one page and starts the backoff ladder
                     self.state = "WAITING"
-                    self.backoff = BACKOFF_MIN_S
                     self._nudged = False  # fresh nudge for the next link
+                    committed, self._committed = self._committed, False
                     if self.disconnected_since is None:
                         self.disconnected_since = time.monotonic()
                     self._notify_lost()
-                    self.schedule(DROP_RETRY_S, "target dropped")
-            elif self.state == "WAITING":
-                # RSSI etc. — evidence the device is nearby right now
+                    if committed:
+                        # audio worked on this link: a blip reconnects
+                        # fast; a powered-off speaker fails one page and
+                        # starts the backoff ladder
+                        self.backoff = BACKOFF_MIN_S
+                        self.schedule(DROP_RETRY_S, "target dropped")
+                    else:
+                        # the peer accepted the page but audio never
+                        # came up — an AVDTP refusal, not a blip (see
+                        # REFUSAL_PARK_N). Retrying fast re-collides
+                        # with whatever refused (a busy car slot, a
+                        # stale headset session that needs its ~20s
+                        # supervision timeout to clear), so this climbs
+                        # the ladder instead — and never resets it.
+                        self.refusals += 1
+                        if self.refusals >= REFUSAL_PARK_N:
+                            log(f"{self.refusals} connects in a row "
+                                "with no audio — the peer accepts the "
+                                "link but refuses the audio channel; "
+                                "parking pages (a play press, "
+                                "retarget, inbound connect or boot "
+                                "revives them)")
+                        else:
+                            self.schedule(
+                                self.backoff,
+                                f"connected but no audio "
+                                f"(x{self.refusals})")
+                            self.backoff = min(self.backoff * 2,
+                                               BACKOFF_MAX_S)
+            elif self.state == "WAITING" and not self.refusals:
+                # RSSI etc. — evidence the device is nearby right now.
+                # Gated on refusals: a refusing peer emits properties
+                # continually, and letting them reset the ladder would
+                # defeat the escalation in exactly the field scenario.
                 self.backoff = BACKOFF_MIN_S
                 self.attempt("target seen", debounce=True)
         elif (str(iface) == "org.bluez.Device1" and changed.get("Connected")
@@ -237,7 +284,10 @@ class Reconnector:
             self._inbound_connected(str(path))
 
     def _ifaces_added(self, path, _ifaces):
-        if self.target and str(path) == dev_path(self.target):
+        # refusal-gated like the evidence branch: bluez re-announcing a
+        # refusing peer's object is not a reason to page it again
+        if self.target and str(path) == dev_path(self.target) \
+                and not self.refusals:
             self.backoff = BACKOFF_MIN_S
             self.attempt("target appeared")
 
@@ -258,21 +308,31 @@ class Reconnector:
         debounce absorbs Gio's multiple events per touch."""
         if not self.target:
             return
-        self.backoff = BACKOFF_MIN_S  # a fresh user intent resets the ladder
-        # Re-base the RECENT_DROP fast window on the kick so a post-heal
-        # retry runs the 15s cadence for the full 150s from NOW (a slow
-        # heal otherwise burns the window that started at the original
-        # drop and lands in the patient ladder). But only when we're
-        # ALREADY OUTSIDE that window: an unconditional re-base let every
-        # button press with the headset off restart the 150s×15s paging
-        # AND reset the 1h ABSENT parking clock, so a kid mashing buttons
-        # kept the box paging ~4/min forever (energy/RF audit 2026-07-24
-        # #3). Inside the window a kick's immediate attempt() below is
-        # enough; the stamp stays where it was.
-        now = time.monotonic()
-        if self.disconnected_since is None \
-                or now - self.disconnected_since > RECENT_DROP_S:
-            self.disconnected_since = now
+        if not self.refusals:
+            # a fresh user intent resets the ladder — but NOT while the
+            # peer is refusing audio: the kick file's writers include
+            # every transport control, and the car's own AVRCP commands
+            # reach it through the mpris bridge, so an unconditional
+            # reset here would let the refusing peer un-park itself.
+            # The immediate attempt below still runs either way — a
+            # play press always gets its page; it just doesn't wipe
+            # the refusal bookkeeping (a success will).
+            self.backoff = BACKOFF_MIN_S
+            # Re-base the RECENT_DROP fast window on the kick so a
+            # post-heal retry runs the 15s cadence for the full 150s
+            # from NOW (a slow heal otherwise burns the window that
+            # started at the original drop and lands in the patient
+            # ladder). But only when we're ALREADY OUTSIDE that window:
+            # an unconditional re-base let every button press with the
+            # headset off restart the 150s×15s paging AND reset the 1h
+            # ABSENT parking clock, so a kid mashing buttons kept the
+            # box paging ~4/min forever (energy/RF audit 2026-07-24
+            # #3). Inside the window a kick's immediate attempt() below
+            # is enough; the stamp stays where it was.
+            now = time.monotonic()
+            if self.disconnected_since is None \
+                    or now - self.disconnected_since > RECENT_DROP_S:
+                self.disconnected_since = now
         self.attempt("output switched to bt", debounce=True)
 
     def _mac_file_changed(self, *_args):
@@ -283,6 +343,8 @@ class Reconnector:
         self.target = new
         self.backoff = BACKOFF_MIN_S
         self.disconnected_since = None
+        self.refusals = 0  # a fresh device deserves a fresh window
+        self._committed = False
         self.cancel_timer()
         if new is None:
             self.state = "NO_TARGET"
@@ -297,6 +359,8 @@ class Reconnector:
         self.state = "BOOT"
         self.boot_deadline = time.monotonic() + BOOT_WINDOW_S
         self.boot_fails = 0
+        self.refusals = 0  # fresh bluez, fresh refusal window
+        self._committed = False
         self.cancel_timer()
         self._boot_tick()
 
@@ -337,13 +401,30 @@ class Reconnector:
         if self.state != "STEADY":
             log(f"steady: {self.target} ({why})")
         self.state = "STEADY"
-        self.backoff = BACKOFF_MIN_S
-        self.disconnected_since = None
+        # NO success bookkeeping here: this fires on the bare ACL, and
+        # a peer that accepts the page but refuses AVDTP reaches steady
+        # every 3-7s — resetting the ladder/away timer here is what let
+        # the field loop run forever. _commit_bt does it once audio is
+        # real.
         self.cancel_timer()
         if not self._pcm_waiting:
             self._pcm_waiting = True
             self._pcm_tries = 10
             self._await_pcm()
+
+    def _commit_bt(self):
+        """The one place a connection counts as a SUCCESS: we are
+        announcing bt for this steady period, either because the A2DP
+        PCM exists or because the nudge fallback committed (a peer that
+        held a stable ACL through the whole 10s wait is not the 1-3s
+        refusal pattern). Only now do the ladder, the away timer and
+        the refusal count reset."""
+        if self.state == "STEADY":
+            self._committed = True
+            self.refusals = 0
+            self.backoff = BACKOFF_MIN_S
+            self.disconnected_since = None
+        self._output("bt")
 
     def _await_pcm(self):
         """Announce bt only once the A2DP PCM actually exists: the
@@ -363,7 +444,7 @@ class Reconnector:
         if ready:
             self._pcm_waiting = False
             self._nudged = False
-            self._output("bt")
+            self._commit_bt()
             return
         if self._pcm_tries <= 0:
             self._pcm_waiting = False
@@ -379,7 +460,7 @@ class Reconnector:
                 self._nudged = True
                 self._nudge_a2dp()
             else:
-                self._output("bt")  # last resort: pre-nudge behavior
+                self._commit_bt()  # last resort: pre-nudge behavior
             return
         self._pcm_tries -= 1
         GLib.timeout_add(1000, self._await_pcm_tick)
@@ -429,7 +510,7 @@ class Reconnector:
         except Exception:
             nm = err.__class__.__name__
         log(f"a2dp nudge failed ({nm}) — announcing anyway")
-        self._output("bt")
+        self._commit_bt()
 
     def _output(self, device):
         """Follow-the-speaker output policy: connected -> bt, confirmed
