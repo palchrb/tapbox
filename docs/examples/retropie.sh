@@ -61,8 +61,16 @@ sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 # KEEP_WIFI=1 wifi stays up but is softened (power-save + 5 dBm) so you
 # can watch live via:   screen -x retropie
 if [ "${KEEP_WIFI:-0}" = 1 ]; then
+  # power save is cheap coexistence help: it costs latency, not range.
   iw dev wlan0 set power_save on 2>/dev/null || true
-  iw dev wlan0 set txpower fixed 500 2>/dev/null || true
+  # txpower is NOT softened by default any more. 'fixed 500' (5 dBm,
+  # against a 20-31 dBm normal) made the link so weak that ssh stalled
+  # mid-session — field 2026-08-04 — which defeats the only reason to
+  # keep wifi up. Set WIFI_TXPOWER=<mBm> to opt back in (e.g. 1500 =
+  # 15 dBm for a milder softening); the wrapper's restore always puts
+  # txpower back to auto either way.
+  [ -n "${WIFI_TXPOWER:-}" ] \
+    && { iw dev wlan0 set txpower fixed "$WIFI_TXPOWER" 2>/dev/null || true; }
 else
   rfkill block wifi
 fi
