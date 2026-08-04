@@ -150,12 +150,15 @@ fi
 # any pad with a MODE button qualifies, also ones that connect later.
 EMERG_PID=""
 if python3 -c "import evdev" 2>/dev/null; then
-  python3 - "$SESSION" <<'PYEOF' &
+  python3 - "$SESSION" "$RP_USER" <<'PYEOF' &
 import subprocess, sys, threading, time
 from evdev import list_devices, InputDevice, ecodes
-SESSION, HOLD = sys.argv[1], 3
+SESSION, RP_USER, HOLD = sys.argv[1], sys.argv[2], 3
 def ctrl_c():
-    subprocess.run(["screen", "-S", SESSION, "-X", "stuff", "\x03"])
+    # the screen session is RP_USER's (created via runuser), so the
+    # rescue Ctrl-C has to be sent as that user or it finds no socket
+    subprocess.run(["runuser", "-l", RP_USER, "-c",
+                    "screen -S %s -X stuff $'\\003'" % SESSION])
 def watch(dev):
     timer = None
     try:
@@ -196,21 +199,55 @@ cleanup() {
   # reboot, so blanking here would strand the next session.
   [ "$TV" = 1 ] && [ -n "${CEC:-1}" ] && { echo 'standby 0' \
     | cec-client -s -d 1 >/dev/null 2>&1 || true; }
-  screen -S "$SESSION" -X quit 2>/dev/null || true
+  # the session belongs to RP_USER now (created via runuser), so the
+  # quit has to run as that user or it will not find the socket
+  runuser -l "$RP_USER" -c "screen -S $SESSION -X quit" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# screen -Dm: a REAL pty session (ES refuses to live without one — the
-# wrapper.py lesson) run attached-in-foreground, so this script blocks
-# until EmulationStation exits. The moment it does, the trap cleans up
-# and the tapbox-extra wrapper takes the box back.
+# Launch: a DETACHED login session first, then type the command into
+# the interactive shell that owns it.
 #
-# Why not the proven `screen -X stuff 'emulationstation\n'` from
-# wrapper.py: stuff is fire-and-forget into a pre-existing session —
-# right for a forever-daemon that never needs to know when ES ends,
-# wrong here where THIS script's exit IS the give-the-box-back signal.
-# -Dm keeps both properties that made stuff work: the real pty, and
-# (via `runuser -l`, a full LOGIN environment: HOME/PATH/XDG as the
-# user — plain `runuser -u` leaked HOME=/root and ES wrote its config
-# to the wrong home) the interactive-shell surroundings.
-screen -Dm -S "$SESSION" runuser -l "$RP_USER" -c emulationstation
+# We used to do `screen -Dm -S x runuser -l user -c emulationstation`
+# — one command, and it BLOCKED here, which made the return trip
+# trivial. It also did not work: games launched from the menu dropped
+# straight back to it, and runcommand.log stayed empty because the
+# failure happened before anything could log (field 2026-08-04, proven
+# by running the two shapes side by side). The pty existed, but no
+# login shell had ever run IN it: ES was exec'd into a bare pty and
+# inherited none of what an interactive shell sets up around itself.
+# palchrb's original retropie_wrapper had this right from the start.
+#
+# The cost is that `stuff` is fire-and-forget, so the give-the-box-back
+# signal has to be recovered by watching for the ES process instead —
+# see the wait loop below.
+runuser -l "$RP_USER" -c "screen -dmS $SESSION" || {
+  echo "retropie: could not create the screen session" >&2
+  echo "RetroPie: could not start — see journalctl -u tapbox-extra" \
+    > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
+  exit 1
+}
+sleep 2   # let the login shell finish its rc files before typing at it
+runuser -l "$RP_USER" -c \
+  "screen -S $SESSION -X stuff 'emulationstation\n'" || {
+  echo "retropie: stuff into the session failed" >&2
+  exit 1
+}
+
+# Wait out the session. ES quitting is the give-the-box-back signal,
+# but the screen session SURVIVES it (the login shell just returns to
+# its prompt), so poll for the process instead. RetroPie's own
+# restart-ES loop briefly leaves no process behind, so only conclude
+# it is over after several consecutive misses — a restart from the ES
+# menu must not hand the box back mid-restart.
+gone=0
+sleep 10                      # ES needs a moment to appear at all
+while [ "$gone" -lt 4 ]; do
+  if pgrep -u "$RP_USER" -f emulationstation >/dev/null 2>&1; then
+    gone=0
+  else
+    gone=$((gone + 1))
+  fi
+  sleep 3
+done
+echo "retropie: EmulationStation is gone — handing the box back"
