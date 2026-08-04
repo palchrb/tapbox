@@ -29,8 +29,10 @@ GO = "30:C0:1B:BD:13:B2"
 JR = "2C:FD:B3:5B:1C:BA"
 
 EXPECTED_STATUS_DEVICES = [  # bt_status sorts by name
-    {"mac": GO, "name": "JBL GO", "paired": True, "connected": False},
-    {"mac": JR, "name": "JBL JR310BT", "paired": True, "connected": True},
+    {"mac": GO, "name": "JBL GO", "audio": True,
+     "paired": True, "connected": False},
+    {"mac": JR, "name": "JBL JR310BT", "audio": True,
+     "paired": True, "connected": True},
 ]
 
 
@@ -83,7 +85,8 @@ def cli_fixture_bin(tmp):
 case "$1 $2" in
   "devices Paired") printf 'Device {GO} JBL GO\\nDevice {JR} JBL JR310BT\\n';;
   "devices Connected") printf 'Device {JR} JBL JR310BT\\n';;
-  "info {GO}") printf 'Device {GO} (public)\\n\\tAlias: JBL GO\\n\\tPaired: yes\\n\\tConnected: no\\n';;
+  "info {GO}") printf 'Device {GO} (public)\\n\\tAlias: JBL GO\\n\\tPaired: yes\\n\\tConnected: no\\n\\tIcon: audio-card\\n\\tUUID: Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)\\n';;
+  "info {JR}") printf 'Device {JR} (public)\\n\\tAlias: JBL JR310BT\\n\\tPaired: yes\\n\\tConnected: yes\\n\\tIcon: audio-headset\\n\\tUUID: Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)\\n';;
   "info AA:AA:AA:AA:AA:AA") echo "Device AA:AA:AA:AA:AA:AA not available";;
   "show ") echo "Powered: yes";;
 esac
@@ -117,6 +120,12 @@ def seed_fake_bluezd(bus_addr):
                            f"string:{JR}", "string:JBL JR310BT",
                            "boolean:true", "boolean:true", "int16:0"],
                    check=True)
+    for mac in (GO, JR):  # both fixtures are speakers — say so, or the
+        # parity check would compare two backends that both just fail
+        # to detect audio (bt_speaker_only gates the flag itself)
+        subprocess.run(call + ["org.tapbox.Mock.SetUuids", f"string:{mac}",
+                               "string:0000110b-0000-1000-8000-00805f9b34fb"],
+                       check=True)
     subprocess.run(call + ["org.tapbox.Mock.SetPcm",
                            f"string:{JR}", "boolean:true"], check=True)
     return proc

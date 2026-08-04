@@ -926,18 +926,28 @@ async function loadBt() {
     info.className = "entry-info";
     const name = document.createElement("strong");
     name.textContent = d.name + (d.connected ? " ●" : "");
+    // audio === false is a gamepad/phone/keyboard, not a speaker. It
+    // still belongs in the list (you must be able to unpair it), but
+    // offering "Connect" would route audio into a controller — the
+    // configured-output file and asound.conf would both point at it
+    // (field 2026-08-04: a paired Pro Controller showed up here as a
+    // connectable speaker).
+    const isSpeaker = d.audio !== false;
     const mac = document.createElement("small");
-    mac.textContent = d.mac + (d.paired ? " · paired" : "");
+    mac.textContent = d.mac + (d.paired ? " · paired" : "")
+      + (isSpeaker ? "" : " · not a speaker");
     info.append(name, mac);
+    row.append(info);
 
-    const isActive = d.connected && d.mac === bt.configured;
-    const use = document.createElement("button");
-    use.textContent = isActive ? "Active" : "Connect";
-    use.disabled = isActive;
-    use.addEventListener("click", () => btAction("/bt/connect", { mac: d.mac },
-      `Connecting to ${d.name} …`));
-
-    row.append(info, use);
+    if (isSpeaker) {
+      const isActive = d.connected && d.mac === bt.configured;
+      const use = document.createElement("button");
+      use.textContent = isActive ? "Active" : "Connect";
+      use.disabled = isActive;
+      use.addEventListener("click", () => btAction("/bt/connect",
+        { mac: d.mac }, `Connecting to ${d.name} …`));
+      row.append(use);
+    }
     if (d.connected && d.mac !== bt.configured) {
       // a device that connected on its own — hang up without forgetting
       const disc = document.createElement("button");
@@ -950,7 +960,8 @@ async function loadBt() {
     rename.textContent = "Rename";
     rename.addEventListener("click", () => {
       const next = prompt(
-        `Name for this speaker (blank resets to the factory name):`,
+        `Name for this ${isSpeaker ? "speaker" : "device"} `
+        + `(blank resets to the factory name):`,
         d.name);
       if (next === null) return;             // cancelled
       btAction("/bt/rename", { mac: d.mac, name: next.trim() },

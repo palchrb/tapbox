@@ -611,6 +611,9 @@ def bt_status():
     devices = {}
     for d in btbus.paired_devices():
         devices[d["mac"]] = {"mac": d["mac"], "name": d["name"],
+                             # audio=False is a gamepad/phone/etc — the
+                             # PWA must not offer it as a speaker
+                             "audio": bool(d.get("audio", True)),
                              "paired": True, "connected": False}
     for d in btbus.connected_devices():
         if d["mac"] in devices:

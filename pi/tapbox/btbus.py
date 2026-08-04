@@ -144,8 +144,13 @@ def _cli_device_lines(args):
     for line in out.splitlines():
         parts = line.split(" ", 2)
         if len(parts) >= 2 and parts[0] == "Device":
-            devices.append({"mac": parts[1],
-                            "name": parts[2] if len(parts) > 2 else parts[1]})
+            mac = parts[1]
+            _c, info = _ctl("info", mac, timeout=10)
+            devices.append({"mac": mac,
+                            "name": parts[2] if len(parts) > 2 else mac,
+                            "audio": bool(re.search(
+                                r"Icon: audio|Audio Sink|0000110b",
+                                info, re.I))})
     return devices
 
 
@@ -431,7 +436,12 @@ def _dbus_device_list(prop):
         dev = ifaces.get("org.bluez.Device1")
         if dev and bool(dev.get(prop)):
             mac = str(dev.get("Address", "")).upper()
-            out.append({"mac": mac, "name": str(dev.get("Alias") or mac)})
+            out.append({"mac": mac, "name": str(dev.get("Alias") or mac),
+                        # a paired GAMEPAD is not a speaker: the PWA
+                        # listed every bond under 'Bluetooth speaker',
+                        # one tap away from routing audio into a
+                        # controller (field 2026-08-04)
+                        "audio": _dbus_is_audio(dev)})
     return sorted(out, key=lambda d: d["mac"])
 
 
