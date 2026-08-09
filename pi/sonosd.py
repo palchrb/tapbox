@@ -464,6 +464,13 @@ class Session:
         pos = spk.avTransport.GetPositionInfo([("InstanceID", 0)])
         tr = spk.avTransport.GetTransportInfo([("InstanceID", 0)])
         transport = tr.get("CurrentTransportState") or "STOPPED"
+        if transport == "TRANSITIONING":
+            # buffering/track-change limbo: report the last REAL state —
+            # downstream treats TRANSITIONING as not-playing, which
+            # painted a pause icon during every fresh start (G1-d)
+            transport = getattr(self, "_last_tr", None) or "PLAYING"
+        else:
+            self._last_tr = transport
         track_uri = pos.get("TrackURI") or ""
         rel = _hms_to_s(pos.get("RelTime"))
         dur = _hms_to_s(pos.get("TrackDuration"))

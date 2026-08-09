@@ -1009,6 +1009,7 @@ class Orchestrator:
             # title backwards mid-mash
             self.sonos_bm_hold = None
             self.sonos_pending = (ep["id"], time.monotonic())
+            self.sonos_opt_tr = ("PLAYING", time.monotonic())
             self.sonos_snap = {
                 "armed": True, "uid": rd.get("uid"),
                 "kind": self.sonos_kind, "transport": "PLAYING",
@@ -1028,6 +1029,8 @@ class Orchestrator:
             return {"error": resp.get("error") or f"http-{code}"}
         self.sonos_idx = idx
         self.sonos_kind = self._sonos_body(ep, rd["uid"], 0)["kind"]
+        self.sonos_pending = (ep.get("id") or ep["url"], time.monotonic())
+        self.sonos_opt_tr = ("PLAYING", time.monotonic())
         # seed the snapshot so the card extrapolates from the position we
         # TRANSFERRED at, instead of flashing old->0->sonos for up to 5s
         # (field 2026-08-09); the first real poll takes over
@@ -1116,6 +1119,8 @@ class Orchestrator:
                 log(f"sonos: queue drift ({qlen} on speaker vs "
                     f"{len(rows)} listed) — positional jumps disabled")
             self.sonos_bm_hold = None
+            self.sonos_pending = (rows[idx]["id"], time.monotonic())
+            self.sonos_opt_tr = ("PLAYING", time.monotonic())
             self.sonos_snap = {
                 "armed": True, "uid": rd["uid"],
                 "kind": self.sonos_kind, "transport": "PLAYING",
