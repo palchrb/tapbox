@@ -3308,15 +3308,29 @@ def _sonos_poller():
                                           "kind": ORCH.sonos_kind,
                                           "uri": snap.get("uri")})
                 log("sonos: adopted a live session on daemon start")
-            elif load_settings().get("resume_on_boot") and ORCH.target:
-                try:
-                    with open(LAST_FILE) as f:
-                        was = json.load(f).get("was_playing")
-                except (OSError, ValueError):
-                    was = False
-                if was:
-                    log("sonos: boot resume on the speaker")
-                    ORCH.sonos_start_target(ORCH.target)
+            else:
+                # No live remote session at boot -> the renderer reverts
+                # to the BOX (owner 2026-08-09): a reboot must never
+                # start audio on a speaker in a room nobody asked in.
+                # The ordinary boot resume then plays locally; its
+                # existing guards make a duplicate attempt stand down.
+                _renderer.write("box")
+                content.PREFER_REMOTE = False
+                with ORCH.lock:
+                    if ORCH.source == "sonos":
+                        ORCH.source = ("spotify" if ORCH.target
+                                       and is_spotify(ORCH.target)
+                                       else "mpv")
+                if load_settings().get("resume_on_boot") and ORCH.target:
+                    try:
+                        with open(LAST_FILE) as f:
+                            was = json.load(f).get("was_playing")
+                    except (OSError, ValueError):
+                        was = False
+                    if was:
+                        log("renderer was sonos at boot — resuming on "
+                            "the BOX instead")
+                        ORCH.play(ORCH.target, boot=True)
         except _renderer.SidecarDown:
             log("sonos: sidecar not up yet — reconcile on next tick")
     ends_near = 0
