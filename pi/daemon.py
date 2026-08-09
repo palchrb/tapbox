@@ -113,7 +113,11 @@ for _p in (_here, "/usr/local/lib/tapbox-py"):
             sys.path.insert(0, _p)
         break
 from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
+from tapbox import renderer as _renderer  # noqa: E402 — sonos axis+client
 from tapbox import spotify_web as _spotify_web  # noqa: E402
+from tapbox.bookmarks import (episode_pos as _bm_episode_pos,  # noqa: E402
+                              load_state as _bm_load,
+                              save_state as _bm_save)
 from tapbox.paths import (  # noqa: E402
     ART_DIR, MEDIA_DIR, RUN_DIR, STATE_DIR, go_restarted_within,
     note_go_restart)
@@ -140,6 +144,7 @@ _QUEUE_CACHE = {"mtime": None, "data": None}
 # sessions, which let a short play (<30s) end entirely between ticks —
 # no bookmark ever written ("no spotify bookmark on disk" later)
 _bm_wake = threading.Event()
+_sonos_wake = threading.Event()  # poke the sonos poller (controls, switch)
 
 # the supervisor's (and play-path's) verdict on actual internet — surfaced
 # in /status as spotify_offline so the clients can SAY "no internet"
@@ -282,6 +287,16 @@ class Orchestrator:
         except (OSError, ValueError):
             pass
         self.child_started = 0.0
+        # Sonos renderer session: the poller's last /state snapshot (with
+        # a monotonic stamp — a stale snapshot must read as NOT playing,
+        # or the box never sleeps), and OUR queue for the url kind (the
+        # box stays the sequencer for podcasts; sonos owns the queue only
+        # for spotify sharelinks — owner decision 2026-08-09).
+        self.sonos_snap = {}
+        self.sonos_snap_at = 0.0
+        self.sonos_queue = []   # [{'url','title','id','image'}]
+        self.sonos_idx = None
+        self.sonos_kind = None
         # last spotify control timeout; far past, NOT 0.0 — on a young
         # monotonic clock 0.0 would read as 'timed out seconds ago'
         self._spot_cmd_timeout_at = -1e9
@@ -630,6 +645,16 @@ class Orchestrator:
 
     def play(self, target, fresh=False, episode=None, reverse=False,
              cache=None, resume=True, boot=False):
+        # Renderer-first, ahead of every local shortcut: with a sonos
+        # renderer there is no mpv child and no local spotify session to
+        # resume — falling through would spawn a LOCAL player next to the
+        # remote one (QA silent-pass #1, the double-playback trap). Boot
+        # resume is the exception: reconciliation adopts a live remote
+        # session instead of replaying it (never start audio in a room
+        # nobody asked for at boot).
+        if _renderer.is_sonos() and not boot:
+            _radio.touch_busy()
+            return self.sonos_start_target(target, episode=episode)
         # The backend probe/start (systemctl is-active, and up to 30s of
         # systemctl start against a parked unit) must never run under
         # ORCH.lock: every /status reader — the screen's 1/s poll —
@@ -744,6 +769,28 @@ class Orchestrator:
         mpv gets its softvol (0-100); Spotify gets go-librespot's volume
         scaled from our 0-100 to its volume_steps."""
         cap = load_settings()["volume_cap"]  # child-safety ceiling
+        if self.source == "sonos":
+            # No cap on the remote renderer (owner decision 2026-08-09):
+            # the amplifier is a family speaker in a shared room, not the
+            # box against a child's ear. Deltas work off the poller's
+            # last-seen volume; someone turning the knob in the Sonos app
+            # is reported, never fought.
+            try:
+                if absolute is None:
+                    cur = (self._sonos_fresh() or {}).get("volume")
+                    absolute = (50 if cur is None else cur) + delta
+                v = max(0, min(100, round(absolute)))
+                code, _r = _renderer.post(
+                    "/volume", {"v": v,
+                                "if_uid": _renderer.read().get("uid")})
+                _sonos_wake.set()
+                if code == 200:
+                    return {"routed": "sonos", "volume": v}
+                return {"routed": "sonos", "volume": None,
+                        "error": _r.get("error")}
+            except _renderer.SidecarDown:
+                return {"routed": None, "volume": None,
+                        "error": "sonos-sidecar-down"}
         with self.lock:
             if self._mpv_alive() and self.source == "mpv":
                 try:
@@ -785,7 +832,237 @@ class Orchestrator:
                     "volume": round((st.get("volume") or 0) * 100 / steps)}
         return {"routed": None, "volume": None}
 
-    def set_output(self, device, fallback=False):
+    # --- Sonos renderer ---------------------------------------------------
+    # The renderer axis is ORTHOGONAL to output: output stays local|bt
+    # ("where the box plays when it comes back"), renderer says who makes
+    # sound right now. Never add "sonos" to OUTPUT_PCMS — player.py:144
+    # would read pcm null and output.py:88 silently falls back to bt,
+    # which is the double-playback trap (architect review 2026-08-08).
+
+    SONOS_STALE_S = 15.0  # a snapshot older than this reads as NOT playing
+
+    def _sonos_fresh(self):
+        snap = self.sonos_snap
+        return (snap if snap and (time.monotonic() - self.sonos_snap_at)
+                < self.SONOS_STALE_S else None)
+
+    def _sonos_position(self):
+        """Last MEASURED position (+ extrapolation while PLAYING). Never
+        extrapolates past ~60s of staleness, never invents from STOPPED."""
+        snap = self.sonos_snap
+        rel = snap.get("rel_s")
+        if rel is None or snap.get("transport") not in ("PLAYING",
+                                                        "PAUSED_PLAYBACK"):
+            return None
+        age = time.monotonic() - self.sonos_snap_at
+        if snap.get("transport") == "PLAYING" and age < 60:
+            rel = rel + age
+        dur = snap.get("dur_s")
+        return min(rel, dur) if dur else rel
+
+    def _sonos_bookmark_now(self):
+        """Persist the last measured position — called BEFORE any Stop or
+        renderer change (after a Stop the transport reads 0:00, and
+        bookmarking that is the most damaging ordering bug available)."""
+        snap = self.sonos_snap
+        if (self.sonos_kind != "url" or self.sonos_idx is None
+                or not self.target or not snap.get("ours")):
+            return
+        rel = snap.get("rel_s")  # measured only — never the extrapolation
+        if rel is None or snap.get("transport") == "STOPPED":
+            return
+        ep = self.sonos_queue[self.sonos_idx]
+        _bm_save(state_key(self.target), ep["url"], float(rel),
+                 episode_id=ep.get("id"), duration=snap.get("dur_s"))
+
+    def _sonos_body(self, ep, uid, start_s):
+        """/play body for one queue entry (contract: tests/sonos_contract).
+        Series ride the NRK service (x-sonos-http); plain urls stream from
+        origin. Artwork must be an http url — Sonos cannot fetch a cached
+        local path and does not resolve .local."""
+        m = re.match(r"https?://radio\.nrk\.no/serie/([a-z0-9_-]+)",
+                     self.target or "", re.I)
+        art = ep.get("image")
+        if art and not str(art).startswith("http"):
+            art = None
+        album = None
+        try:  # the library entry's display name, when the target has one
+            lib = load_library()
+            album = next((e.get("name") for s in lib["sections"]
+                          for e in s["entries"]
+                          if e.get("url") == self.target), None)
+        except Exception:
+            pass
+        body = {"uid": uid, "title": ep.get("title"),
+                "album": album, "art": art, "start_s": start_s}
+        if m and ep.get("id"):
+            body.update(kind="nrk_program", uri=self.target,
+                        series=m.group(1), program_id=ep["id"])
+        else:
+            body.update(kind="url", uri=ep["url"])
+        return body
+
+    def _sonos_play_entry(self, idx, start_s=0.0):
+        """Push queue entry idx to the speaker. Lock NOT held (SOAP to a
+        sleeping speaker takes seconds — same discipline as set_output's
+        slow half)."""
+        rd = _renderer.read()
+        if rd["renderer"] != "sonos":
+            return {"error": "renderer is not sonos"}
+        ep = self.sonos_queue[idx]
+        code, resp = _renderer.post(
+            "/play", self._sonos_body(ep, rd["uid"], start_s))
+        if code != 200:
+            log(f"sonos: play refused ({code}: {resp.get('error')})")
+            return {"error": resp.get("error") or f"http-{code}"}
+        self.sonos_idx = idx
+        self.sonos_kind = self._sonos_body(ep, rd["uid"], 0)["kind"]
+        if start_s >= 5 and not resp.get("sought"):
+            log("sonos: seek refused — playing from the top (bookmark "
+                "kept)")
+        log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
+            f"{ep.get('title') or ep['url']}")
+        return {"source": "sonos", "target": self.target, "index": idx}
+
+    def sonos_start_target(self, target, episode=None):
+        """Resolve a target to the sonos session: expand (remote urls
+        preferred), rotate to the bookmark, push the episode. Spotify
+        targets go as one sharelink — SONOS OWNS THAT QUEUE."""
+        rd = _renderer.read()
+        if rd["renderer"] != "sonos":
+            return {"error": "renderer is not sonos"}
+        if is_spotify(target):
+            try:
+                go("/player/pause")  # quiesce the box's own session
+            except OSError:
+                pass
+            code, resp = _renderer.post("/play", {
+                "uid": rd["uid"], "kind": "spotify_sharelink",
+                "uri": target})
+            if code != 200:
+                return {"error": resp.get("error") or f"http-{code}"}
+            with self.lock:
+                self.target, self.source = target, "sonos"
+                self.sonos_kind = "spotify_sharelink"
+                self.sonos_queue, self.sonos_idx = [], None
+                self._persist()
+            return {"source": "sonos", "target": target}
+        entries = content.expand_entries(target)
+        playable = [e for e in entries
+                    if str(e["url"]).startswith(("http://", "https://"))
+                    or re.match(r"https?://radio\.nrk\.no/serie/", target)]
+        skipped = len(entries) - len(playable)
+        if skipped:
+            log(f"sonos: {skipped} local-only entr"
+                f"{'y' if skipped == 1 else 'ies'} skipped (no stream url)")
+        if not playable:
+            return {"error": "nothing-remote-playable"}
+        st = _bm_load(state_key(target)) or {}
+        idx, pos = 0, 0.0
+        if episode is not None:
+            idx = next((i for i, e in enumerate(playable)
+                        if e.get("id") == episode), 0)
+            pos = _bm_episode_pos(st, episode, playable[idx]["url"])
+        elif st:
+            bid = st.get("id")
+            hit = next((i for i, e in enumerate(playable)
+                        if (bid and e.get("id") == bid)
+                        or e["url"] == st.get("url")), None)
+            if hit is not None:
+                idx = hit
+                pos = _bm_episode_pos(st, playable[idx].get("id"),
+                                      playable[idx]["url"])
+        with self.lock:
+            self.target, self.source = target, "sonos"
+            self.sonos_queue = playable
+            self.sonos_kind = "url"
+            self._persist()
+        return self._sonos_play_entry(idx, start_s=pos)
+
+    def sonos_step(self, delta):
+        """next/prev for the url kind (our queue, with the wrap rules the
+        box already teaches); sharelink delegates to the speaker's own
+        queue. prev >5s in restarts the episode — same as mpv rule."""
+        if self.sonos_kind == "spotify_sharelink":
+            rd = _renderer.read()
+            _renderer.post("/next" if delta > 0 else "/prev",
+                           {"if_uid": rd.get("uid")})
+            return {"ok": True, "delegated": True}
+        if self.sonos_idx is None or not self.sonos_queue:
+            return {"error": "no queue"}
+        if delta < 0 and (self._sonos_position() or 0) > 5:
+            return self._sonos_play_entry(self.sonos_idx, 0.0)
+        n = len(self.sonos_queue)
+        return self._sonos_play_entry((self.sonos_idx + delta) % n, 0.0)
+
+    def _renderer_to_sonos(self, uid, name):
+        """Hand the session to a speaker. Order is load-bearing: capture
+        the box-side position FIRST (stopping the child flushes the
+        player's bookmark), THEN persist the renderer, THEN start remote.
+        None of the local/bt machinery runs — no OUT_FILE write, no
+        BT_QUIET, no _kick_bt_connect, no go-librespot retarget."""
+        if not uid:
+            return None  # handler answers 400
+        was_spotify = self.source == "spotify" and self.target \
+            and is_spotify(self.target)
+        with self.lock:
+            target = self.target
+            self._stop_child()  # flushes the mpv bookmark on its way out
+        if was_spotify:
+            _flush_spotify_bookmark()
+        _renderer.write("sonos", uid=uid, name=name)
+        content.PREFER_REMOTE = True
+        _sonos_wake.set()
+        log(f"renderer -> sonos: {name or uid}")
+        if target:
+            r = self.sonos_start_target(target)
+            if r.get("error"):
+                return {"output": current_output()["output"],
+                        "renderer": "sonos", "warning": r["error"]}
+        return {"output": current_output()["output"], "renderer": "sonos",
+                "name": name}
+
+    def _renderer_to_box(self):
+        """The way home: read the position BEFORE stopping the transport
+        (after a Stop it reads 0:00), bookmark it, silence the speaker,
+        then the ordinary local play resumes from that bookmark."""
+        self._sonos_bookmark_now()
+        resume_target = self.target if self.sonos_kind == "url" else None
+        try:
+            rd = _renderer.read()
+            _renderer.post("/stop", {"if_uid": rd.get("uid")})
+        except _renderer.SidecarDown:
+            log("sonos: sidecar down during switch-back — speaker may "
+                "still be playing (stop it from the Sonos app)")
+        _renderer.write("box")
+        content.PREFER_REMOTE = False
+        with self.lock:
+            self.sonos_snap, self.sonos_snap_at = {}, 0.0
+            self.sonos_queue, self.sonos_idx = [], None
+            kind, self.sonos_kind = self.sonos_kind, None
+            if self.source == "sonos":
+                self.source = "spotify" if kind == "spotify_sharelink" \
+                    else "mpv"
+        log("renderer -> box")
+        if resume_target:
+            # fire-and-forget resume on the box, from the bookmark just
+            # written — same UX as a BT speaker coming home
+            threading.Thread(target=self.play, args=(resume_target,),
+                             daemon=True).start()
+
+    def set_output(self, device, fallback=False, uid=None, name=None):
+        if device == "sonos":
+            return self._renderer_to_sonos(uid, name)
+        if _renderer.is_sonos():
+            if fallback:
+                # btwatchd's A2DP announce (or its local fallback) must
+                # never yank sound away from a playing sonos session —
+                # the JBL wandering into range mid-episode was QA's
+                # silent-pass #4. A normal reply keeps btwatchd's own
+                # announced-state machine consistent.
+                return {"skipped": "renderer is sonos",
+                        "output": current_output()["output"]}
+            self._renderer_to_box()
         pcm = OUTPUT_PCMS.get(device)
         if not pcm:
             return None  # handler answers 400
@@ -962,10 +1239,40 @@ class Orchestrator:
             except OSError:
                 return {"routed": None, "shuffle": None}
 
+    def _sonos_command(self, action):
+        """Transport controls for the remote renderer. Runs OFF the lock:
+        a SOAP round to a sleeping speaker takes seconds, and every
+        /status reader queues behind this lock (review 2026-07-18 R2)."""
+        rd = _renderer.read()
+        guard = {"if_uid": rd.get("uid")}
+        snap = self._sonos_fresh() or {}
+        try:
+            if action in ("next", "prev"):
+                return self.sonos_step(1 if action == "next" else -1)
+            if action == "playpause":
+                if snap.get("transport") == "PLAYING":
+                    self._sonos_bookmark_now()
+                    code, _r = _renderer.post("/pause", guard)
+                else:
+                    code, _r = _renderer.post("/resume", guard)
+                _sonos_wake.set()  # re-poll now: the card should flip fast
+                return {"routed": "sonos", "ok": code == 200}
+            return {"error": f"unsupported on sonos: {action}"}
+        except _renderer.SidecarDown:
+            return {"error": "sonos-sidecar-down"}
+
     def pause(self):
         """Pause (never toggle) whatever is audible. Used by the card-slot
         switch on card removal: player stays loaded, so re-inserting the
         same card unpauses instantly."""
+        if self.source == "sonos":
+            self._sonos_bookmark_now()
+            try:
+                _renderer.post("/pause",
+                               {"if_uid": _renderer.read().get("uid")})
+                return {"paused": ["sonos"]}
+            except _renderer.SidecarDown:
+                return {"paused": [], "error": "sonos-sidecar-down"}
         with self.lock:
             acted = []
             if self._mpv_alive():
@@ -998,6 +1305,14 @@ class Orchestrator:
         2026-07-27, Skoda head unit). Idempotent by construction: if it
         is already playing, this is a no-op.
         """
+        if self.source == "sonos":
+            try:
+                _renderer.post("/resume",
+                               {"if_uid": _renderer.read().get("uid")})
+                _sonos_wake.set()
+                return {"resumed": ["sonos"]}
+            except _renderer.SidecarDown:
+                return {"resumed": [], "error": "sonos-sidecar-down"}
         with self.lock:
             acted = []
             if self._mpv_alive():
@@ -1029,6 +1344,14 @@ class Orchestrator:
         survive the gaming session. Field: the wrapper's plain /stop
         logged 'bookmark cleared' and wiped the audiobook position on
         every RetroPie launch."""
+        if self.source == "sonos":
+            # stop = done, same rule remotely: silence the speaker; the
+            # bookmark-clearing below still applies via the shared path
+            try:
+                _renderer.post("/stop",
+                               {"if_uid": _renderer.read().get("uid")})
+            except _renderer.SidecarDown:
+                pass  # speaker may play on — the app is the backstop
         with self.lock:
             self._stop_child()
             try:
@@ -1084,6 +1407,12 @@ class Orchestrator:
             return False
 
     def command(self, action):
+        # Renderer-first, ahead of the fast-skip AND the busy-gate: with
+        # no mpv child, control flow would otherwise fall through to the
+        # respawn rules and start a LOCAL player next to the remote one
+        # (architect review 2026-08-08 — must be the first rule).
+        if self.source == "sonos":
+            return self._sonos_command(action)
         # v0.0.8 fast-path: spotify next/prev must reach go-librespot at
         # the REAL press cadence — its skip debounce coalesces a burst
         # into two track loads, but only if it SEES the burst. The busy-
@@ -1358,6 +1687,46 @@ class Orchestrator:
                "artwork": None, "episode_id": None, "shuffle": False,
                "spotify_offline": bool(_SPOT_OFFLINE[0]),
                "output": current_output()["output"]}
+        if source == "sonos":
+            # Same keys, same units as the mpv card — that identity IS
+            # the "only difference is where the sound comes out" promise.
+            # Reads ONLY the poller's snapshot: never the network, never
+            # the sidecar (the go-librespot lesson at the top of this
+            # method, twice over via PS-throttled wifi). A stale snapshot
+            # reads as NOT playing — a session that died hours ago must
+            # not hold the box awake all night.
+            rd = _renderer.read()
+            out["renderer"] = "sonos"
+            out["renderer_name"] = rd.get("name")
+            snap = self._sonos_fresh()
+            if snap:
+                out["playing"] = (snap.get("transport") == "PLAYING"
+                                  and bool(snap.get("reachable"))
+                                  and bool(snap.get("ours")
+                                           or self.sonos_kind
+                                           == "spotify_sharelink"))
+                out["position"] = self._sonos_position()
+                out["duration"] = snap.get("dur_s")
+                if not snap.get("ours") and snap.get("foreign_uri"):
+                    out["renderer_state"] = "taken-over"
+                elif snap.get("grouped_away"):
+                    out["renderer_state"] = "grouped-away"
+                elif snap.get("lost_session"):
+                    out["renderer_state"] = "lost-session"
+            elif self.sonos_snap:
+                out["renderer_state"] = "unreachable"
+                out["position"] = self.sonos_snap.get("rel_s")
+                out["duration"] = self.sonos_snap.get("dur_s")
+            if self.sonos_kind == "spotify_sharelink":
+                out["title"] = (snap or {}).get("track_title")
+                if (snap or {}).get("track_artist"):
+                    out["artists"] = [snap["track_artist"]]
+            elif self.sonos_idx is not None and self.sonos_queue:
+                ep = self.sonos_queue[self.sonos_idx]
+                out["title"] = ep.get("title")
+                out["episode_id"] = ep.get("id")
+                out["artwork"] = ep.get("image")  # same shape as mpv card
+            return out
         if mpv_alive and source == "mpv":
             # gated on source too: a lingering/starting mpv child while
             # the box plays spotify leaked mpv's media-title (a raw URL)
@@ -1656,8 +2025,15 @@ class Orchestrator:
                 out["artwork_local"] = content.collection_image(target)
             except Exception:
                 out["artwork_local"] = None
-        out["bt_waiting"], out["bt_ready"], out["bt_lost"] = \
-            _bt_wait_state(out["playing"])
+        if source == "sonos":
+            # a happily-playing sonos session must not put the "speaker
+            # not connected" popup on the screen: _bt_wait_state answers
+            # for the LOCAL bt output, which is not in the audio path now
+            # (architect risk #2, 2026-08-08)
+            out["bt_waiting"] = out["bt_ready"] = out["bt_lost"] = False
+        else:
+            out["bt_waiting"], out["bt_ready"], out["bt_lost"] = \
+                _bt_wait_state(out["playing"])
         # Steady 'is the configured speaker connected' for the screen's
         # status icon. /status polls at 1-2s, so the icon tracks a
         # connect/drop as fast as the popup does — the /system field
@@ -1840,7 +2216,22 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/library":
             self._send(200, library_with_covers())
         elif url.path == "/output":
-            self._send(200, current_output())
+            out = current_output()
+            out.update(_renderer.read())  # renderer/uid/name ride along
+            self._send(200, out)
+        elif url.path == "/sonos":
+            # speaker list via the sidecar (uid+name only — GET is token-
+            # free by the SAFE rule, and speaker IPs are LAN topology).
+            # ?rescan=1 runs SSDP; plain GET serves the cache instantly.
+            q = urllib.parse.parse_qs(url.query)
+            try:
+                rescan = (q.get("rescan") or ["0"])[0] == "1"
+                self._send(200, _renderer.get(
+                    "/players" + ("?rescan=1" if rescan else ""),
+                    timeout=20 if rescan else 3))
+            except _renderer.SidecarDown:
+                self._send(503, {"error": "sonos-sidecar-down",
+                                 "players": []})
         elif url.path == "/settings":
             self._send(200, load_settings())
         elif url.path == "/system":
@@ -2216,10 +2607,13 @@ class Handler(BaseHTTPRequestHandler):
                                             delta=body.get("delta")))
             elif self.path == "/output":
                 r = ORCH.set_output(body.get("device"),
-                                    fallback=bool(body.get("fallback")))
+                                    fallback=bool(body.get("fallback")),
+                                    uid=body.get("uid"),
+                                    name=body.get("name"))
                 if r is None:
-                    self._send(400, {"error":
-                                     f"device must be one of {sorted(OUTPUT_PCMS)}"})
+                    self._send(400, {"error": "device must be one of "
+                                     f"{sorted(OUTPUT_PCMS)} or sonos "
+                                     "(with uid)"})
                     return
                 self._send(200, r)
             elif self.path == "/system/wifi":
@@ -2699,6 +3093,100 @@ _SPOT_LAST_PLAYING = [False]
 # ago — otherwise lives only in bm_pending and dies with the thread at TERM,
 # leaving boot-resume to continue from a stale spot. _on_term flushes this.
 _SPOT_PENDING_BM = [None]
+
+SONOS_POLL_S = float(os.environ.get("TAPBOX_SONOS_POLL", "5"))
+
+
+def _sonos_poller():
+    """The renderer's heartbeat: reads the sidecar's /state snapshot (a
+    localhost memory read — the sidecar owns the SOAP polling), publishes
+    it for status(), writes the bookmark from MEASURED positions, and
+    advances OUR queue when a url-kind episode ends. Idles at 30s ticks
+    while the renderer is box; _sonos_wake pokes it on switches and
+    controls so the card flips fast.
+
+    Startup doubles as RECONCILIATION: daemon restarted mid-session
+    (install.sh restarts it on every update) with the speaker still
+    playing must re-attach — never re-play, which would jump the episode
+    back over music that never stopped (architect crash matrix b)."""
+    if _renderer.is_sonos():
+        content.PREFER_REMOTE = True
+        try:
+            snap = _renderer.get("/state")
+            if snap.get("armed") and snap.get("transport") in (
+                    "PLAYING", "PAUSED_PLAYBACK"):
+                with ORCH.lock:
+                    ORCH.source = "sonos"
+                    ORCH.sonos_snap = snap
+                    ORCH.sonos_snap_at = time.monotonic()
+                # rebuild the queue view for the screen (ids/titles);
+                # adopt tells the sidecar we are its tapboxd again
+                if ORCH.target and not is_spotify(ORCH.target):
+                    try:
+                        ORCH.sonos_queue = [
+                            e for e in content.expand_entries(ORCH.target)
+                            if str(e["url"]).startswith(
+                                ("http://", "https://"))]
+                        ORCH.sonos_kind = "url"
+                        uri = snap.get("uri")
+                        ORCH.sonos_idx = next(
+                            (i for i, e in enumerate(ORCH.sonos_queue)
+                             if e["url"] == uri), None)
+                    except Exception:
+                        pass
+                elif ORCH.target:
+                    ORCH.sonos_kind = "spotify_sharelink"
+                rd = _renderer.read()
+                _renderer.post("/adopt", {"uid": rd.get("uid"),
+                                          "kind": ORCH.sonos_kind,
+                                          "uri": snap.get("uri")})
+                log("sonos: adopted a live session on daemon start")
+            elif load_settings().get("resume_on_boot") and ORCH.target:
+                try:
+                    with open(LAST_FILE) as f:
+                        was = json.load(f).get("was_playing")
+                except (OSError, ValueError):
+                    was = False
+                if was:
+                    log("sonos: boot resume on the speaker")
+                    ORCH.sonos_start_target(ORCH.target)
+        except _renderer.SidecarDown:
+            log("sonos: sidecar not up yet — reconcile on next tick")
+    ends_near = 0
+    while True:
+        _sonos_wake.wait(timeout=SONOS_POLL_S
+                         if ORCH.source == "sonos" else 30)
+        _sonos_wake.clear()
+        if ORCH.source != "sonos":
+            continue
+        try:
+            snap = _renderer.get("/state")
+        except _renderer.SidecarDown:
+            continue  # keep the LAST snapshot — it goes stale honestly,
+            #           and stale reads as not-playing; never zeroed
+        ORCH.sonos_snap = snap
+        ORCH.sonos_snap_at = time.monotonic()
+        stale = snap.get("stale_s")
+        fresh = stale is not None and stale < 12
+        if not fresh or not snap.get("ours"):
+            continue  # foreign/hijacked or old data: observe, never act
+        rel, dur = snap.get("rel_s"), snap.get("dur_s")
+        if (ORCH.sonos_kind == "url" and rel is not None
+                and snap.get("transport") in ("PLAYING",
+                                              "PAUSED_PLAYBACK")):
+            ORCH._sonos_bookmark_now()
+            ends_near = (ends_near + 1
+                         if dur and rel > dur - 20 else 0)
+        if (ORCH.sonos_kind == "url" and ORCH.sonos_idx is not None
+                and snap.get("transport") == "STOPPED" and ends_near):
+            # the episode ran off its end (STOPPED right after we saw the
+            # tail) — OUR queue advances; a stop far from the end is a
+            # human and stays stopped
+            ends_near = 0
+            nxt = ORCH.sonos_idx + 1
+            if nxt < len(ORCH.sonos_queue):
+                log("sonos: episode ended — next")
+                ORCH._sonos_play_entry(nxt, 0.0)
 
 
 def _spotify_bookmarker():
@@ -3384,6 +3872,11 @@ def _flag_was_playing():
                         playing = not json.load(f).get("paused", False)
                 except (OSError, ValueError):
                     playing = True  # child alive, no info: assume playing
+        if not playing and ORCH.source == "sonos":
+            # remote renderer: the poller's snapshot, never a live SOAP
+            # round at TERM (same race the spotify mirror exists for)
+            snap = ORCH._sonos_fresh()
+            playing = bool(snap and snap.get("transport") == "PLAYING")
         if not playing:
             # box-initiated spotify: trust the state the bookmarker last saw
             # while go-librespot was alive (a fresh query here races its
@@ -3419,7 +3912,29 @@ def _flush_spotify_bookmark():
 def _on_term(*_args):
     _flag_was_playing()
     _flush_spotify_bookmark()
+    _sonos_on_term()
     os._exit(0)
+
+
+def _sonos_on_term():
+    """Box off = music off (owner default 2026-08-09): a TERM while the
+    renderer is sonos bookmarks the last MEASURED position and stops the
+    speaker — otherwise the episode plays on to an empty room and boot
+    resume later jumps it backwards. settings sonos_keep_playing=True
+    opts out (the PWA toggle): then the speaker plays on and the box
+    just leaves quietly. Install-restarts land here too — that is
+    correct for the stop-default (the reconcile adopts on the way up
+    only if something still plays, i.e. the keep-playing case)."""
+    try:
+        if not _renderer.is_sonos() or ORCH.source != "sonos":
+            return
+        ORCH._sonos_bookmark_now()
+        if not load_settings().get("sonos_keep_playing"):
+            _renderer.post("/stop",
+                           {"if_uid": _renderer.read().get("uid")},
+                           timeout=5)
+    except Exception:
+        pass  # never block a shutdown on a speaker
 
 
 def _boot_resume():
@@ -3427,6 +3942,10 @@ def _boot_resume():
     Both mpv content and Spotify resume at the exact second via their
     bookmarks (player.py replays the Spotify context with skip_to_uri
     + seek from the per-context bookmark)."""
+    if _renderer.is_sonos():
+        return  # the sonos poller's startup reconcile owns this case:
+        #         adopt a live session, or resume ON THE SPEAKER —
+        #         starting local audio here is the double-play trap
     if not load_settings().get("resume_on_boot"):
         return
     try:
@@ -3787,6 +4306,14 @@ def _audible_now():
     sweeper's busy-gate: its downloads must never share the radio with
     live audio. A just-spawned mpv (IPC not up yet) counts as audible —
     that's exactly the tap->audio window the sweep must stay out of."""
+    if ORCH.source == "sonos":
+        # A playing sonos session counts as AUDIBLE (the speaker streams
+        # over the same wifi the sweep would download on) even though
+        # _streaming_now stays False (the BOX isn't streaming — that is
+        # the power-save win). Opposite answers, both correct.
+        snap = ORCH._sonos_fresh()
+        if snap and snap.get("transport") == "PLAYING":
+            return True
     with ORCH.lock:
         alive = ORCH._mpv_alive()
         started = ORCH.child_started
@@ -3817,6 +4344,7 @@ def main():
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
+    threading.Thread(target=_sonos_poller, daemon=True).start()
     # off the bind path (review 2026-07-18 B1): the re-enable forks
     # rfkill/iw/nmcli probes with up-to-5s timeouts, and running it
     # synchronously here delayed "listening" — the screen sits on its

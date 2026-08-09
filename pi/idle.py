@@ -33,7 +33,7 @@ for _p in (_HERE, "/usr/local/lib/tapbox-py"):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import boxapi, mpv, spotify  # noqa: E402
+from tapbox import boxapi, mpv, renderer, spotify  # noqa: E402
 from tapbox.paths import last_activity, read_settings  # noqa: E402
 
 IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 5
@@ -68,6 +68,25 @@ def daemon_playing():
         return None
 
 
+def sonos_playing():
+    """Third direct probe for the daemon-down window: a Sonos rendering
+    OUR session must hold auto-off — powering the box off kills the
+    controller and the bookmark while the music plays on in the corner
+    (QA review 2026-08-09; the round-1 'idle needs zero changes' was
+    only true with tapboxd up). Only a CONFIRMED playing state holds:
+    sidecar down or stale answers False, or a dead sidecar would pin
+    the box awake forever."""
+    if not renderer.is_sonos():
+        return False
+    try:
+        snap = renderer.get("/state", timeout=3)
+    except (OSError, ValueError):
+        return False
+    stale = snap.get("stale_s")
+    return (snap.get("transport") == "PLAYING" and snap.get("ours")
+            and stale is not None and stale < 30)
+
+
 def ssh_active():
     """Anyone logged in over ssh? An active session means a human is
     working ON the box — powering off under them cost a debugging
@@ -90,7 +109,7 @@ def _cycle(idle):
     """One check: the new idle-seconds count, or None after poweroff."""
     active = daemon_playing()
     if active is None:  # daemon down — check the sources directly
-        active = spotify.playing() or mpv.playing()
+        active = spotify.playing() or mpv.playing() or sonos_playing()
     if not active:
         age = time.time() - last_activity()
         # A negative age is a clock jump (boot RTC/NTP) — same as the

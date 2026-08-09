@@ -608,10 +608,13 @@ raspi-config nonint do_spi 0 2>/dev/null || true
 if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
   python3 -m venv /opt/tapbox/venv
 fi
-if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio, qrcode' 2>/dev/null; then
+if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio, qrcode, soco' 2>/dev/null; then
   echo "    installing python libs (this can take a few minutes on a Zero)..."
+  # soco: the tapbox-sonos sidecar (UPnP control of Sonos speakers).
+  # In the COMBINED probe above — a lib added outside it is silently
+  # skipped by every future --update (architect review 2026-08-09).
   /opt/tapbox/venv/bin/pip install --quiet --upgrade \
-    adafruit-circuitpython-pn532 evdev pillow gpiozero qrcode
+    adafruit-circuitpython-pn532 evdev pillow gpiozero qrcode soco
   # lgpio is gpiozero's pin factory on kernel 6.x — without it gpiozero
   # falls back to RPi.GPIO, whose edge detection is broken there
   # ('RuntimeError: Failed to add edge detection' from tapbox-ui).
@@ -904,6 +907,25 @@ RestartSec=30
 WantedBy=multi-user.target
 EOF2
 
+SONOS_CHANGED=$PKG_CHANGED
+install_if_changed 755 "$SCRIPT_DIR/sonosd.py" /usr/local/bin/tapbox-sonos && SONOS_CHANGED=1
+write_if_changed /etc/systemd/system/tapbox-sonos.service <<'EOF2' && SONOS_CHANGED=1
+[Unit]
+Description=TapBox Sonos sidecar (UPnP via SoCo, 127.0.0.1 only)
+# After basic.target like tapboxd, NOT network-online: soco imports
+# lazily and the speaker cache addresses by stored IP, so startup needs
+# no network (ordering behind the network cost ~18s of boot elsewhere).
+After=basic.target
+
+[Service]
+ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-sonos
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF2
+
 DAEMON_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
 # Pairing over D-Bus (B2, PLAN-bt-b2-pairing.md): opt in per box until the
@@ -1034,7 +1056,7 @@ chmod 644 /etc/systemd/system/tapbox-*.service \
 systemctl daemon-reload
 systemctl enable --now go-librespot.service tapbox-bt-reconnect.service tapbox-mpris.service \
   tapbox-buttons.service tapbox-daemon.service tapbox-idle.service \
-  tapbox-chargefollow.service
+  tapbox-chargefollow.service tapbox-sonos.service
 # One-time migration: earlier installs enabled tapbox-rfid before the PN532
 # existed. Switch it to the same opt-in contract as tapbox-ui — but only
 # once, so an enable after wiring the reader sticks across installs.
@@ -1050,6 +1072,7 @@ fi
 [[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
 [[ ${MPRIS_CHANGED:-0} -eq 1 ]] && { echo "    mpris bridge changed — restarting"; systemctl restart tapbox-mpris.service; }
 [[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart tapbox-idle.service; }
+[[ ${SONOS_CHANGED:-0} -eq 1 ]] && { echo "    sonos sidecar changed — restarting"; systemctl restart tapbox-sonos.service; }
 [[ ${CHARGE_CHANGED:-0} -eq 1 ]] && { echo "    charger-follow changed — restarting"; systemctl restart tapbox-chargefollow.service; }
 [[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null \
   && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }

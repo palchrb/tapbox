@@ -509,7 +509,19 @@ def collection_image(target):
     return None
 
 
+# While a remote renderer (Sonos) is active the box is a controller, not
+# a player: a cached LOCAL PATH is unplayable for the speaker, so the
+# original stream url must win — otherwise exactly the shows synced for
+# offline are the ones that refuse to play remotely. tapboxd flips this
+# on renderer switches (and at boot from renderer.json); player.py runs
+# in its own process and never sees it, so box playback keeps preferring
+# the cache as always.
+PREFER_REMOTE = False
+
+
 def _local_or_remote(slug, ep, kind="podcast"):
+    if PREFER_REMOTE:
+        return ep["url"]
     local = _episode_file(slug, ep["id"], kind)
     return local if os.path.exists(local) else ep["url"]
 
@@ -944,7 +956,9 @@ def expand_entries(target):
                 for u, t, img in items:
                     eid = _feed_episode_id(u)
                     local = os.path.join(CACHE_DIR, key, f"{eid}.mp3")
-                    out.append({"url": local if os.path.exists(local) else u,
+                    use = (u if PREFER_REMOTE
+                           else (local if os.path.exists(local) else u))
+                    out.append({"url": use,
                                 "title": t, "id": eid,
                                 "image": _image_local_or_remote(
                                     key, eid, img or chan_img)})
