@@ -1029,17 +1029,23 @@ class Orchestrator:
         the same source as the box's song picker, so the screen behaves
         identically to local playback (owner requirement 2026-08-09)."""
         uri = _spotify.to_uri(target)
-        # classify BEFORE any transfer: Liked Songs has no share link,
-        # and ShareLink's regex does not cover shows (arch Q5). Refuse
-        # loudly — a silent fallback to the box is the double-play trap.
-        if not uri or uri.split(":")[1] not in ("track", "album",
-                                                "playlist", "artist"):
+        # classify BEFORE any transfer: Liked Songs has no share link.
+        # shows/episodes ARE supported — the architect's regex guess said
+        # otherwise, but the owner field-verified episode links through
+        # SoCo ShareLink 2026-08-09 (and sonos-remotes played shows).
+        if not uri or uri.split(":")[1] not in (
+                "track", "album", "playlist", "artist", "show", "episode"):
             log(f"sonos: unsupported spotify kind for sharelink: {uri}")
             return {"error": "unsupported-on-sonos"}
-        try:
-            listing = _spotify.context_tracks(uri, settle_s=10) or {}
-        except (OSError, ValueError):
-            return {"error": "spotify-listing-unavailable"}
+        if uri.split(":")[1] in ("track", "episode"):
+            # a single item has no listing to enumerate: one-row queue,
+            # metadata filled by the speaker's DIDL fallback
+            listing = {"tracks": [{"uri": uri, "track": {}}]}
+        else:
+            try:
+                listing = _spotify.context_tracks(uri, settle_s=10) or {}
+            except (OSError, ValueError):
+                return {"error": "spotify-listing-unavailable"}
         rows = []
         for t in listing.get("tracks") or []:
             tr = t.get("track") or {}
@@ -1948,7 +1954,8 @@ class Orchestrator:
                     out["artists"] = [snap["track_artist"]]
             elif self.sonos_idx is not None and self.sonos_queue:
                 ep = self.sonos_queue[self.sonos_idx]
-                out["title"] = ep.get("title")
+                out["title"] = (ep.get("title")
+                                or (snap or {}).get("track_title"))
                 out["episode_id"] = ep.get("id")
                 out["artwork"] = ep.get("image")  # same shape as mpv card
             return out
