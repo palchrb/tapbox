@@ -796,10 +796,14 @@ class Orchestrator:
                     # "every press does nothing, then one works" (field
                     # 2026-08-09)
                     opt = getattr(self, "_sonos_vol_opt", None)
-                    cur = (opt[0] if opt
-                           and time.monotonic() - opt[1] < 10 else None)
+                    cur = opt[0] if opt else None  # our own last SET —
+                    # never expires (cleared on renderer/speaker change)
                     if cur is None:
-                        cur = (self._sonos_fresh() or {}).get("volume")
+                        # even a STALE snapshot beats guessing 50: the
+                        # seeded snapshots wiped the volume field, and
+                        # the 50-fallback made the first press JUMP the
+                        # speaker (field 2026-08-09 evening)
+                        cur = (self.sonos_snap or {}).get("volume")
                     absolute = (50 if cur is None else cur) + delta
                 v = max(0, min(100, round(absolute)))
                 code, _r = _renderer.post(
@@ -845,8 +849,9 @@ class Orchestrator:
     def get_volume(self):
         if self.source == "sonos":
             opt = getattr(self, "_sonos_vol_opt", None)
-            v = (opt[0] if opt and time.monotonic() - opt[1] < 10
-                 else (self._sonos_fresh() or {}).get("volume"))
+            v = (opt[0] if opt
+                 else (self.sonos_snap or {}).get("volume"))
+            _sonos_wake.set()  # refresh the real number for the card
             return {"routed": "sonos", "volume": v}
         with self.lock:
             if self._mpv_alive() and self.source == "mpv":
@@ -994,7 +999,8 @@ class Orchestrator:
                 "kind": self.sonos_kind, "transport": "PLAYING",
                 "rel_s": float(start_s), "dur_s": None,
                 "ours": True, "reachable": True, "seq": -1,
-                "stale_s": 0.0}
+                "stale_s": 0.0,
+                "volume": (self.sonos_snap or {}).get("volume")}
             self.sonos_snap_at = time.monotonic()
             log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
                 f"{ep.get('title') or ep['id']}")
@@ -1013,7 +1019,8 @@ class Orchestrator:
             "armed": True, "uid": rd["uid"], "kind": self.sonos_kind,
             "transport": "PLAYING", "rel_s": float(start_s),
             "dur_s": None, "ours": True, "reachable": True, "seq": -1,
-            "stale_s": 0.0}
+            "stale_s": 0.0,
+            "volume": (self.sonos_snap or {}).get("volume")}
         self.sonos_snap_at = time.monotonic()
         if start_s >= 5 and not resp.get("sought"):
             log("sonos: seek refused — playing from the top (bookmark "
@@ -1096,7 +1103,8 @@ class Orchestrator:
                 "kind": self.sonos_kind, "transport": "PLAYING",
                 "rel_s": float(start_s), "dur_s": None,
                 "ours": True, "reachable": True, "seq": -1,
-                "stale_s": 0.0}
+                "stale_s": 0.0,
+                "volume": (self.sonos_snap or {}).get("volume")}
             self.sonos_snap_at = time.monotonic()
             if start_s >= 5 and not resp.get("sought"):
                 # seek refused: playback runs from 0 — the poller must
@@ -1218,6 +1226,7 @@ class Orchestrator:
         if was_spotify:
             _flush_spotify_bookmark()
         _renderer.write("sonos", uid=uid, name=name)
+        self._sonos_vol_opt = None  # new speaker, new volume world
         content.PREFER_REMOTE = True
         _sonos_wake.set()
         log(f"renderer -> sonos: {name or uid}")
@@ -1245,6 +1254,7 @@ class Orchestrator:
                 "still be playing (stop it from the Sonos app)")
         _renderer.write("box")
         content.PREFER_REMOTE = False
+        self._sonos_vol_opt = None
         with self.lock:
             self.sonos_snap, self.sonos_snap_at = {}, 0.0
             self.sonos_queue, self.sonos_idx = [], None
