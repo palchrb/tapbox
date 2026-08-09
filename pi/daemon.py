@@ -873,6 +873,19 @@ class Orchestrator:
         dur = snap.get("dur_s")
         return min(rel, dur) if dur else rel
 
+    def _sonos_refresh_live(self):
+        """One live probe (~1.5s budget in the sidecar) so the bookmark
+        gets the EXACT second instead of a poll up to 5s stale. Any
+        failure keeps the snapshot we have — last measured beats
+        nothing, and the switch must never hang on a speaker."""
+        try:
+            snap = _renderer.get("/state?live=1", timeout=2.5)
+            if snap.get("armed") and snap.get("rel_s") is not None:
+                self.sonos_snap = snap
+                self.sonos_snap_at = time.monotonic()
+        except (_renderer.SidecarDown, ValueError):
+            pass
+
     def _sonos_bookmark_now(self):
         """Persist the last measured position — called BEFORE any Stop or
         renderer change (after a Stop the transport reads 0:00, and
@@ -954,7 +967,11 @@ class Orchestrator:
                 self.sonos_map_trusted = False
                 log(f"sonos: queue_play refused ({code}) — map distrusted")
                 return {"error": resp.get("error") or f"http-{code}"}
-            self.sonos_idx = idx
+            if self._sonos_step_want is None:
+                self.sonos_idx = idx  # no newer press — confirm
+            # else: a newer optimistic index is already on the card;
+            # writing the completed (older) jump over it blinked the
+            # title backwards mid-mash
             self.sonos_bm_hold = None
             self.sonos_pending = (ep["id"], time.monotonic())
             log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
@@ -1092,7 +1109,12 @@ class Orchestrator:
         queue. prev >5s in restarts the episode — same as mpv rule."""
         if self.sonos_idx is None or not self.sonos_queue:
             return {"error": "no queue"}
-        if delta < 0 and (self._sonos_position() or 0) > 5:
+        if delta < 0 and self.sonos_pending is None \
+                and (self._sonos_position() or 0) > 5:
+            # >5s in -> restart the track. Skipped while a jump is still
+            # settling: the snapshot then carries the PREVIOUS track's
+            # position, and prev "restarted" instead of stepping back
+            # (field 2026-08-09, mash session two)
             idx = self.sonos_idx
         else:
             n = len(self.sonos_queue)
@@ -1153,6 +1175,7 @@ class Orchestrator:
         """The way home: read the position BEFORE stopping the transport
         (after a Stop it reads 0:00), bookmark it, silence the speaker,
         then the ordinary local play resumes from that bookmark."""
+        self._sonos_refresh_live()
         self._sonos_bookmark_now()
         resume_target = self.target if self.sonos_kind in (
             "url", "spotify_sharelink") else None
@@ -4096,6 +4119,7 @@ def _sonos_on_term():
     try:
         if not _renderer.is_sonos() or ORCH.source != "sonos":
             return
+        ORCH._sonos_refresh_live()
         ORCH._sonos_bookmark_now()
         if not load_settings().get("sonos_keep_playing"):
             _renderer.post("/stop",

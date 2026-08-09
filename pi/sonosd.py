@@ -596,6 +596,26 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/":
             self._send(200, {"ok": True})
         elif u.path == "/state":
+            q = urllib.parse.parse_qs(u.query)
+            if q.get("live", ["0"])[0] == "1" and SESSION.armed:
+                # switch-back wants the EXACT second: one live probe with
+                # a hard budget, falling back to the last snapshot — the
+                # caller never waits on a sleeping speaker (owner ask
+                # 2026-08-09)
+                done = threading.Event()
+
+                def probe():
+                    try:
+                        with SESSION.lock:
+                            f = SESSION._classify(SESSION._spk())
+                            SESSION._last_ok = time.monotonic()
+                            SESSION.publish(**f)
+                    except Exception:
+                        pass
+                    done.set()
+
+                threading.Thread(target=probe, daemon=True).start()
+                done.wait(timeout=1.5)
             self._send(200, SESSION.state())
         elif u.path == "/players":
             q = urllib.parse.parse_qs(u.query)
