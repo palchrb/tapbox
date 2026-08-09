@@ -309,6 +309,14 @@ class Session:
         built = None
         if kind == "url":
             uri = body["uri"]
+            try:
+                # the transport plays this uri DIRECTLY — the queue is
+                # not involved. Clear it anyway: a leftover spotify queue
+                # in the Sonos app next to a playing podcast read as "the
+                # queue is wrong" (field 2026-08-09, cosmetic)
+                spk.clear_queue()
+            except Exception:
+                pass
             built = didl(uri, body.get("title"), body.get("artist"),
                          body.get("album"), body.get("art"),
                          body.get("duration_s"))
@@ -357,6 +365,7 @@ class Session:
             raise ValueError(f"unknown kind: {kind}")
         self.uri = uri
         self.armed = True
+        self._didl_checked = False
         self._frozen, self._last_pos, self._retried_at = 0, None, None
         sought = self._seek_settled(spk, start) if start >= 5 else True
         self._wake.set()
@@ -508,6 +517,15 @@ class Session:
                                      "x-sonosprog-spotify:")):
                 raw = track_uri.split(":", 1)[1].split("?")[0]
                 fields["track_spotify_uri"] = urllib.parse.unquote(raw)
+        if ours and self.kind in ("url", "nrk_program") \
+                and not getattr(self, "_didl_checked", False):
+            self._didl_checked = True
+            m = pos.get("TrackMetaData") or ""
+            if not m or m == "NOT_IMPLEMENTED":
+                log("didl REJECTED by the speaker (no TrackMetaData) — "
+                    "metadata will not render in the Sonos app")
+            else:
+                log(f"didl accepted ({len(m)} bytes echoed)")
         if ours and self.kind == "spotify_sharelink":
             meta = pos.get("TrackMetaData") or ""
             fields["track_title"] = _didl_field(meta, "title")
