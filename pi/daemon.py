@@ -1072,6 +1072,7 @@ class Orchestrator:
             "track_index": idx, "start_s": start_s})
         if code != 200:
             return {"error": resp.get("error") or f"http-{code}"}
+        log(f"play [sonos] {target} (track {idx + 1}/{len(rows)})")
         with self.lock:
             self.target, self.source = target, "sonos"
             self.sonos_kind = "spotify_sharelink"
@@ -1134,6 +1135,7 @@ class Orchestrator:
                 idx = hit
                 pos = _bm_episode_pos(st, playable[idx].get("id"),
                                       playable[idx]["url"])
+        log(f"play [sonos] {target} ({len(playable)} episodes)")
         with self.lock:
             self.target, self.source = target, "sonos"
             self.sonos_queue = playable
@@ -1190,6 +1192,18 @@ class Orchestrator:
         BT_QUIET, no _kick_bt_connect, no go-librespot retarget."""
         if not uid:
             return None  # handler answers 400
+        prev = _renderer.read()
+        if prev["renderer"] == "sonos" and prev.get("uid") \
+                and prev["uid"] != uid:
+            # room -> room: bookmark at the exact second, then silence
+            # the OLD speaker — without this Bad 2 etg kept playing while
+            # Peisestue started (field 2026-08-09)
+            self._sonos_refresh_live()
+            self._sonos_bookmark_now()
+            try:
+                _renderer.post("/stop", {"if_uid": prev["uid"]})
+            except _renderer.SidecarDown:
+                pass
         was_spotify = self.source == "spotify" and self.target \
             and is_spotify(self.target)
         with self.lock:
@@ -1234,8 +1248,17 @@ class Orchestrator:
                     else "mpv"
         log("renderer -> box")
         if resume_target:
-            # fire-and-forget resume on the box, from the bookmark just
-            # written — same UX as a BT speaker coming home
+            # Fire-and-forget resume on the box, from the bookmark just
+            # written. self.target is CLEARED first: play()'s
+            # already-loaded shortcut requires target == self.target, and
+            # after a sonos session go-librespot still holds whatever it
+            # played BEFORE the transfer — "resume" then unpaused the
+            # wrong context entirely (field 2026-08-09: came home to the
+            # 80s playlist while the card said Coco). A forced respawn
+            # reads the context bookmark instead: right track, right
+            # second.
+            with self.lock:
+                self.target = None
             threading.Thread(target=self.play, args=(resume_target,),
                              daemon=True).start()
 
