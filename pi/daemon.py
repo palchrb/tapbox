@@ -790,7 +790,16 @@ class Orchestrator:
             # is reported, never fought.
             try:
                 if absolute is None:
-                    cur = (self._sonos_fresh() or {}).get("volume")
+                    # base on our own last SET first: the poll refreshes
+                    # the speaker volume only every 5s, so a press burst
+                    # computed the same target from the same stale base —
+                    # "every press does nothing, then one works" (field
+                    # 2026-08-09)
+                    opt = getattr(self, "_sonos_vol_opt", None)
+                    cur = (opt[0] if opt
+                           and time.monotonic() - opt[1] < 10 else None)
+                    if cur is None:
+                        cur = (self._sonos_fresh() or {}).get("volume")
                     absolute = (50 if cur is None else cur) + delta
                 v = max(0, min(100, round(absolute)))
                 code, _r = _renderer.post(
@@ -798,6 +807,7 @@ class Orchestrator:
                                 "if_uid": _renderer.read().get("uid")})
                 _sonos_wake.set()
                 if code == 200:
+                    self._sonos_vol_opt = (v, time.monotonic())
                     return {"routed": "sonos", "volume": v}
                 return {"routed": "sonos", "volume": None,
                         "error": _r.get("error")}
@@ -833,6 +843,11 @@ class Orchestrator:
                 return {"routed": None, "volume": None}
 
     def get_volume(self):
+        if self.source == "sonos":
+            opt = getattr(self, "_sonos_vol_opt", None)
+            v = (opt[0] if opt and time.monotonic() - opt[1] < 10
+                 else (self._sonos_fresh() or {}).get("volume"))
+            return {"routed": "sonos", "volume": v}
         with self.lock:
             if self._mpv_alive() and self.source == "mpv":
                 v = mpv_get("volume")
@@ -974,6 +989,13 @@ class Orchestrator:
             # title backwards mid-mash
             self.sonos_bm_hold = None
             self.sonos_pending = (ep["id"], time.monotonic())
+            self.sonos_snap = {
+                "armed": True, "uid": rd.get("uid"),
+                "kind": self.sonos_kind, "transport": "PLAYING",
+                "rel_s": float(start_s), "dur_s": None,
+                "ours": True, "reachable": True, "seq": -1,
+                "stale_s": 0.0}
+            self.sonos_snap_at = time.monotonic()
             log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
                 f"{ep.get('title') or ep['id']}")
             return {"source": "sonos", "target": self.target, "index": idx}
@@ -984,6 +1006,15 @@ class Orchestrator:
             return {"error": resp.get("error") or f"http-{code}"}
         self.sonos_idx = idx
         self.sonos_kind = self._sonos_body(ep, rd["uid"], 0)["kind"]
+        # seed the snapshot so the card extrapolates from the position we
+        # TRANSFERRED at, instead of flashing old->0->sonos for up to 5s
+        # (field 2026-08-09); the first real poll takes over
+        self.sonos_snap = {
+            "armed": True, "uid": rd["uid"], "kind": self.sonos_kind,
+            "transport": "PLAYING", "rel_s": float(start_s),
+            "dur_s": None, "ours": True, "reachable": True, "seq": -1,
+            "stale_s": 0.0}
+        self.sonos_snap_at = time.monotonic()
         if start_s >= 5 and not resp.get("sought"):
             log("sonos: seek refused — playing from the top (bookmark "
                 "kept)")
@@ -1053,6 +1084,13 @@ class Orchestrator:
                 log(f"sonos: queue drift ({qlen} on speaker vs "
                     f"{len(rows)} listed) — positional jumps disabled")
             self.sonos_bm_hold = None
+            self.sonos_snap = {
+                "armed": True, "uid": rd["uid"],
+                "kind": self.sonos_kind, "transport": "PLAYING",
+                "rel_s": float(start_s), "dur_s": None,
+                "ours": True, "reachable": True, "seq": -1,
+                "stale_s": 0.0}
+            self.sonos_snap_at = time.monotonic()
             if start_s >= 5 and not resp.get("sought"):
                 # seek refused: playback runs from 0 — the poller must
                 # NOT overwrite the good bookmark until we pass it
@@ -1404,8 +1442,17 @@ class Orchestrator:
                 if snap.get("transport") == "PLAYING":
                     self._sonos_bookmark_now()
                     code, _r = _renderer.post("/pause", guard)
+                    new_tr = "PAUSED_PLAYBACK"
                 else:
                     code, _r = _renderer.post("/resume", guard)
+                    new_tr = "PLAYING"
+                if code == 200 and self.sonos_snap:
+                    # optimistic flip: without it the next press re-read
+                    # the stale transport and sent the SAME verb again —
+                    # "play/pause only works sometimes" (field 2026-08-09)
+                    self.sonos_snap = dict(self.sonos_snap,
+                                           transport=new_tr)
+                    self.sonos_snap_at = time.monotonic()
                 _sonos_wake.set()  # re-poll now: the card should flip fast
                 return {"routed": "sonos", "ok": code == 200}
             return {"error": f"unsupported on sonos: {action}"}
