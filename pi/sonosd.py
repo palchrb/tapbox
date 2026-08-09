@@ -577,11 +577,16 @@ def _didl_field(meta_xml, tag, ns="dc"):
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         out = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+        except OSError:
+            # client gave up waiting (mash of controls) — the work was
+            # done; a BrokenPipe traceback per press is just journal spam
+            pass
 
     def log_message(self, *a):
         pass

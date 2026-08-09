@@ -301,6 +301,12 @@ class Orchestrator:
         # stored, never recomputed (to_uri can hit the network; the
         # poller's hot path must not)
         self.sonos_map_trusted = True  # positional jumps legal?
+        self.sonos_pending = None    # (uri, at): we JUST jumped —
+        # the poller must not adopt the still-playing OLD track and yank
+        # the index backwards (field 2026-08-09: mash flip-flop 11->10)
+        self._sonos_step_want = None  # coalesced mash target
+        self._sonos_stepping = False
+        self._sonos_step_lock = threading.Lock()
         self.sonos_bm_hold = None    # (track_uri, min_pos): suppress
         # bookmark writes until playback passes min_pos — a refused seek
         # otherwise lets the 5s poll destroy a good bookmark (arch Q4)
@@ -950,6 +956,7 @@ class Orchestrator:
                 return {"error": resp.get("error") or f"http-{code}"}
             self.sonos_idx = idx
             self.sonos_bm_hold = None
+            self.sonos_pending = (ep["id"], time.monotonic())
             log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
                 f"{ep.get('title') or ep['id']}")
             return {"source": "sonos", "target": self.target, "index": idx}
@@ -1086,9 +1093,34 @@ class Orchestrator:
         if self.sonos_idx is None or not self.sonos_queue:
             return {"error": "no queue"}
         if delta < 0 and (self._sonos_position() or 0) > 5:
-            return self._sonos_play_entry(self.sonos_idx, 0.0)
-        n = len(self.sonos_queue)
-        return self._sonos_play_entry((self.sonos_idx + delta) % n, 0.0)
+            idx = self.sonos_idx
+        else:
+            n = len(self.sonos_queue)
+            base = (self._sonos_step_want
+                    if self._sonos_step_want is not None else self.sonos_idx)
+            idx = (base + delta) % n
+        # Coalesce: each SOAP jump costs ~1s, and a mash of presses
+        # queued them serially — the UI timed out 15 times in a row
+        # (field 2026-08-09). One worker, always jumping to the LATEST
+        # wanted index; presses return instantly with the optimistic
+        # index so the card flips at press speed.
+        with self._sonos_step_lock:
+            self._sonos_step_want = idx
+            if not self._sonos_stepping:
+                self._sonos_stepping = True
+                threading.Thread(target=self._sonos_step_worker,
+                                 daemon=True).start()
+        self.sonos_idx = idx  # optimistic — worker/poller confirm
+        return {"ok": True, "index": idx, "routed": "sonos"}
+
+    def _sonos_step_worker(self):
+        while True:
+            with self._sonos_step_lock:
+                want, self._sonos_step_want = self._sonos_step_want, None
+                if want is None:
+                    self._sonos_stepping = False
+                    return
+            self._sonos_play_entry(want, 0.0)
 
     def _renderer_to_sonos(self, uid, name):
         """Hand the session to a speaker. Order is load-bearing: capture
@@ -3289,6 +3321,15 @@ def _sonos_poller():
             # sonos_idx UNCHANGED: coercing to 0 would rewrite the
             # bookmark to track 1.
             turi = snap.get("track_spotify_uri")
+            pend = ORCH.sonos_pending
+            if pend and turi == pend[0]:
+                ORCH.sonos_pending = None  # our jump landed
+            elif pend and time.monotonic() - pend[1] < 8:
+                turi = None  # still settling: the speaker reports the
+                #              OLD track — adopting it yanked the index
+                #              backwards under a mash (field 2026-08-09)
+            elif pend:
+                ORCH.sonos_pending = None  # settle expired — trust reality
             if turi:
                 hit = next((i for i, r in enumerate(ORCH.sonos_queue)
                             if r["id"] == turi), None)

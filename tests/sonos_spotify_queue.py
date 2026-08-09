@@ -135,7 +135,12 @@ print("2b. a guest's spotify never reads as ours OK")
 FAKE["log"].clear()
 asked.clear()
 orch.sonos_snap = dict(orch.sonos_snap, rel_s=2.0)  # prev<5s -> previous
-orch.sonos_step(1)  # 2 -> wraps to 0
+r = orch.sonos_step(1)  # 2 -> wraps to 0; async worker posts it
+assert r["index"] == 0, r
+for _ in range(40):  # the coalescing worker runs off-thread now
+    if FAKE["log"]:
+        break
+    time.sleep(0.05)
 posts = [p for p, _ in FAKE["log"]]
 assert posts == ["/queue_play"], FAKE["log"]
 assert FAKE["log"][0][1]["index"] == 0, FAKE["log"]
@@ -163,6 +168,10 @@ print("4. refused-seek hold protects the bookmark, then releases OK")
 FAKE["log"].clear()
 orch.sonos_map_trusted = False
 orch.sonos_step(1)
+for _ in range(40):
+    if FAKE["log"]:
+        break
+    time.sleep(0.05)
 posts = [p for p, _ in FAKE["log"]]
 assert posts == ["/play"], f"untrusted map must re-transfer: {posts}"
 print("5. queue drift heals via fresh transfer on the next press OK")
