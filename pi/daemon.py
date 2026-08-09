@@ -893,7 +893,11 @@ class Orchestrator:
             return None
         age = time.monotonic() - self.sonos_snap_at
         if snap.get("transport") == "PLAYING" and age < 60:
-            rel = rel + age
+            # add the sidecar-side measurement age too: rel_s was read up
+            # to POLL_S before we fetched it, and dropping that lag left
+            # the bar 2-5s behind the Sonos app, constantly (field
+            # 2026-08-09; architect G1-b)
+            rel = rel + age + (snap.get("stale_s") or 0)
         dur = snap.get("dur_s")
         return min(rel, dur) if dur else rel
 
@@ -921,6 +925,8 @@ class Orchestrator:
         rel = snap.get("rel_s")  # measured only — never the extrapolation
         if rel is None or snap.get("transport") == "STOPPED":
             return
+        if snap.get("transport") == "PLAYING":
+            rel = float(rel) + (snap.get("stale_s") or 0)
         if not force and time.monotonic() - self._sonos_bm_last < 25:
             return  # SD hygiene: same 30s-class budget as bm_throttle
         self._sonos_bm_last = time.monotonic()
@@ -1193,6 +1199,8 @@ class Orchestrator:
         # (field 2026-08-09). One worker, always jumping to the LATEST
         # wanted index; presses return instantly with the optimistic
         # index so the card flips at press speed.
+        self.sonos_pending = (self.sonos_queue[idx]["id"],
+                              time.monotonic())
         with self._sonos_step_lock:
             self._sonos_step_want = idx
             if not self._sonos_stepping:
