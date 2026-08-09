@@ -727,6 +727,7 @@ class App:
         self.status = {}
         self.system = {}
         self.bt = {"devices": []}
+        self.sonos = {"players": []}  # cached speaker list (menu gating)
         self.bt_found = []
         self.settings = {"screen_timeout_s": 30, "idle_shutdown_min": 30,
                          "volume_cap": 100}
@@ -1276,7 +1277,7 @@ class App:
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
             elif ev == "x_long":
-                self._toggle_output()
+                self._output_action()
             elif ev == "y":
                 if in_vol:
                     self._volume_mode(delta=5)
@@ -1517,6 +1518,80 @@ class App:
         elif ev == "x":
             self._volume_mode(delta=None)
 
+    def _output_action(self):
+        """Hold X. No Sonos known -> today's two-way toggle, unchanged.
+        Sonos rooms known -> a three-way menu instead (owner 2026-08-09:
+        the row only exists when speakers actually do). The list read is
+        the sidecar's CACHE via tapboxd — instant, never a scan."""
+        try:
+            self.sonos = api_get("/sonos")
+        except OSError:
+            self.sonos = {"players": []}  # sidecar down = no sonos row
+        if self.sonos.get("players"):
+            self.push("output")
+            self.dirty = True
+        else:
+            self._toggle_output()
+
+    def select_output(self):
+        label = self.current_items()[self.sel][0]
+        if label == "Sonos":
+            # background rescan refreshes the list while the cached one
+            # is already on screen (change-only repaint updates rows)
+            def scan():
+                try:
+                    self.sonos = api_get("/sonos?rescan=1", timeout=25)
+                    self.dirty = True
+                except OSError:
+                    pass
+            threading.Thread(target=scan, daemon=True).start()
+            self.push("sonos")
+            return
+        dev = "local" if label == "Box speaker" else "bt"
+        try:
+            r = api_post("/output", {"device": dev})
+        except OSError as e:
+            log(f"output switch failed: {e}")
+            return
+        self.output_shown = ("Built-in speaker" if dev == "local"
+                             else "Bluetooth speaker")
+        self.output_warning = bool(r.get("warning"))
+        self.output_flash = time.monotonic() + 1.5
+        self.stack, self.view = [], "now"
+        self.dirty = True
+
+    def select_sonos(self):
+        rows = self.current_items()
+        label = rows[self.sel][0] if self.sel < len(rows) else ""
+        if label == "Look again":
+            self.draw_message("Looking for speakers ...")
+            try:
+                self.sonos = api_get("/sonos?rescan=1", timeout=25)
+            except OSError as e:
+                self.draw_message(f"Failed: {e}")
+                time.sleep(2)
+            self.dirty = True
+            return
+        players = self.sonos.get("players") or []
+        idx = self.sel - 1  # one action row on top
+        if not (0 <= idx < len(players)):
+            return
+        p = players[idx]
+        self.draw_message(f"Sending sound to {p['name']} ...")
+        try:
+            r = api_post("/output", {"device": "sonos", "uid": p["uid"],
+                                     "name": p["name"]}, timeout=30)
+        except OSError as e:
+            self.draw_message(f"Failed: {e}")
+            time.sleep(2)
+            return
+        # land on now-playing: the confirmation popup only paints there
+        self.output_shown = f"Sonos: {p['name']}"
+        self.output_warning = bool(r.get("warning"))
+        self.output_flash = time.monotonic() + 1.5
+        self.stack, self.view = [], "now"
+        self._force_poll()
+
     def _toggle_output(self):
         """Hold X: flip between the bluetooth speaker and the built-in
         one — the same set_output the PWA buttons use."""
@@ -1549,6 +1624,21 @@ class App:
         self.volume_flash = self.vol_mode_until
 
     def current_items(self):
+        if self.view == "output":
+            st = self.status or {}
+            renderer = st.get("renderer")
+            out = st.get("output")
+            return [("Box speaker",
+                     "●" if renderer != "sonos" and out == "local" else ""),
+                    ("Bluetooth",
+                     "●" if renderer != "sonos" and out == "bt" else ""),
+                    ("Sonos", "●" if renderer == "sonos" else "")]
+        if self.view == "sonos":
+            cur = (self.status or {}).get("renderer_name")
+            rows = [("Look again", "")]
+            for p in self.sonos.get("players") or []:
+                rows.append((p["name"], "●" if p["name"] == cur else ""))
+            return rows
         if self.view == "home":
             return [s["name"] for s in (self.library or {}).get("sections", [])] \
                 or ["(empty library)"]
@@ -1658,6 +1748,10 @@ class App:
                 self.select_extra()
             elif self.view == "bt":
                 self.select_bt()
+            elif self.view == "output":
+                self.select_output()
+            elif self.view == "sonos":
+                self.select_sonos()
             elif self.view == "btscan":
                 if self.bt_found:
                     d = self.bt_found[self.sel]
@@ -1959,6 +2053,14 @@ class App:
             rolls = draw_list(d, "Nearby devices", self.current_items(),
                               self.sel, self.system,
                               hint="A: pair and connect   B: back")
+        elif self.view == "output":
+            rolls = draw_list(d, "Sound out of", self.current_items(),
+                              self.sel, self.system,
+                              hint="A: choose   B: back")
+        elif self.view == "sonos":
+            rolls = draw_list(d, "Sonos", self.current_items(),
+                              self.sel, self.system,
+                              hint="A: play here   B: back")
         elif self.view == "extras":
             # same list chrome as every other menu — the field bug that
             # forced this comment: the view existed (chord opened it, A
