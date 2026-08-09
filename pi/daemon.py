@@ -301,6 +301,10 @@ class Orchestrator:
         # stored, never recomputed (to_uri can hit the network; the
         # poller's hot path must not)
         self.sonos_map_trusted = True  # positional jumps legal?
+        self.sonos_opt_tr = None     # (transport, at): our own verb
+        # holds against stale polls until confirmed or ~8s pass (QA A)
+        self._sonos_bm_last = 0.0    # throttle: the poller wrote the
+        # bookmark EVERY 5s tick — 720 SD bursts/hour (QA review)
         self.sonos_pending = None    # (uri, at): we JUST jumped —
         # the poller must not adopt the still-playing OLD track and yank
         # the index backwards (field 2026-08-09: mash flip-flop 11->10)
@@ -906,7 +910,7 @@ class Orchestrator:
         except (_renderer.SidecarDown, ValueError):
             pass
 
-    def _sonos_bookmark_now(self):
+    def _sonos_bookmark_now(self, force=True):
         """Persist the last measured position — called BEFORE any Stop or
         renderer change (after a Stop the transport reads 0:00, and
         bookmarking that is the most damaging ordering bug available)."""
@@ -917,6 +921,11 @@ class Orchestrator:
         rel = snap.get("rel_s")  # measured only — never the extrapolation
         if rel is None or snap.get("transport") == "STOPPED":
             return
+        if not force and time.monotonic() - self._sonos_bm_last < 25:
+            return  # SD hygiene: same 30s-class budget as bm_throttle
+        self._sonos_bm_last = time.monotonic()
+        if self.sonos_idx >= len(self.sonos_queue):
+            return  # bounds: never let a poller tick raise (QA F1 note)
         ep = self.sonos_queue[self.sonos_idx]
         if self.sonos_kind == "spotify_sharelink":
             if not self.sonos_ctx:
@@ -997,7 +1006,8 @@ class Orchestrator:
             self.sonos_snap = {
                 "armed": True, "uid": rd.get("uid"),
                 "kind": self.sonos_kind, "transport": "PLAYING",
-                "rel_s": float(start_s), "dur_s": None,
+                "rel_s": float(start_s),
+                "dur_s": ep.get("dur_s"),
                 "ours": True, "reachable": True, "seq": -1,
                 "stale_s": 0.0,
                 "volume": (self.sonos_snap or {}).get("volume")}
@@ -1058,11 +1068,13 @@ class Orchestrator:
             tr = t.get("track") or {}
             name = tr.get("name")
             arts = tr.get("artist_names") or []
-            rows.append({
+            dur = tr.get("duration")  # ms; None until the metadata
+            rows.append({                # sweep resolves the row
                 "url": t.get("uri"), "id": t.get("uri"),
                 "title": (f"{name} — {', '.join(arts)}" if name and arts
                           else name),
-                "image": tr.get("album_cover_url")})
+                "image": tr.get("album_cover_url"),
+                "dur_s": (dur / 1000.0) if dur else None})
         if not rows:
             return {"error": "nothing-to-play"}
         try:
@@ -1101,7 +1113,8 @@ class Orchestrator:
             self.sonos_snap = {
                 "armed": True, "uid": rd["uid"],
                 "kind": self.sonos_kind, "transport": "PLAYING",
-                "rel_s": float(start_s), "dur_s": None,
+                "rel_s": float(start_s),
+                "dur_s": rows[idx].get("dur_s"),
                 "ours": True, "reachable": True, "seq": -1,
                 "stale_s": 0.0,
                 "volume": (self.sonos_snap or {}).get("volume")}
@@ -1486,12 +1499,13 @@ class Orchestrator:
                     code, _r = _renderer.post("/resume", guard)
                     new_tr = "PLAYING"
                 if code == 200 and self.sonos_snap:
-                    # optimistic flip: without it the next press re-read
-                    # the stale transport and sent the SAME verb again —
-                    # "play/pause only works sometimes" (field 2026-08-09)
+                    # optimistic flip, HELD until the sidecar confirms:
+                    # the post-verb wake used to fetch the still-stale
+                    # snapshot and flip the card back (QA §1A)
                     self.sonos_snap = dict(self.sonos_snap,
                                            transport=new_tr)
                     self.sonos_snap_at = time.monotonic()
+                    self.sonos_opt_tr = (new_tr, time.monotonic())
                 _sonos_wake.set()  # re-poll now: the card should flip fast
                 return {"routed": "sonos", "ok": code == 200}
             return {"error": f"unsupported on sonos: {action}"}
@@ -3432,8 +3446,32 @@ def _sonos_poller():
         except _renderer.SidecarDown:
             continue  # keep the LAST snapshot — it goes stale honestly,
             #           and stale reads as not-playing; never zeroed
-        ORCH.sonos_snap = snap
-        ORCH.sonos_snap_at = time.monotonic()
+        pend = ORCH.sonos_pending
+        turi_now = snap.get("track_spotify_uri")
+        if (pend and turi_now and turi_now != pend[0]
+                and time.monotonic() - pend[1] < 8):
+            # settle: the speaker still reports the PREVIOUS track.
+            # The index guard existed, but rel/dur leaked through and
+            # the bar showed 2:31 on the new title before snapping to
+            # 0:03 — on EVERY sharelink press (QA §1B). Keep the seeded
+            # position fields and extrapolation base.
+            old_s = ORCH.sonos_snap or {}
+            snap = dict(snap, rel_s=old_s.get("rel_s"),
+                        dur_s=old_s.get("dur_s"),
+                        track_title=old_s.get("track_title"),
+                        track_art=old_s.get("track_art"))
+            ORCH.sonos_snap = snap
+        else:
+            ORCH.sonos_snap = snap
+            ORCH.sonos_snap_at = time.monotonic()
+        opt = ORCH.sonos_opt_tr
+        if opt:
+            if (snap.get("transport") == opt[0]
+                    or time.monotonic() - opt[1] > 8):
+                ORCH.sonos_opt_tr = None  # confirmed or expired
+            else:
+                ORCH.sonos_snap = dict(ORCH.sonos_snap,
+                                       transport=opt[0])
         stale = snap.get("stale_s")
         fresh = stale is not None and stale < 12
         if not fresh or not snap.get("ours"):
@@ -3466,7 +3504,7 @@ def _sonos_poller():
                 and rel is not None
                 and snap.get("transport") in ("PLAYING",
                                               "PAUSED_PLAYBACK")):
-            ORCH._sonos_bookmark_now()
+            ORCH._sonos_bookmark_now(force=False)
             ends_near = (ends_near + 1
                          if dur and rel > dur - 20 else 0)
         if (ORCH.sonos_kind == "url" and ORCH.sonos_idx is not None

@@ -425,11 +425,15 @@ class Session:
         spk = self._spk()
         if name == "pause":
             spk.avTransport.Pause([("InstanceID", 0)])
+            self._wake.set()  # re-poll NOW: the cached snapshot still
+            # says PLAYING, and the paused cadence is 15s (QA 2026-08-09)
         elif name == "resume":
             spk.avTransport.Play([("InstanceID", 0), ("Speed", "1")])
+            self._wake.set()
         elif name == "stop":
             spk.avTransport.Stop([("InstanceID", 0)])
             self.armed = False
+            self._wake.set()
         elif name == "seek":
             spk.avTransport.Seek([("InstanceID", 0), ("Unit", "REL_TIME"),
                                   ("Target", _hms(float(body["s"])))])

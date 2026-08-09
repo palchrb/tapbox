@@ -154,12 +154,12 @@ orch.sonos_bm_hold = ("spotify:track:a", 61.0)
 orch.sonos_snap = dict(orch.sonos_snap, rel_s=3.0,
                        track_spotify_uri="spotify:track:a")
 orch.sonos_snap_at = time.monotonic()
-orch._sonos_bookmark_now()
+orch._sonos_bookmark_now(force=True)
 bm = daemon._spotify.read_bookmark(CTX)
 assert bm["uri"] == "spotify:track:c" and bm["position"] == 61000, \
     f"held bookmark was overwritten: {bm}"
 orch.sonos_snap = dict(orch.sonos_snap, rel_s=90.0)
-orch._sonos_bookmark_now()
+orch._sonos_bookmark_now(force=True)
 bm = daemon._spotify.read_bookmark(CTX)
 assert bm["uri"] == "spotify:track:a" and bm["position"] == 90000, bm
 print("4. refused-seek hold protects the bookmark, then releases OK")
