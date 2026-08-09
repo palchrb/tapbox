@@ -451,6 +451,13 @@ class Session:
             meta = pos.get("TrackMetaData") or ""
             fields["track_title"] = _didl_field(meta, "title")
             fields["track_artist"] = _didl_field(meta, "creator")
+            # album art: Sonos hands back a RELATIVE /getaa?... url that
+            # the speaker itself serves — absolutize it so the box's
+            # screen (and PWA) can fetch it directly
+            art = _didl_field(meta, "albumArtURI", ns="upnp")
+            if art and art.startswith("/"):
+                art = f"http://{spk.ip_address}:1400{art}"
+            fields["track_art"] = art
         return fields
 
     def poll_loop(self):
@@ -509,11 +516,12 @@ class Session:
 SESSION = Session()
 
 
-def _didl_field(meta_xml, tag):
-    """Pull one dc:* text out of a TrackMetaData DIDL without namespaces
+def _didl_field(meta_xml, tag, ns="dc"):
+    """Pull one text field out of a TrackMetaData DIDL without namespace
     gymnastics — display only, never used for control decisions."""
     import re as _re
-    m = _re.search(rf"<dc:{tag}[^>]*>([^<]*)</dc:{tag}>", meta_xml or "")
+    m = _re.search(rf"<{ns}:{tag}[^>]*>([^<]*)</{ns}:{tag}>",
+                   meta_xml or "")
     import html as _html
     return _html.unescape(m.group(1)) if m else None
 

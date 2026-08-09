@@ -1719,6 +1719,7 @@ class Orchestrator:
                 out["duration"] = self.sonos_snap.get("dur_s")
             if self.sonos_kind == "spotify_sharelink":
                 out["title"] = (snap or {}).get("track_title")
+                out["artwork"] = (snap or {}).get("track_art")
                 if (snap or {}).get("track_artist"):
                     out["artists"] = [snap["track_artist"]]
             elif self.sonos_idx is not None and self.sonos_queue:
