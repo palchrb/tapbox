@@ -454,10 +454,25 @@ class Session:
         track_uri = pos.get("TrackURI") or ""
         rel = _hms_to_s(pos.get("RelTime"))
         dur = _hms_to_s(pos.get("TrackDuration"))
+        def _norm(u):
+            # the speaker re-encodes urls (percent-escaping, and some
+            # firmwares swap the scheme prefix) — an exact match called
+            # OUR OWN nrk episode foreign, which killed playing/progress
+            # for every url-kind card (field 2026-08-09)
+            u = urllib.parse.unquote(u or "")
+            for p in ("x-rincon-mp3radio://", "aac://", "https://",
+                      "http://"):
+                if u.startswith(p):
+                    return u[len(p):]
+            return u
         ours = bool(self.uri) and (
-            track_uri == self.uri
+            _norm(track_uri) == _norm(self.uri)
             or self.kind == "spotify_sharelink" and track_uri.startswith(
                 ("x-sonos-spotify:", "x-sonosprog-spotify:")))
+        if not ours and self.uri and track_uri                 and self.kind != "spotify_sharelink":
+            if getattr(self, "_ours_logged", None) != track_uri:
+                self._ours_logged = track_uri
+                log(f"not-ours? speaker={track_uri!r} vs set={self.uri!r}")
         grouped_away = False
         coordinator = None
         try:
