@@ -111,12 +111,37 @@ STATE_LOST = dict(STATE_PLAYING, transport="STOPPED", rel_s=0.0,
 STATE_IDLE = {"armed": False, "uid": None, "kind": None,
               "seq": 1, "stale_s": None, "retried_at": None}
 
+# v2 (tapbox owns the spotify LOGIC; the speaker holds the queue):
+# track_spotify_uri is the inbound authority (decoded from TrackURI);
+# track_no is 1-based raw Track (cross-check only — 0 for an armed
+# sharelink session is a contract violation); /queue_play {index} is
+# 0-based. The off-by-one lives in exactly one place: the poller.
+STATE_SHARE = dict(STATE_PLAYING, kind="spotify_sharelink",
+                   uri="x-sonos-spotify:spotify%3atrack%3ac?sid=9",
+                   track_spotify_uri="spotify:track:c",
+                   track_no=3, queue_len=3, base=1,
+                   track_title="Shout", track_artist=None,
+                   track_art=None)
+
+QUEUE_PLAY_REQUIRED = {"index"}
+
+
+def check_state_share(snap):
+    err = check_state(snap)
+    if err:
+        return err
+    if snap.get("armed") and snap.get("kind") == "spotify_sharelink"             and snap.get("reachable") and snap.get("track_no") == 0:
+        return "track_no is 1-based; 0 is a contract violation"
+    return None
+
 
 def main():
     for name in ("PLAY_URL", "PLAY_NRK", "PLAY_SHARE"):
         err = check_play(globals()[name])
         assert err is None, f"{name}: {err}"
         print(f"{name} validates OK")
+    assert check_state_share(STATE_SHARE) is None
+    assert check_state_share(dict(STATE_SHARE, track_no=0))
     for name in ("STATE_PLAYING", "STATE_FOREIGN", "STATE_UNREACHABLE",
                  "STATE_LOST", "STATE_IDLE"):
         err = check_state(globals()[name])

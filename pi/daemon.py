@@ -297,6 +297,13 @@ class Orchestrator:
         self.sonos_queue = []   # [{'url','title','id','image'}]
         self.sonos_idx = None
         self.sonos_kind = None
+        self.sonos_ctx = None        # canonical spotify context uri —
+        # stored, never recomputed (to_uri can hit the network; the
+        # poller's hot path must not)
+        self.sonos_map_trusted = True  # positional jumps legal?
+        self.sonos_bm_hold = None    # (track_uri, min_pos): suppress
+        # bookmark writes until playback passes min_pos — a refused seek
+        # otherwise lets the 5s poll destroy a good bookmark (arch Q4)
         # last spotify control timeout; far past, NOT 0.0 — on a young
         # monotonic clock 0.0 would read as 'timed out seconds ago'
         self._spot_cmd_timeout_at = -1e9
@@ -865,13 +872,29 @@ class Orchestrator:
         renderer change (after a Stop the transport reads 0:00, and
         bookmarking that is the most damaging ordering bug available)."""
         snap = self.sonos_snap
-        if (self.sonos_kind != "url" or self.sonos_idx is None
-                or not self.target or not snap.get("ours")):
+        if (self.sonos_idx is None or not self.target
+                or not snap.get("ours")):
             return
         rel = snap.get("rel_s")  # measured only — never the extrapolation
         if rel is None or snap.get("transport") == "STOPPED":
             return
         ep = self.sonos_queue[self.sonos_idx]
+        if self.sonos_kind == "spotify_sharelink":
+            if not self.sonos_ctx:
+                return
+            hold = self.sonos_bm_hold
+            if hold and hold[0] == ep["id"] and float(rel) < hold[1]:
+                return  # refused seek: never overwrite the good position
+            self.sonos_bm_hold = None
+            _spotify.save_bookmark({
+                "context_uri": self.sonos_ctx, "uri": ep["id"],
+                "position": int(float(rel) * 1000),  # ms, like the box
+                "duration": int((snap.get("dur_s") or 0) * 1000) or None,
+                "name": ep.get("title"), "artists": [],
+                "artwork": ep.get("image")})
+            return
+        if self.sonos_kind != "url":
+            return
         _bm_save(state_key(self.target), ep["url"], float(rel),
                  episode_id=ep.get("id"), duration=snap.get("dur_s"))
 
@@ -910,6 +933,26 @@ class Orchestrator:
         if rd["renderer"] != "sonos":
             return {"error": "renderer is not sonos"}
         ep = self.sonos_queue[idx]
+        if self.sonos_kind == "spotify_sharelink":
+            if not self.sonos_map_trusted:
+                # drift: re-establish the invariant with a fresh transfer
+                # on this explicit press (never on a timer — arch R3a)
+                return self._sonos_start_spotify(self.target, rd,
+                                                 episode=ep["id"])
+            code, resp = _renderer.post(
+                "/queue_play", {"index": idx, "start_s": start_s,
+                                "if_uid": rd.get("uid")})
+            if code != 200:
+                # do NOT advance sonos_idx onto a track that is not
+                # playing; distrust the map and let the next press heal
+                self.sonos_map_trusted = False
+                log(f"sonos: queue_play refused ({code}) — map distrusted")
+                return {"error": resp.get("error") or f"http-{code}"}
+            self.sonos_idx = idx
+            self.sonos_bm_hold = None
+            log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
+                f"{ep.get('title') or ep['id']}")
+            return {"source": "sonos", "target": self.target, "index": idx}
         code, resp = _renderer.post(
             "/play", self._sonos_body(ep, rd["uid"], start_s))
         if code != 200:
@@ -924,6 +967,77 @@ class Orchestrator:
             f"{ep.get('title') or ep['url']}")
         return {"source": "sonos", "target": self.target, "index": idx}
 
+    def _sonos_start_spotify(self, target, rd, episode=None):
+        """v2: tapbox owns the LOGIC, the Sonos merely holds the queue.
+        ONE ShareLink add of the whole context, then positional jumps.
+        Queue/metadata come from go-librespot's cached context listing —
+        the same source as the box's song picker, so the screen behaves
+        identically to local playback (owner requirement 2026-08-09)."""
+        uri = _spotify.to_uri(target)
+        # classify BEFORE any transfer: Liked Songs has no share link,
+        # and ShareLink's regex does not cover shows (arch Q5). Refuse
+        # loudly — a silent fallback to the box is the double-play trap.
+        if not uri or uri.split(":")[1] not in ("track", "album",
+                                                "playlist", "artist"):
+            log(f"sonos: unsupported spotify kind for sharelink: {uri}")
+            return {"error": "unsupported-on-sonos"}
+        try:
+            listing = _spotify.context_tracks(uri, settle_s=10) or {}
+        except (OSError, ValueError):
+            return {"error": "spotify-listing-unavailable"}
+        rows = []
+        for t in listing.get("tracks") or []:
+            tr = t.get("track") or {}
+            name = tr.get("name")
+            arts = tr.get("artist_names") or []
+            rows.append({
+                "url": t.get("uri"), "id": t.get("uri"),
+                "title": (f"{name} — {', '.join(arts)}" if name and arts
+                          else name),
+                "image": tr.get("album_cover_url")})
+        if not rows:
+            return {"error": "nothing-to-play"}
+        try:
+            go("/player/pause")  # quiesce the box's own session
+        except OSError:
+            pass
+        idx, start_s = 0, 0.0
+        bm = _spotify.read_bookmark(uri)
+        want = episode or (bm or {}).get("uri")
+        if want:
+            hit = next((i for i, r in enumerate(rows)
+                        if r["id"] == want), None)
+            if hit is not None:
+                idx = hit
+                if not episode and bm:
+                    start_s = float(bm.get("position") or 0) / 1000.0
+                    # ms -> s happens HERE and nowhere else (unit seam)
+        code, resp = _renderer.post("/play", {
+            "uid": rd["uid"], "kind": "spotify_sharelink", "uri": target,
+            "track_index": idx, "start_s": start_s})
+        if code != 200:
+            return {"error": resp.get("error") or f"http-{code}"}
+        with self.lock:
+            self.target, self.source = target, "sonos"
+            self.sonos_kind = "spotify_sharelink"
+            self.sonos_queue, self.sonos_idx = rows, idx
+            self.sonos_ctx = uri
+            qlen = resp.get("queue_len")
+            self.sonos_map_trusted = (qlen is None
+                                      or qlen == len(rows))
+            if not self.sonos_map_trusted:
+                log(f"sonos: queue drift ({qlen} on speaker vs "
+                    f"{len(rows)} listed) — positional jumps disabled")
+            self.sonos_bm_hold = None
+            if start_s >= 5 and not resp.get("sought"):
+                # seek refused: playback runs from 0 — the poller must
+                # NOT overwrite the good bookmark until we pass it
+                self.sonos_bm_hold = (rows[idx]["id"], start_s)
+                log("sonos: seek refused — bookmark held")
+            self._persist()
+        _sonos_wake.set()
+        return {"source": "sonos", "target": target, "index": idx}
+
     def sonos_start_target(self, target, episode=None):
         """Resolve a target to the sonos session: expand (remote urls
         preferred), rotate to the bookmark, push the episode. Spotify
@@ -932,21 +1046,7 @@ class Orchestrator:
         if rd["renderer"] != "sonos":
             return {"error": "renderer is not sonos"}
         if is_spotify(target):
-            try:
-                go("/player/pause")  # quiesce the box's own session
-            except OSError:
-                pass
-            code, resp = _renderer.post("/play", {
-                "uid": rd["uid"], "kind": "spotify_sharelink",
-                "uri": target})
-            if code != 200:
-                return {"error": resp.get("error") or f"http-{code}"}
-            with self.lock:
-                self.target, self.source = target, "sonos"
-                self.sonos_kind = "spotify_sharelink"
-                self.sonos_queue, self.sonos_idx = [], None
-                self._persist()
-            return {"source": "sonos", "target": target}
+            return self._sonos_start_spotify(target, rd, episode)
         entries = content.expand_entries(target)
         playable = [e for e in entries
                     if str(e["url"]).startswith(("http://", "https://"))
@@ -983,11 +1083,6 @@ class Orchestrator:
         """next/prev for the url kind (our queue, with the wrap rules the
         box already teaches); sharelink delegates to the speaker's own
         queue. prev >5s in restarts the episode — same as mpv rule."""
-        if self.sonos_kind == "spotify_sharelink":
-            rd = _renderer.read()
-            _renderer.post("/next" if delta > 0 else "/prev",
-                           {"if_uid": rd.get("uid")})
-            return {"ok": True, "delegated": True}
         if self.sonos_idx is None or not self.sonos_queue:
             return {"error": "no queue"}
         if delta < 0 and (self._sonos_position() or 0) > 5:
@@ -1027,7 +1122,8 @@ class Orchestrator:
         (after a Stop it reads 0:00), bookmark it, silence the speaker,
         then the ordinary local play resumes from that bookmark."""
         self._sonos_bookmark_now()
-        resume_target = self.target if self.sonos_kind == "url" else None
+        resume_target = self.target if self.sonos_kind in (
+            "url", "spotify_sharelink") else None
         try:
             rd = _renderer.read()
             _renderer.post("/stop", {"if_uid": rd.get("uid")})
@@ -1702,9 +1798,7 @@ class Orchestrator:
             if snap:
                 out["playing"] = (snap.get("transport") == "PLAYING"
                                   and bool(snap.get("reachable"))
-                                  and bool(snap.get("ours")
-                                           or self.sonos_kind
-                                           == "spotify_sharelink"))
+                                  and bool(snap.get("ours")))
                 out["position"] = self._sonos_position()
                 out["duration"] = snap.get("dur_s")
                 if not snap.get("ours") and snap.get("foreign_uri"):
@@ -1717,7 +1811,12 @@ class Orchestrator:
                 out["renderer_state"] = "unreachable"
                 out["position"] = self.sonos_snap.get("rel_s")
                 out["duration"] = self.sonos_snap.get("dur_s")
-            if self.sonos_kind == "spotify_sharelink":
+            if (self.sonos_kind == "spotify_sharelink"
+                    and (self.sonos_idx is None
+                         or not self.sonos_map_trusted)):
+                # untrusted map / unknown position: the speaker's DIDL is
+                # the only truth available — demoted fallback, never the
+                # primary (v2)
                 out["title"] = (snap or {}).get("track_title")
                 out["artwork"] = (snap or {}).get("track_art")
                 if (snap or {}).get("track_artist"):
@@ -3137,6 +3236,18 @@ def _sonos_poller():
                         pass
                 elif ORCH.target:
                     ORCH.sonos_kind = "spotify_sharelink"
+                    try:
+                        uri = _spotify.to_uri(ORCH.target)
+                        listing = _spotify.context_tracks(uri) or {}
+                        ORCH.sonos_ctx = uri
+                        ORCH.sonos_queue = [
+                            {"url": t.get("uri"), "id": t.get("uri"),
+                             "title": (t.get("track") or {}).get("name"),
+                             "image": (t.get("track") or {}).get(
+                                 "album_cover_url")}
+                            for t in listing.get("tracks") or []]
+                    except Exception:
+                        ORCH.sonos_map_trusted = False
                 rd = _renderer.read()
                 _renderer.post("/adopt", {"uid": rd.get("uid"),
                                           "kind": ORCH.sonos_kind,
@@ -3171,8 +3282,23 @@ def _sonos_poller():
         fresh = stale is not None and stale < 12
         if not fresh or not snap.get("ours"):
             continue  # foreign/hijacked or old data: observe, never act
+        if ORCH.sonos_kind == "spotify_sharelink":
+            # the playing track's own decoded uri is the inbound
+            # authority — exact under every queue divergence; Track is
+            # only a cross-check (architect Q1). A missing uri leaves
+            # sonos_idx UNCHANGED: coercing to 0 would rewrite the
+            # bookmark to track 1.
+            turi = snap.get("track_spotify_uri")
+            if turi:
+                hit = next((i for i, r in enumerate(ORCH.sonos_queue)
+                            if r["id"] == turi), None)
+                if hit is not None:
+                    ORCH.sonos_idx = hit
+                elif snap.get("ours"):
+                    ORCH.sonos_map_trusted = False
         rel, dur = snap.get("rel_s"), snap.get("dur_s")
-        if (ORCH.sonos_kind == "url" and rel is not None
+        if (ORCH.sonos_kind in ("url", "spotify_sharelink")
+                and rel is not None
                 and snap.get("transport") in ("PLAYING",
                                               "PAUSED_PLAYBACK")):
             ORCH._sonos_bookmark_now()

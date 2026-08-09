@@ -331,10 +331,27 @@ class Session:
             spk.avTransport.Play([("InstanceID", 0), ("Speed", "1")])
         elif kind == "spotify_sharelink":
             from soco.plugins.sharelink import ShareLinkPlugin
+            # NORMAL kills family shuffle/repeat leftovers AND makes the
+            # queue's play order equal its index order — the legality of
+            # every positional jump rests on this (architect Q2).
+            try:
+                spk.play_mode = "NORMAL"
+            except Exception:
+                pass
             spk.clear_queue()
-            ShareLinkPlugin(spk).add_share_link_to_queue(body["uri"])
+            r = ShareLinkPlugin(spk).add_share_link_to_queue(body["uri"])
+            # FirstTrackNumberEnqueued: never assume the queue starts at
+            # 1, even after clear_queue (architect Q1 outbound)
+            try:
+                self.q_base = int(r) if r else 1
+            except (TypeError, ValueError):
+                self.q_base = 1
+            try:
+                self.q_len = int(spk.queue_size)
+            except Exception:
+                self.q_len = None
             idx = int(body.get("track_index") or 0)
-            spk.play_from_queue(idx)
+            spk.play_from_queue(self.q_base - 1 + idx)
             uri = body["uri"]
         else:
             raise ValueError(f"unknown kind: {kind}")
@@ -344,7 +361,11 @@ class Session:
         sought = self._seek_settled(spk, start) if start >= 5 else True
         self._wake.set()
         return {"ok": True, "uid": uid, "uri": uri,
-                "sought": bool(sought), "didl": built}
+                "sought": bool(sought), "didl": built,
+                "base": getattr(self, "q_base", None),
+                "queue_len": getattr(self, "q_len", None),
+                "play_mode": "NORMAL" if kind == "spotify_sharelink"
+                else None}
 
     def _seek_settled(self, spk, start_s, timeout=8):
         """SetURI -> Play -> wait PLAYING -> Seek. Against a STOPPED
@@ -405,10 +426,21 @@ class Session:
                                   ("Target", _hms(float(body["s"])))])
         elif name == "volume":
             spk.volume = max(0, min(100, int(body["v"])))
-        elif name == "next":
-            spk.next()      # sonos owns the queue for sharelink (v1)
-        elif name == "prev":
-            spk.previous()
+        elif name == "queue_play":
+            # tapbox owns the logic for EVERY kind now (v2) — this jumps
+            # the speaker's queue to an absolute 0-based position and
+            # optionally seeks. The old delegated next/prev died with v1.
+            pos = int(body["index"])
+            base = getattr(self, "q_base", 1) or 1
+            qlen = getattr(self, "q_len", None)
+            absidx = base - 1 + pos
+            if qlen is not None:
+                absidx = max(base - 1, min(absidx, base - 2 + qlen))
+            spk.play_from_queue(absidx)
+            start = float(body.get("start_s") or 0)
+            sought = self._seek_settled(spk, start) if start >= 5 else True
+            self._wake.set()
+            return {"ok": True, "sought": bool(sought)}
         return {"ok": True}
 
     # -- the poller --
@@ -447,6 +479,20 @@ class Session:
         }
         # track metadata for the sharelink path: the box's screen shows
         # what the SONOS queue is on, since sonos owns that queue
+        if self.kind == "spotify_sharelink":
+            fields["track_no"] = None
+            try:
+                fields["track_no"] = int(pos.get("Track"))
+            except (TypeError, ValueError):
+                pass
+            fields["base"] = getattr(self, "q_base", None)
+            fields["queue_len"] = getattr(self, "q_len", None)
+            # the playing track's OWN uri, percent-decoded — exact under
+            # every queue divergence, zero extra SOAP (architect Q1)
+            if track_uri.startswith(("x-sonos-spotify:",
+                                     "x-sonosprog-spotify:")):
+                raw = track_uri.split(":", 1)[1].split("?")[0]
+                fields["track_spotify_uri"] = urllib.parse.unquote(raw)
         if ours and self.kind == "spotify_sharelink":
             meta = pos.get("TrackMetaData") or ""
             fields["track_title"] = _didl_field(meta, "title")
@@ -581,7 +627,7 @@ class Handler(BaseHTTPRequestHandler):
                 with SESSION.lock:
                     self._send(200, SESSION.adopt(body))
             elif path in ("/pause", "/resume", "/stop", "/seek", "/volume",
-                          "/next", "/prev"):
+                          "/queue_play"):
                 with SESSION.lock:
                     r = SESSION.verb(path[1:], body)
                 if r is None:
