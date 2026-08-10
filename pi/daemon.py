@@ -2226,7 +2226,11 @@ class Orchestrator:
                     _spotify.to_uri(target) or target)
             except OSError:
                 bm = None
-            if bm and bm.get("uri") and (bm.get("position") or 0) > 20000:
+            if bm and bm.get("uri"):
+                # gate on IDENTITY, not position: a bookmark parked at
+                # 0:xx (an episode boundary) is still "this track next" —
+                # the >20s gate hid the track card after reboot and the
+                # screen fell back to the tile (field 2026-08-10)
                 out["playing"] = mpv_alive  # a spawn in flight IS starting
                 out["source"] = "spotify"
                 out["title"] = bm.get("name")
@@ -2240,10 +2244,13 @@ class Orchestrator:
                     bk = json.load(f)
             except (OSError, ValueError):
                 bk = None
-            if bk and bk.get("pos"):
+            if bk and (bk.get("id") or bk.get("url") or bk.get("pos")):
+                # identity-gated, like the spotify arm above: pos 0 at an
+                # episode boundary must still show WHICH episode is next
                 out["playing"] = mpv_alive  # a spawn in flight IS starting
                 out["source"] = "mpv"
-                out["position"] = bk.get("pos")
+                out["position"] = bk.get("pos") or 0
+                out["episode_id"] = bk.get("id")
                 try:
                     with open(NOW_FILE) as f:
                         now = json.load(f)
@@ -2252,8 +2259,25 @@ class Orchestrator:
                 if now.get("target") == target:
                     out["title"] = now.get("title")
                     out["artwork"] = now.get("image")
-                    out["episode_id"] = now.get("id")
+                    out["episode_id"] = now.get("id") or out["episode_id"]
                     out["duration"] = now.get("duration")
+                if not out["title"]:
+                    # the persisted queue map knows every episode's
+                    # title/art — resolve the BOOKMARKED one instead of
+                    # falling back to a raw basename
+                    try:
+                        with open(os.path.join(
+                                STATE_DIR, "now-queue.json")) as f:
+                            q = json.load(f)
+                        if q.get("target") == target:
+                            for u, it in (q.get("items") or {}).items():
+                                if (it.get("id") == bk.get("id")
+                                        or u == bk.get("url")):
+                                    out["title"] = it.get("title")
+                                    out["artwork"] = it.get("image")
+                                    break
+                    except (OSError, ValueError):
+                        pass
                 if not out["title"]:
                     out["title"] = os.path.basename(target.rstrip("/"))
         # Stopped-but-remembered: no bookmark (stop cleared it), yet play
