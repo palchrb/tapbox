@@ -64,6 +64,15 @@ CACHE_FILE = os.path.join(STATE_DIR, "sonos.json")
 POLL_S = float(os.environ.get("TAPBOX_SONOS_POLL", "5"))
 POLL_PAUSED_S = float(os.environ.get("TAPBOX_SONOS_POLL_PAUSED", "15"))
 POLL_STOPPED_S = float(os.environ.get("TAPBOX_SONOS_POLL_STOPPED", "60"))
+# Mid-track PLAYING cadence (RF audit 2026-08-10 #3): the daemon
+# extrapolates the bar and compensates measurement age, bookmarks are
+# throttled to 25s, and every verb wakes the loop — nothing consumes 5s
+# resolution mid-track. 5s survives only near the track end (boundary
+# detection) and for a settle window after verbs.
+POLL_CRUISE_S = float(os.environ.get("TAPBOX_SONOS_POLL_CRUISE", "15"))
+TAIL_FAST_S = 45   # within this many s of track end -> fast cadence
+VERB_FAST_S = 30   # after a verb/arm -> fast cadence (settle machinery)
+AUX_EVERY = 12     # polls between GetVolume/GetZoneGroupState refreshes
 # STOPPED/UNREACHABLE this long -> the session is OVER: disarm and let
 # the radio doze. Only /play (or /adopt) arms again. Without this, a
 # bedtime story that ended at 21:00 kept the full cadence all night
@@ -79,9 +88,25 @@ def log(msg):
     print(f"sonosd: {msg}", flush=True)
 
 
+_HTTP = None
+
+
 def _soco():
     """Lazy import — pay the ~20 MB only when Sonos is actually used."""
+    global _HTTP
     import soco  # noqa: F401  (venv-only dependency)
+    if _HTTP is None:
+        # RF audit 2026-08-10 #4: SoCo fires a bare requests.post per
+        # SOAP call — a fresh TCP handshake every time, ~5-6 RTTs where
+        # 2-3 do, and under PS-on wifi each RTT can cost a beacon
+        # interval. One keep-alive Session (a drop-in for the module:
+        # same .post/.get surface) rides every SOAP call, topology
+        # fetch and music-service lookup on pooled connections.
+        import requests
+        from soco import core as _c, services as _sv, soap as _sp
+        _HTTP = requests.Session()
+        for _m in (_sv, _c, _sp):
+            _m.requests = _HTTP
     return soco
 
 
@@ -282,6 +307,11 @@ class Session:
         self._retried_at = None
         self._last_ok = None     # monotonic of last successful poll
         self._wake = threading.Event()
+        # display-only fields on the slow sub-cadence (RF audit #2)
+        self._aux = {"volume": None, "grouped_away": False,
+                     "coordinator": None}
+        self._aux_n = 0          # <=0 -> refresh aux on the next poll
+        self._fast_at = 0.0      # last verb/arm -> fast-cadence window
 
     # -- snapshot plumbing --
 
@@ -373,6 +403,12 @@ class Session:
         self.armed = True
         self._didl_checked = False
         self._frozen, self._last_pos, self._retried_at = 0, None, None
+        # new session: forget the old speaker's volume/topology and
+        # refresh on the first poll; poll fast while it settles
+        self._aux = {"volume": None, "grouped_away": False,
+                     "coordinator": None}
+        self._aux_n = 0
+        self._fast_at = time.monotonic()
         sought = self._seek_settled(spk, start) if start >= 5 else True
         self._wake.set()
         return {"ok": True, "uid": uid, "uri": uri,
@@ -421,6 +457,8 @@ class Session:
         self.uri = body.get("uri")
         self.armed = True
         self._frozen, self._last_pos, self._retried_at = 0, None, None
+        self._aux_n = 0                    # fresh volume/topology now
+        self._fast_at = time.monotonic()
         self._wake.set()
         return {"ok": True, "uid": self.uid}
 
@@ -428,6 +466,7 @@ class Session:
         want = body.get("if_uid")
         if want and want != self.uid:
             return None  # 409 at the HTTP layer
+        self._fast_at = time.monotonic()  # settle window: poll fast
         spk = self._spk()
         if name == "pause":
             spk.avTransport.Pause([("InstanceID", 0)])
@@ -444,7 +483,11 @@ class Session:
             spk.avTransport.Seek([("InstanceID", 0), ("Unit", "REL_TIME"),
                                   ("Target", _hms(float(body["s"])))])
         elif name == "volume":
-            spk.volume = max(0, min(100, int(body["v"])))
+            v = max(0, min(100, int(body["v"])))
+            spk.volume = v
+            self._aux["volume"] = v  # the snapshot must not lag OUR set
+            #                          now that GetVolume rides the slow
+            #                          sub-cadence
         elif name == "queue_play":
             # tapbox owns the logic for EVERY kind now (v2) — this jumps
             # the speaker's queue to an absolute 0-based position and
@@ -466,7 +509,8 @@ class Session:
 
     def _classify(self, spk):
         """One poll -> the fields tapboxd's policy dispatch needs. One
-        GetPositionInfo + one GetTransportInfo; volume piggybacks."""
+        GetPositionInfo + one GetTransportInfo; volume and group
+        topology ride the AUX_EVERY sub-cadence below."""
         pos = spk.avTransport.GetPositionInfo([("InstanceID", 0)])
         tr = spk.avTransport.GetTransportInfo([("InstanceID", 0)])
         transport = tr.get("CurrentTransportState") or "STOPPED"
@@ -499,24 +543,39 @@ class Session:
             if getattr(self, "_ours_logged", None) != track_uri:
                 self._ours_logged = track_uri
                 log(f"not-ours? speaker={track_uri!r} vs set={self.uri!r}")
-        grouped_away = False
-        coordinator = None
-        try:
-            g = spk.group
-            if g is not None and g.coordinator is not None \
-                    and g.coordinator.uid != spk.uid:
-                grouped_away = True
-                coordinator = g.coordinator.uid
-        except Exception:
-            pass
+        # RF audit 2026-08-10 #2: group + volume were HALF the SOAP
+        # calls and ~90% of the bytes on every poll — GetZoneGroupState
+        # returns the whole household's topology XML, and SoCo's 5s
+        # cache expired at exactly the old cadence, so every single
+        # poll refetched and re-parsed it. Both fields are display-only
+        # (renderer_state + the volume card), so they ride a slow
+        # sub-cadence: every AUX_EVERY-th poll, at session start, and
+        # our own /volume verb writes the value straight into the aux.
+        if self._aux_n <= 0:
+            self._aux_n = AUX_EVERY
+            try:
+                g = spk.group
+                away = bool(g is not None and g.coordinator is not None
+                            and g.coordinator.uid != spk.uid)
+                self._aux["grouped_away"] = away
+                self._aux["coordinator"] = (g.coordinator.uid if away
+                                            else None)
+            except Exception:
+                pass  # keep the last known topology
+            try:
+                self._aux["volume"] = spk.volume
+            except Exception:
+                pass  # keep the last known volume
+        self._aux_n -= 1
         lost = (transport == "STOPPED" and not track_uri
                 and self.kind != "spotify_sharelink")
         fields = {
             "reachable": True, "transport": transport,
             "rel_s": rel, "dur_s": dur, "uri": track_uri, "ours": ours,
             "foreign_uri": None if ours else (track_uri or None),
-            "grouped_away": grouped_away, "coordinator": coordinator,
-            "lost_session": lost, "volume": spk.volume,
+            "grouped_away": self._aux["grouped_away"],
+            "coordinator": self._aux["coordinator"],
+            "lost_session": lost, "volume": self._aux["volume"],
         }
         # track metadata for the sharelink path: the box's screen shows
         # what the SONOS queue is on, since sonos owns that queue
@@ -602,16 +661,26 @@ class Session:
                 self.publish(transport=tr,
                              reachable=bool(snap.get("reachable")))
                 continue
-            if tr == "PAUSED_PLAYBACK":
-                wait = POLL_PAUSED_S
-            elif tr == "UNREACHABLE":
-                wait = min(POLL_S * (2 ** min(fails, 6)), 300)
-            elif tr == "STOPPED":
-                wait = POLL_STOPPED_S
-            else:
-                wait = POLL_S
-            self._wake.wait(timeout=wait)
+            self._wake.wait(timeout=self._cadence(tr, snap, fails))
             self._wake.clear()
+
+    def _cadence(self, tr, snap, fails):
+        """Seconds until the next poll, from what the last one saw."""
+        if tr == "PAUSED_PLAYBACK":
+            return POLL_PAUSED_S
+        if tr == "UNREACHABLE":
+            return min(POLL_S * (2 ** min(fails, 6)), 300)
+        if tr == "STOPPED":
+            return POLL_STOPPED_S
+        # PLAYING: cruise mid-track — fast only near the track end (the
+        # ends_near/boundary machinery needs polls inside the last 20s)
+        # and for a settle window after any verb (the daemon's pending/
+        # optimistic holds expect quick confirmation).
+        rel, dur = snap.get("rel_s"), snap.get("dur_s")
+        tail = rel is not None and dur and dur - rel <= TAIL_FAST_S
+        if tail or time.monotonic() - self._fast_at < VERB_FAST_S:
+            return POLL_S
+        return POLL_CRUISE_S
 
     def _stall_bookkeeping(self, fields):
         """PLAYING + our URI + frozen RelTime across STALL_POLLS -> ONE
