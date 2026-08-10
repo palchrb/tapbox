@@ -278,15 +278,52 @@ def main():
             # the path that keeps the car's display alive across crashes
             log("bluez is back — re-registering")
             GLib.timeout_add_seconds(2, register)
+            GLib.timeout_add_seconds(2, refresh_connected)
         else:
             log("bluez went away")
+            bt_conn["n"], bt_conn["known"] = 0, True  # no AVRCP consumer
 
     bus.add_signal_receiver(bluez_owner_changed,
                             signal_name="NameOwnerChanged",
                             dbus_interface="org.freedesktop.DBus",
                             arg0="org.bluez")
 
+    # QA power audit 2026-08-10 #4: the tick polled /status every 3s
+    # around the clock — with no BT peer there is nobody to show
+    # metadata to or answer AVRCP polls for, yet it was ~1200 of the
+    # quiet box's ~1260 thread spawns per hour (every poll is a request
+    # thread in tapboxd). Track BlueZ's Device1.Connected and skip the
+    # round-trip while nothing is connected. Enumeration failure fails
+    # OPEN (keep polling): a few wasted polls beat a silent car display.
+    bt_conn = {"n": 0, "known": False}
+
+    def refresh_connected():
+        try:
+            om = dbus.Interface(bus.get_object("org.bluez", "/"),
+                                "org.freedesktop.DBus.ObjectManager")
+            bt_conn["n"] = sum(
+                1 for ifaces in om.GetManagedObjects().values()
+                if bool((ifaces.get("org.bluez.Device1") or {})
+                        .get("Connected")))
+            bt_conn["known"] = True
+        except dbus.DBusException:
+            bt_conn["known"] = False  # can't tell — poll as before
+        return False  # usable directly as a one-shot GLib timeout
+
+    def device_changed(iface, changed, _invalidated, path=None):
+        if iface == "org.bluez.Device1" and "Connected" in changed:
+            refresh_connected()  # recount — cheap, and connects are rare
+
+    bus.add_signal_receiver(device_changed,
+                            dbus_interface="org.freedesktop.DBus.Properties",
+                            signal_name="PropertiesChanged",
+                            arg0="org.bluez.Device1",
+                            path_keyword="path")
+    refresh_connected()
+
     def tick():
+        if bt_conn["known"] and bt_conn["n"] == 0:
+            return True  # no BT peer — nobody consumes AVRCP metadata
         try:
             st = get_status()
         except (OSError, ValueError):
