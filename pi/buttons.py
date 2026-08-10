@@ -141,14 +141,25 @@ def main():
     from select import select
     devs = {}
     last_scan = 0.0
+    scan_gap = 5.0
     last_fired = {}          # action -> monotonic time, for repeat debounce
     log("started — waiting for media-key devices (AVRCP, keyboards, ...)")
     while True:
-        if time.time() - last_scan > 5:
+        if time.time() - last_scan > scan_gap:
             last_scan = time.time()
             rescan(devs)
+            if devs:
+                scan_gap = 5.0
+            else:
+                # QA power audit 2026-08-10 #5: the empty path used to
+                # spin FASTER (2s sleeps) than the path with devices to
+                # watch (5s select) — and empty is the normal state on
+                # this box. Back off toward 15s; a speaker's AVRCP
+                # device shows up within one gap of connecting, before
+                # anyone has reached for its buttons.
+                scan_gap = min(scan_gap * 2, 15.0)
         if not devs:
-            time.sleep(2)
+            time.sleep(scan_gap)
             continue
         readable, _, _ = select(list(devs.values()), [], [], 5)
         for dev in readable:

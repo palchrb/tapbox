@@ -394,7 +394,10 @@ def system_status():
             temp = round(int(f.read().strip()) / 1000, 1)
     except (OSError, ValueError):
         pass
-    enabled, ssid, ip = netmgmt.wifi_state()
+    # snapshot, not live forks: /system is a 30s screen poll and the
+    # wifi answer only changes on our own ops (which invalidate) —
+    # architect power audit 2026-08-10 #3
+    enabled, ssid, ip, hotspot = netmgmt.wifi_snapshot()
     on_battery_s = None
     if batt is not None and plugged != "true":
         on_battery_s = _battery_runtime()
@@ -405,7 +408,7 @@ def system_status():
             "plugged": plugged == "true",
             "disk": disk, "caches": caches, "cpu_temp": temp,
             "wifi": {"enabled": enabled, "ssid": ssid, "ip": ip,
-                     "hotspot": netmgmt.hotspot_active(),
+                     "hotspot": hotspot,
                      "hotspot_ssid": netmgmt.HOTSPOT_SSID},
             "hostname": socket.gethostname()}
 

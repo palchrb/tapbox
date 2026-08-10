@@ -49,7 +49,31 @@ def wifi_state():
     return enabled, ssid, ip
 
 
+# /system is polled every 30s by the screen (plus any open PWA tab), and
+# each answer forked rfkill+iw+hostname+nmcli for values that only
+# change when WE change them or on rare DHCP/roam events (architect
+# power audit 2026-08-10 #3). Snapshot with a TTL; every mutating path
+# below invalidates, so user-visible changes are never stale.
+SNAP_TTL_S = float(os.environ.get("TAPBOX_NET_SNAP_TTL", "120"))
+_snap = {"at": 0.0, "val": None}
+
+
+def invalidate_snapshot():
+    _snap["val"] = None
+
+
+def wifi_snapshot():
+    """(enabled, ssid, ip, hotspot_active) — the /system answer, cached."""
+    now = time.monotonic()
+    if _snap["val"] is None or now - _snap["at"] > SNAP_TTL_S:
+        en, ssid, ip = wifi_state()
+        _snap["val"] = (en, ssid, ip, hotspot_active())
+        _snap["at"] = now
+    return _snap["val"]
+
+
 def _rfkill(enabled):
+    invalidate_snapshot()
     try:
         subprocess.run(["rfkill", "unblock" if enabled else "block", "wifi"],
                        timeout=10)
@@ -225,6 +249,7 @@ def _hotspot_stations():
 def start_hotspot():
     """Bring up the setup AP. Scans first — the radio can't scan in AP mode,
     so the portal's network picker serves this cached list."""
+    invalidate_snapshot()
     _hs.update(last_client=time.monotonic(), idle_stopped=False)
     sc = wifi_scan()
     if sc and sc.get("ok") and sc.get("networks"):
@@ -237,6 +262,7 @@ def start_hotspot():
 
 
 def stop_hotspot():
+    invalidate_snapshot()
     _nmcli("connection", "down", HOTSPOT_CON, timeout=15)
     _nmcli("connection", "delete", "id", HOTSPOT_CON, timeout=15)
     log("hotspot stopped")
@@ -393,6 +419,7 @@ def wifi_scan():
 
 def wifi_connect(ssid, password=None):
     """Join a network (uses the saved profile when one exists). None = busy."""
+    invalidate_snapshot()
     if not WIFI_LOCK.acquire(blocking=False):
         return None
     try:
@@ -460,6 +487,7 @@ def wifi_add(ssid, password=None):
     pre-provision the cabin/grandparent wifi before travelling there.
     NetworkManager auto-joins when it first sees it (and the auto-off
     prober finds it too). None = busy."""
+    invalidate_snapshot()
     if not WIFI_LOCK.acquire(blocking=False):
         return None
     try:
@@ -496,6 +524,7 @@ def wifi_add(ssid, password=None):
 
 
 def wifi_forget(ssid):
+    invalidate_snapshot()
     if not WIFI_LOCK.acquire(blocking=False):
         return None
     try:

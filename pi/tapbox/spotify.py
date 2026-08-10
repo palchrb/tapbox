@@ -66,7 +66,13 @@ def go(path, timeout=5, body=None):
     req = urllib.request.Request(API + path, data=data,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+        out = r.read()
+    # every command invalidates the /status cache below, so the reads
+    # that FOLLOW a press (step confirmation, the screen's next poll)
+    # are always fresh — only externally-caused changes can be seen up
+    # to STATUS_TTL_S late
+    _status_cache["val"] = None
+    return out
 
 
 def _conf_dir():
@@ -168,13 +174,32 @@ def logout():
     return {"ok": True, "removed": removed, "open": True}
 
 
+# Three independent clocks poll /status — the screen's 1s tick via
+# tapboxd, mpris' 3s tick (also via tapboxd) and the 5s bookmarker —
+# and each paid its own round-trip + a request thread in go-librespot
+# (QA power audit 2026-08-10 #6). One short shared cache collapses
+# them; go() invalidates on every command so nothing a press causes is
+# ever served stale. Failures are NOT cached: an unreachable player
+# must be re-probed, not remembered.
+STATUS_TTL_S = 1.0
+_status_cache = {"at": 0.0, "val": None}
+
+
 def status(timeout=5):
     """The /status dict, {} when unreachable or not logged in."""
+    now = time.monotonic()
+    if (_status_cache["val"] is not None
+            and now - _status_cache["at"] < STATUS_TTL_S):
+        return dict(_status_cache["val"])  # copy: a mutating caller
+        #                                    must not poison the cache
     try:
         with urllib.request.urlopen(API + "/status", timeout=timeout) as r:
-            return json.loads(r.read()) or {}
+            val = json.loads(r.read()) or {}
     except (OSError, ValueError):
         return {}
+    _status_cache["at"] = time.monotonic()
+    _status_cache["val"] = val
+    return dict(val)
 
 
 def playing(st=None):

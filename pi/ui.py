@@ -1699,7 +1699,11 @@ class App:
 
     @staticmethod
     def fmt_idle(v):
-        return "off" if v == 0 else f"{v} min"
+        # "~": idle.py samples every 60s and gives button presses one
+        # extra cycle of grace, so the real fire time runs up to ~2 min
+        # past the setting — a plain "5 min" read as a bug in the QA
+        # power audit (2026-08-10) when the box sat visibly on at 5:30
+        return "off" if v == 0 else f"~{v} min"
 
     def select(self):
         try:
@@ -1773,7 +1777,10 @@ class App:
         cycles = {"Screen off after": ("screen_timeout_s", [15, 30, 60, 0]),
                   "Brightness": ("screen_brightness", [25, 50, 75, 100]),
                   "Volume cap": ("volume_cap", [60, 70, 80, 90, 100]),
-                  "Auto-off (idle)": ("idle_shutdown_min", [15, 30, 60, 0]),
+                  # 5 first: it is the shipped default, and its absence
+                  # meant ONE trip through this cycle lost the 5-min
+                  # setting for good (QA power audit 2026-08-10)
+                  "Auto-off (idle)": ("idle_shutdown_min", [5, 15, 30, 60, 0]),
                   "Browse": ("simple_nav", [0, 1, 2])}  # menus/flat/cats
         if label in cycles:
             key, opts = cycles[label]

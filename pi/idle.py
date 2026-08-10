@@ -48,8 +48,8 @@ def describe(minutes):
     culprit was a pisugar-server tap shell)."""
     if minutes <= 0:
         return "idle auto-shutdown DISABLED (idle_shutdown_min=0)"
-    return (f"will power off after {minutes} min without playback or "
-            "button presses")
+    return (f"will power off ~{minutes} min after playback and button "
+            "presses stop (60s sampling + one cycle of button grace)")
 # A button press younger than this counts as 'in use'. Two check
 # periods: a press can land anywhere between samples, and one extra
 # cycle of grace is cheaper than a box dying in a kid's hands.
