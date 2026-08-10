@@ -3554,6 +3554,16 @@ def _sonos_poller():
             if nxt < len(ORCH.sonos_queue):
                 log("sonos: episode ended — next")
                 ORCH._sonos_play_entry(nxt, 0.0)
+            else:
+                # queue ran out — tell the sidecar the session is over,
+                # or it keeps polling an idle speaker (/stop is the only
+                # verb that disarms it; RF power audit 2026-08-10 #1)
+                log("sonos: queue finished — stop")
+                try:
+                    _renderer.post("/stop",
+                                   {"if_uid": _renderer.read().get("uid")})
+                except _renderer.SidecarDown:
+                    pass
 
 
 def _spotify_bookmarker():

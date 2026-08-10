@@ -63,6 +63,12 @@ PORT = int(os.environ.get("TAPBOX_SONOS_PORT", "3681"))
 CACHE_FILE = os.path.join(STATE_DIR, "sonos.json")
 POLL_S = float(os.environ.get("TAPBOX_SONOS_POLL", "5"))
 POLL_PAUSED_S = float(os.environ.get("TAPBOX_SONOS_POLL_PAUSED", "15"))
+POLL_STOPPED_S = float(os.environ.get("TAPBOX_SONOS_POLL_STOPPED", "60"))
+# STOPPED/UNREACHABLE this long -> the session is OVER: disarm and let
+# the radio doze. Only /play (or /adopt) arms again. Without this, a
+# bedtime story that ended at 21:00 kept the full cadence all night
+# (RF power audit 2026-08-10 #1: ~23k SOAP calls before morning).
+DISARM_AFTER_S = float(os.environ.get("TAPBOX_SONOS_DISARM", "600"))
 # NRK Radio's Sonos service id; its service type = sid*256 + 7
 NRK_SID = 277
 NRK_SVCTYPE = NRK_SID * 256 + 7
@@ -551,8 +557,11 @@ class Session:
         return fields
 
     def poll_loop(self):
+        down_since = None  # start of the current STOPPED/UNREACHABLE streak
+        fails = 0          # consecutive failed polls, for the backoff
         while True:
             if not self.armed:
+                down_since, fails = None, 0
                 self._wake.wait(timeout=30)
                 self._wake.clear()
                 continue
@@ -562,16 +571,45 @@ class Session:
                 try:
                     fields = self._classify(self._spk())
                     self._last_ok = time.monotonic()
+                    fails = 0
                     self._stall_bookkeeping(fields)
                     self.publish(**fields)
                 except Exception as e:
                     # speaker unreachable — sidecar-up-speaker-down is its
                     # own shape, distinct from ECONNREFUSED (sidecar down)
+                    fails += 1
                     self.publish(reachable=False, transport="UNREACHABLE",
                                  error=e.__class__.__name__)
             snap = self.snapshot
-            wait = (POLL_PAUSED_S if snap.get("transport")
-                    == "PAUSED_PLAYBACK" else POLL_S)
+            tr = snap.get("transport")
+            # A session that is neither playing nor paused is winding
+            # down: STOPPED polls slowly, a dead speaker backs off
+            # (each failed SOAP holds the session lock for the full
+            # request timeout, so hammering it also blocks verbs), and
+            # after DISARM_AFTER_S the session stands down for good.
+            if tr in ("PLAYING", "PAUSED_PLAYBACK"):
+                down_since = None
+            elif down_since is None:
+                down_since = time.monotonic()
+            if down_since is not None \
+                    and time.monotonic() - down_since >= DISARM_AFTER_S:
+                log(f"session stood down ({tr} for "
+                    f"{int(time.monotonic() - down_since)}s) — "
+                    "polling stops until the next play")
+                self.armed = False
+                # re-publish so /state says armed:false NOW — the old
+                # snapshot would keep claiming an armed session
+                self.publish(transport=tr,
+                             reachable=bool(snap.get("reachable")))
+                continue
+            if tr == "PAUSED_PLAYBACK":
+                wait = POLL_PAUSED_S
+            elif tr == "UNREACHABLE":
+                wait = min(POLL_S * (2 ** min(fails, 6)), 300)
+            elif tr == "STOPPED":
+                wait = POLL_STOPPED_S
+            else:
+                wait = POLL_S
             self._wake.wait(timeout=wait)
             self._wake.clear()
 
