@@ -321,6 +321,23 @@ then
   echo "    NetworkManager log level WARN (wpa_supplicant evidence unaffected)"
 fi
 
+# A dead ssh peer must not pin the box awake: idle.py holds auto-off
+# while a session is ESTABLISHED, and a laptop that SUSPENDS mid-session
+# leaves its socket established until the kernel keepalive reaps it —
+# ~2h15m of full idle draw every time a lid closes on a debug session
+# (power audit 2026-08-10 #1). ClientAlive makes sshd probe the client
+# so a dead peer is closed within ~4 min; a live shell is never touched.
+# Drop-ins are Include'd at the TOP of sshd_config on Debian and sshd is
+# first-value-wins, so this beats the stock file.
+if write_if_changed /etc/ssh/sshd_config.d/tapbox-keepalive.conf <<'EOF'
+ClientAliveInterval 60
+ClientAliveCountMax 3
+EOF
+then
+  systemctl try-reload-or-restart ssh 2>/dev/null || true
+  echo "    sshd: dead sessions reaped in ~4min (was ~2h15m holding idle auto-off)"
+fi
+
 # Per-wifi-profile tuning on every saved network. Two knobs, both
 # best-effort (netmgmt._tune_profile does the same for profiles created
 # later via the portal/PWA):

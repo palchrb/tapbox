@@ -23,6 +23,7 @@ Usage: idle.py [minutes]   (default 5)
 """
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -87,22 +88,63 @@ def sonos_playing():
             and stale is not None and stale < 30)
 
 
+# A live ssh session whose traffic has been nothing but keepalive noise
+# for this long is a terminal someone walked away from — release the
+# hold and let the box sleep. Typing, reading output, journalctl -f all
+# clear SSH_QUIET_BYTES easily and reset the clock, so a real working
+# session holds for hours.
+SSH_QUIET_RELEASE_S = 30 * 60
+# Movement below this per check counts as silence, not a human: sshd's
+# ClientAlive probes (install.sh drop-in, 1/min) ride the encrypted
+# channel and move ~200-400 bytes/min in each direction even when
+# nobody types. One keystroke's echo plus a prompt redraw, or a single
+# line of output, clears 1KB.
+SSH_QUIET_BYTES = 1024
+_ssh = {"n": None, "bytes": None, "quiet_s": 0}
+
+
 def ssh_active():
-    """Anyone logged in over ssh? An active session means a human is
-    working ON the box — powering off under them cost a debugging
+    """Anyone WORKING on the box over ssh? An active session means a
+    human is on the box — powering off under them cost a debugging
     evening (field 2026-08-03: the 5-min idle fired mid-journalctl,
     and the wedged pisugar poweroff then needed a hard cut). utmp is
     gone on trixie (systemd built with -UTMP), so `who` is blind —
-    count established TCP sessions on the sshd port instead. Errors
-    mean 'unknown': fail toward the OLD behavior (shutdown proceeds),
-    never toward a box that can't sleep because a probe broke."""
+    established TCP on the sshd port is the signal instead.
+
+    2026-08-10 (power audit #1): bare ESTABLISHED was too strong a
+    hold. A laptop that SUSPENDS mid-session leaves its socket
+    established until the kernel keepalive reaps it — ~2h15m of full
+    idle draw, every time a lid closes on a debug session. Two-part
+    fix: install.sh drops ClientAlive into sshd so a DEAD peer is
+    closed within ~4 min, and for a LIVE peer nobody is touching (a
+    forgotten terminal on a desktop that never sleeps) the per-socket
+    byte counters gate the hold: below SSH_QUIET_BYTES per check it is
+    keepalive chatter, and SSH_QUIET_RELEASE_S of that releases the
+    box. Counters unparseable -> plain ESTABLISHED hold (the sshd
+    drop-in still reaps dead peers); errors mean 'unknown': fail
+    toward the OLD behavior (shutdown proceeds), never toward a box
+    that can't sleep because a probe broke."""
     try:
         out = subprocess.run(
-            ["ss", "-Htn", "state", "established", "( sport = :22 )"],
+            ["ss", "-Htni", "state", "established", "( sport = :22 )"],
             capture_output=True, text=True, timeout=5).stdout
-        return bool(out and out.strip())
     except (OSError, subprocess.TimeoutExpired, AttributeError):
         return False
+    if not out or not out.strip():
+        _ssh["n"], _ssh["bytes"], _ssh["quiet_s"] = None, None, 0
+        return False
+    counters = re.findall(r"bytes_(?:acked|received):(\d+)", out)
+    if not counters:
+        return True  # no tcp_info on this kernel — hold as before
+    n, total = len(counters), sum(int(c) for c in counters)
+    moved = (_ssh["n"] != n or _ssh["bytes"] is None
+             or total - _ssh["bytes"] >= SSH_QUIET_BYTES)
+    _ssh["n"], _ssh["bytes"] = n, total
+    if moved:
+        _ssh["quiet_s"] = 0
+        return True
+    _ssh["quiet_s"] += CHECK_S
+    return _ssh["quiet_s"] < SSH_QUIET_RELEASE_S
 
 
 def _cycle(idle):
