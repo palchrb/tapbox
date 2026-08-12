@@ -399,7 +399,8 @@ def prune_cache(keep_targets):
             # for the screen's album-art disk cache (ui-art): it has its
             # own size-capped pruning in ui.py.
             if name not in keep_dirs and name not in (SPOTIFY_ART_DIR,
-                                                      UI_ART_DIR):
+                                                      UI_ART_DIR,
+                                                      UI_EMOJI_DIR):
                 shutil.rmtree(path, ignore_errors=True)
                 removed.append(name)
         elif name.startswith("catalog-") and name.endswith(".json"):
@@ -424,6 +425,10 @@ def _feed_episode_id(enclosure_url):
 
 SPOTIFY_ART_DIR = "spotify-art"  # under CACHE_DIR; prune_cache skips it
 UI_ART_DIR = "ui-art"  # the screen's album-art disk cache; also skipped
+UI_EMOJI_DIR = "ui-emoji"  # the screen's emoji sprite cache (ui.py) —
+#                            tiny PNGs built once per emoji; pruning
+#                            them here would force a re-render after
+#                            every library save
 
 
 def spotify_art_path(target):

@@ -104,6 +104,8 @@ install_if_changed() {  # <mode> <src> <dest>
 
 PKGS=(bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
       mpv yt-dlp python3-venv python3-dev i2c-tools fonts-dejavu-core
+      fonts-noto-color-emoji               # CBDT bitmap strikes: ui.py
+                                           # renders real emoji sprites
       avahi-daemon ffmpeg netcat-openbsd   # ffmpeg: HLS->m4a episode cache;
                                            # nc: power.sh battery logger
       python3-dbus python3-gi)             # BlueZ D-Bus backend (PLAN-bt-dbus.md)
