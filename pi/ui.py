@@ -3049,7 +3049,7 @@ class App:
         last_poll = start - 0.05  # eligible from the FIRST frame on —
         #                           the guard spaces polls, it must not
         #                           delay the first abort chance
-        shown = 0
+        shown, _c_ms, _s_ms = 0, 0.0, 0.0
         for t_i, p in SLIDE_SCHED:
             el = time.monotonic() - start
             if el >= SLIDE_MS:
@@ -3060,12 +3060,16 @@ class App:
                 time.sleep(t_i - el)
             off = round(p * SLIDE_TRAVEL)
             ox = 32 - off if dx < 0 else 32 + off
+            t_c = time.monotonic()
             scratch.paste(base, (0, 0))
             scratch.paste(old, (ox, ay))
             scratch.paste(new, (ox + (SLIDE_TRAVEL if dx < 0
                                       else -SLIDE_TRAVEL), ay))
             self._tile_chrome(_draw(scratch))
+            t_s = time.monotonic()
             self.display.show(scratch)
+            _c_ms += (t_s - t_c) * 1000
+            _s_ms += (time.monotonic() - t_s) * 1000
             shown += 1
             now = time.monotonic()
             if now - last_poll >= 0.05:
@@ -3077,8 +3081,11 @@ class App:
         if os.environ.get("TAPBOX_UI_ANIM_LOG") == "1":
             # the rig verdict both reviews demanded: how many of the 4
             # scheduled frames the box actually managed, and in what time
+            n = max(shown, 1)
             log(f"slide: {shown}/4 frames in "
-                f"{(time.monotonic() - start) * 1000:.0f}ms")
+                f"{(time.monotonic() - start) * 1000:.0f}ms "
+                f"(compose {_c_ms / n:.0f}ms + push {_s_ms / n:.0f}ms "
+                f"per frame)")
 
     def _flip(self, ents, step):
         """Advance the carousel index and (when eligible) run the shelf
