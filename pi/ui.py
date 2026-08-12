@@ -3066,7 +3066,7 @@ class App:
         d.text((W // 2, 206), label, font=F_MED, fill=FG, anchor="ma")
         return label, rolls
 
-    def _slide(self, old, new, dx):
+    def _slide(self, old, new, dx, label=None):
         """The ~150ms shelf glide between two cover surfaces (design
         review 2026-08-12). DEADLINE-DRIVEN: each frame has a scheduled
         time; frames the box is late for are DROPPED and the wall clock
@@ -3080,7 +3080,16 @@ class App:
         immediately after."""
         ay = 24
         base = Image.new("RGB", (W, H), BG)
-        battery_corner(_draw(base), self.system)
+        bd = _draw(base)
+        battery_corner(bd, self.system)
+        if label:
+            # the LANDING album's name, baked into the static base so
+            # it swaps instantly on frame 1 instead of blinking away
+            # for the whole glide (sofa 2026-08-12). A fresh-anchor
+            # marquee shows the start of the name — exactly what the
+            # landing render() paints, so the handover is seamless.
+            win, _ = marquee(label, 20, t0=time.monotonic())
+            bd.text((W // 2, 206), win, font=F_MED, fill=FG, anchor="ma")
         scratch = Image.new("RGB", (W, H))
         start = time.monotonic()
         last_poll = start - 0.05  # eligible from the FIRST frame on —
@@ -3145,7 +3154,7 @@ class App:
             ne.get("name") or "?", new=bool(ne.get("new")))
         # direction from the BUTTON, never the indices: Y always slides
         # the shelf left, B always right — wrap included
-        self._slide(old, new, -step)
+        self._slide(old, new, -step, label=ne.get("name") or "?")
 
     def render_cats(self, d, img):
         """Nav mode 2: ONE big category tile — flip with B/Y, A opens that

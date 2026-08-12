@@ -147,6 +147,35 @@ app.handle_carousel("y")
 assert app.car_sel == 1 and app.display.shows == 0
 print("5c. dark screen never animates OK")
 
+# 5e. the label never blinks away: the LANDING album's name is in the
+#     very first slide frame (baked into the base), byte-identical to
+#     what a from-scratch base with that label would show in the band
+class GrabDisplay(FakeDisplay):
+    def __init__(self):
+        super().__init__()
+        self.frames = []
+
+    def show(self, img):
+        super().show(img)
+        self.frames.append(img.copy())
+
+
+app = make_app(FakeInputs())
+app.display = GrabDisplay()
+app.handle_carousel("y")            # lands on "En"
+assert app.display.frames, "clean flip must have drawn frames"
+BAND = (0, 200, ui.W, 226)
+first = app.display.frames[0].crop(BAND)
+assert first.getbbox() is not None, \
+    "label band must not be blank during the glide"
+want = ui.Image.new("RGB", (ui.W, ui.H), ui.BG)
+d = ui._draw(want)
+win, _ = ui.marquee("En", 20, t0=time.monotonic())
+d.text((ui.W // 2, 206), win, font=ui.F_MED, fill=ui.FG, anchor="ma")
+assert first.tobytes() == want.crop(BAND).tobytes(), \
+    "the band must show the landing album's name, nothing else"
+print("5e. landing label visible from frame 1 — no blink OK")
+
 # 5d. dirty from an art landing mid-slide survives; marquee untouched
 app = make_app(FakeInputs())
 app.dirty = True
