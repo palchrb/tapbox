@@ -35,6 +35,7 @@ Dev mode (no HAT needed):
 """
 
 import os
+import re
 import select
 import signal
 import subprocess
@@ -56,9 +57,95 @@ from tapbox import paths as _paths  # noqa: E402 — idle activity marker
 from tapbox import radio as _radio  # noqa: E402 — artwork yields to audio
 from tapbox import netmgmt as _netmgmt  # noqa: E402 — the box's .local name
 
-api_get = boxapi.get
-api_post = boxapi.post
-api_put = boxapi.put
+# --- screen-safe text ------------------------------------------------------
+# DejaVuSans (the only font install.sh ships) draws .notdef tofu for the
+# modern pictograph blocks, so a feed title like "🎃 Grøsserspesial"
+# rendered as a black box on the screen (field 2026-08-11). Fix it HERE,
+# at the UI's own API edge, so the screen is the only thing affected —
+# bookmarks, the PWA and the car's AVRCP display all keep the original
+# text, and they have fonts that can draw it.
+#
+# Font coverage was counted from the shipped DejaVu 2.37 cmap:
+#   HAS  music ♪♫♬, stars ★☆✦, hearts ♥♡❤, weather ☀☁☃❄⚡, ticks ✓✔,
+#        shapes ▶◀■●▲, all arrows/math/box-drawing, and 64 of the 80
+#        Emoticons faces (😀😂😍😴 ...)
+#   LACKS Misc Symbols & Pictographs (12 of 768: 🎃🎵🔥✨🎉 ...) and the
+#        whole Transport block (🚀🚂 ...)
+# So: translate what has a good twin, drop what does not, and never
+# touch text the font can already draw.
+_EMOJI_MAP = {
+    "\U0001F3B5": "♪", "\U0001F3B6": "♪",   # 🎵🎶 -> ♪
+    "\U0001F3BC": "♪", "\U0001F3A7": "♪",   # 🎼🎧
+    "\U0001F3A4": "♪", "\U0001F399": "♪",   # 🎤🎙
+    "\U0001F31F": "★", "⭐": "★",       # 🌟⭐ -> ★
+    "✨": "★", "\U0001F4AB": "★",       # ✨💫
+    "\U0001F3C6": "★", "\U0001F389": "★",   # 🏆🎉
+    "\U0001F9E1": "♥", "\U0001F49B": "♥",   # 🧡💛 -> ♥
+    "\U0001F49A": "♥", "\U0001F499": "♥",   # 💚💙
+    "\U0001F49C": "♥", "\U0001F5A4": "♥",   # 💜🖤
+    "\U0001F90D": "♥", "\U0001F496": "♥",   # 🤍💖
+    "\U0001F495": "♥", "\U0001F498": "♥",   # 💕💘
+    "\U0001F31E": "☀", "\U0001F319": "☾",   # 🌞 -> ☀, 🌙 -> ☾
+    "\U0001F31B": "☾", "\U0001F31C": "☾",   # 🌛🌜
+    "\U0001F327": "☂", "\U0001F328": "☃",   # 🌧 -> ☂, 🌨 -> ☃
+    "\U0001F525": "▲",                           # 🔥 -> ▲
+    "\U0001F451": "♔",                           # 👑 -> ♔ (chess king)
+    "✅": "✓", "❌": "✗",           # ✅ -> ✓, ❌ -> ✗
+    # the Emoticons faces DejaVu is missing -> its nearest neighbour
+    "\U0001F642": "\U0001F60A", "\U0001F641": "\U0001F61E",   # 🙂🙁
+    "\U0001F624": "\U0001F620", "\U0001F62C": "\U0001F610",   # 😤😬
+    "\U0001F644": "\U0001F612",                               # 🙄
+    "\U0001F923": "\U0001F602", "\U0001F970": "\U0001F60D",   # 🤣🥰
+}
+# Everything else in the pictograph/transport/flag planes is dropped,
+# with the invisible modifiers (variation selectors, ZWJ, keycap,
+# skin tones) that would otherwise leave stray boxes behind. The
+# Emoticons block is NOT dropped wholesale — DejaVu draws 64 of its 80
+# faces — so only the codepoints measured as missing are listed here
+# (verified against DejaVu 2.37 by tests/ui_emoji.py).
+_EMOJI_DROP = re.compile(
+    "[\U0001F300-\U0001F5FF"          # misc symbols & pictographs
+    "\U0001F624\U0001F62C"            # the two missing faces mid-block
+    "\U0001F641\U0001F642\U0001F644"  # ...and these
+    "\U0001F645-\U0001F64F"           # the gesture people (🙏🙌 ...)
+    "\U0001F650-\U0001FAFF"           # ornaments, transport, supplemental
+    "\U0001F1E6-\U0001F1FF"           # regional indicators (flags)
+    "︎️‍⃣]")      # the invisibles
+_SPACES = re.compile(r"  +")
+
+
+def screen_text(s):
+    """One string, minus anything the screen's font cannot draw."""
+    for src, dst in _EMOJI_MAP.items():
+        if src in s:
+            s = s.replace(src, dst)
+    if _EMOJI_DROP.search(s):
+        s = _SPACES.sub(" ", _EMOJI_DROP.sub("", s)).strip()
+    return s
+
+
+def _screen_safe(obj):
+    """Same, over a decoded API payload. Non-strings pass through as
+    themselves — ids, urls and numbers must survive untouched."""
+    if isinstance(obj, str):
+        return screen_text(obj)
+    if isinstance(obj, dict):
+        return {k: _screen_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_screen_safe(v) for v in obj]
+    return obj
+
+
+def api_get(*a, **kw):
+    return _screen_safe(boxapi.get(*a, **kw))
+
+
+def api_post(*a, **kw):
+    return _screen_safe(boxapi.post(*a, **kw))
+
+
+def api_put(*a, **kw):
+    return _screen_safe(boxapi.put(*a, **kw))
 
 W = H = 240
 PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
