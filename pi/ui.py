@@ -451,6 +451,20 @@ def _draw(img):
 W = H = 240
 PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
 
+# playful-ui: the carousel shelf slide. Force-off under the PNG dev
+# backend so every existing test stays byte- AND call-count-stable (QA
+# review 2026-08-12 — the gate must key on the env, not the display
+# type: most tests pair TAPBOX_UI_PNG with a hand-rolled FakeDisplay).
+# TAPBOX_UI_ANIM=0 kills it on the box too.
+UI_ANIM = (not PNG_PATH) and os.environ.get("TAPBOX_UI_ANIM", "1") != "0"
+SLIDE_MS = 0.150          # wall-clock cap for one glide
+# (scheduled time, ease-out offset) — the two END frames are cut on
+# purpose: p=0 is just "label pops out" and the landing is painted by
+# the loop's render() WITH label/progress, so it arrives with the stop
+SLIDE_SCHED = ((0.030, 0.35), (0.060, 0.65), (0.090, 0.85),
+               (0.120, 0.95))
+SLIDE_TRAVEL = 208        # 176px cover + 32px shelf gap = full clearance
+
 # Album-art disk cache: remote covers are fetched ONCE ever, then served
 # from disk across track changes, UI restarts and reboots. Capped by
 # _art_disk_save's pruning; content.py's prune_cache leaves the dir alone.
@@ -1146,6 +1160,7 @@ class App:
         self.status = {}
         self.system = {}
         self.bt = {"devices": []}
+        self._pending = []          # events caught mid-slide (mash rule)
         self.sonos = {"players": []}  # cached speaker list (menu gating)
         self.bt_found = []
         self.settings = {"screen_timeout_s": 30, "idle_shutdown_min": 30,
@@ -1901,12 +1916,12 @@ class App:
                 if in_vol:
                     self._volume_mode(delta=5)
                 else:
-                    self.car_sel = (self.car_sel + 1) % len(ents)
+                    self._flip(ents, +1)
             elif ev in ("b", "b_long"):
                 if in_vol:
                     self._volume_mode(delta=-5)
                 else:
-                    self.car_sel = (self.car_sel - 1) % len(ents)
+                    self._flip(ents, -1)
             elif ev == "a":
                 e = ents[self.car_sel % len(ents)]
                 if "spotify" in e["target"] and self._no_internet():
@@ -2913,28 +2928,46 @@ class App:
             self.bt_connecting_until = 0.0
         threading.Thread(target=go, daemon=True).start()
 
-    def _cover_tile(self, d, img, art, name, new=False):
-        """The shared big-tile layout: a cover (or a stable colored
-        initial), the B/Y flip chevrons, the A action marker, and the
-        sliding name. `new` draws the fresh-content dot. Returns
-        (drawn_name, marquee_flag); callers add any per-view overlay
-        (the now-playing underline/progress)."""
-        ax, ay = (W - 176) // 2, 24
-        if art:
-            img.paste(art, ((W - art.width) // 2, ay))
+    def _cover_surface(self, art, name, new=False):
+        """One 176x176 cover as a standalone surface — the tile face,
+        and what the shelf slide moves. Real art comes straight from
+        the cache (copied only when the new-dot must be drawn on it); a
+        missing cover becomes the same stable colored-initial tile, so
+        placeholders slide exactly like art does (design review
+        2026-08-12: one source of truth for the face, or the two
+        renderings drift)."""
+        if art is not None and not new:
+            return art  # the cached object, pasted read-only
+        if art is not None:
+            surf = art.copy()
+            d = _draw(surf)
         else:
             # no cover: a colored tile with the initial — stable color
             # per name so kids still recognise "their" tile
+            surf = Image.new("RGB", (176, 176), BG)
+            d = _draw(surf)
             palette = [(196, 92, 82), (206, 148, 70), (98, 158, 88),
                        (84, 138, 186), (142, 108, 178), (186, 98, 140)]
             color = palette[sum(name.encode()) % len(palette)]
-            d.rounded_rectangle([ax, ay, ax + 176, ay + 176], radius=14,
-                                fill=color)
-            d.text((W // 2, ay + 88), (name[:1] or "?").upper(),
+            d.rounded_rectangle([0, 0, 176, 176], radius=14, fill=color)
+            d.text((88, 88), (name[:1] or "?").upper(),
                    font=font(96), fill=FG, anchor="mm")
-        # Markers sit where the PHYSICAL buttons are: the Pirate Audio
-        # buttons are inset from the screen corners — centers land around
-        # y=55 (A/X) and y=185 (B/Y) on the 240px panel (field-calibrated).
+        if new:
+            # fresh-content dot, top-right corner of the cover — a dark
+            # ring lifts it off any artwork. Cleared once the show is
+            # played; never changes what A does.
+            cx, cy, r = 176 - 15, 15, 8
+            d.ellipse([cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2],
+                      fill=BG)
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=GOOD)
+        return surf
+
+    def _tile_chrome(self, d):
+        """The static big-tile markers. Sit where the PHYSICAL buttons
+        are: the Pirate Audio buttons are inset from the screen corners
+        — centers land around y=55 (A/X) and y=185 (B/Y) on the 240px
+        panel (field-calibrated). Drawn ON TOP of whatever the covers
+        are doing (they pass under these during a slide)."""
         # flip chevrons < > (B / Y), dim outlines hugging the screen edges
         d.line([(17, 177), (6, 185), (17, 193)], fill=DIM, width=3,
                joint="curve")
@@ -2943,17 +2976,86 @@ class App:
         # A (top left): the action here (open / play), so it gets the
         # highlight color; hugs the edge like the chevrons
         d.polygon([(5, 47), (5, 63), (19, 55)], fill=HILITE)
-        if new:
-            # fresh-content dot, top-right corner of the cover — a dark
-            # ring lifts it off any artwork. Cleared once the show is
-            # played; never changes what A does.
-            cx, cy, r = ax + 176 - 15, ay + 15, 8
-            d.ellipse([cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2],
-                      fill=BG)
-            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=GOOD)
+
+    def _cover_tile(self, d, img, art, name, new=False):
+        """The shared big-tile layout: the cover face (_cover_surface),
+        the B/Y flip chevrons, the A action marker, and the sliding
+        name. Returns (drawn_name, marquee_flag); callers add any
+        per-view overlay (the now-playing underline/progress)."""
+        ax, ay = (W - 176) // 2, 24
+        surf = self._cover_surface(art, name, new=new)
+        img.paste(surf, ((W - surf.width) // 2, ay))
+        self._tile_chrome(d)
         label, rolls = marquee(name, 20)
         d.text((W // 2, 206), label, font=F_MED, fill=FG, anchor="ma")
         return label, rolls
+
+    def _slide(self, old, new, dx):
+        """The ~150ms shelf glide between two cover surfaces (design
+        review 2026-08-12). DEADLINE-DRIVEN: each frame has a scheduled
+        time; frames the box is late for are DROPPED and the wall clock
+        is hard-capped, so a slow compose degrades to fewer frames —
+        never to a UI that lags the finger. MASH RULE: the inputs are
+        polled between frames (>=50ms apart — faster corrupts the
+        sampler's bounce guard and manufactures phantom holds); any
+        event aborts the glide and lands in self._pending for the main
+        loop. This is never the authoritative frame: the caller's
+        render() paints the landed state (label, progress, overlays)
+        immediately after."""
+        ay = 24
+        base = Image.new("RGB", (W, H), BG)
+        battery_corner(_draw(base), self.system)
+        scratch = Image.new("RGB", (W, H))
+        start = time.monotonic()
+        last_poll = start - 0.05  # eligible from the FIRST frame on —
+        #                           the guard spaces polls, it must not
+        #                           delay the first abort chance
+        for t_i, p in SLIDE_SCHED:
+            el = time.monotonic() - start
+            if el >= SLIDE_MS:
+                break                    # out of time — render() lands it
+            if el > t_i + 0.02:
+                continue                 # too late for this frame: drop
+            if el < t_i:
+                time.sleep(t_i - el)
+            off = round(p * SLIDE_TRAVEL)
+            ox = 32 - off if dx < 0 else 32 + off
+            scratch.paste(base, (0, 0))
+            scratch.paste(old, (ox, ay))
+            scratch.paste(new, (ox + (SLIDE_TRAVEL if dx < 0
+                                      else -SLIDE_TRAVEL), ay))
+            self._tile_chrome(_draw(scratch))
+            self.display.show(scratch)
+            now = time.monotonic()
+            if now - last_poll >= 0.05:
+                last_poll = now
+                ev = self.inputs.poll(0)
+                if ev:
+                    self._pending.extend(ev)
+                    return               # abort: the finger is ahead
+
+    def _flip(self, ents, step):
+        """Advance the carousel index and (when eligible) run the shelf
+        slide. The index is COMMITTED before the first frame, so an A
+        caught mid-slide acts on the landed album by construction."""
+        old_sel = self.car_sel % len(ents)
+        self.car_sel = (old_sel + step) % len(ents)
+        if (not UI_ANIM or self.inputs is None or not self.display.on
+                or self.car_sel == old_sel):
+            return
+        st = self.status or {}
+        if st.get("bt_lost") or st.get("bt_waiting") or st.get("bt_ready"):
+            return  # a modal popup must not vanish for 150ms
+        oe, ne = ents[old_sel], ents[self.car_sel]
+        old = self._cover_surface(
+            self.artwork_async(oe.get("image"), 176, square=True),
+            oe.get("name") or "?", new=bool(oe.get("new")))
+        new = self._cover_surface(
+            self.artwork_async(ne.get("image"), 176, square=True),
+            ne.get("name") or "?", new=bool(ne.get("new")))
+        # direction from the BUTTON, never the indices: Y always slides
+        # the shelf left, B always right — wrap included
+        self._slide(old, new, -step)
 
     def render_cats(self, d, img):
         """Nav mode 2: ONE big category tile — flip with B/Y, A opens that
@@ -3150,7 +3252,14 @@ class App:
             # Screen off = deep idle: long ticks, and a button press sets
             # the wake event so poll() returns INSTANTLY — no latency, and
             # 8x fewer wakeups than the old 0.6s polling
-            events = self.inputs.poll(TICK_S if self.display.on else 5.0)
+            if getattr(self, "_pending", None):
+                # events caught by a slide's mid-frame poll: handle them
+                # NOW, before polling — a mash chain gets zero added
+                # latency and chronological order is preserved
+                events, self._pending = self._pending, []
+            else:
+                events = self.inputs.poll(
+                    TICK_S if self.display.on else 5.0)
             if events:
                 woke = not self.display.on
                 self.last_input = time.monotonic()
