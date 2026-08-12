@@ -627,6 +627,21 @@ class PngDisplay:
         self.brightness = pct
 
 
+def _rgb565(img, rotation=90):
+    """PIL RGB -> the ST7789's wire format (big-endian RGB565), same
+    layout as the Pimoroni library's image_to_data — but returned as
+    bytes. The library ends its conversion with .tolist(), turning
+    every frame into a 115200-entry Python list; on the 600MHz
+    powersave core that is ~60ms of the measured 75ms/frame push
+    (rig 2026-08-12). numpy-to-bytes does the same job in a few ms."""
+    import numpy as np
+    a = np.rot90(np.asarray(img.convert("RGB"), dtype=np.uint16),
+                 rotation // 90)
+    c = ((a[..., 0] & 0xF8) << 8) | ((a[..., 1] & 0xFC) << 3) \
+        | (a[..., 2] >> 3)
+    return c.astype(">u2").tobytes()
+
+
 class St7789Display:
     def __init__(self):
         import st7789  # Pimoroni library
@@ -638,6 +653,7 @@ class St7789Display:
             backlight=None, spi_speed_hz=80 * 1000 * 1000)
         self.on = True
         self.brightness = 100
+        self._fast = os.environ.get("TAPBOX_FAST_PUSH", "1") != "0"
         self._bl = None
         try:
             from gpiozero import PWMLED
@@ -648,6 +664,20 @@ class St7789Display:
                 f"on/off only")
 
     def show(self, img):
+        # Fast path: convert ourselves, push bytes through the library's
+        # own set_window()/data() (they drive the DC pin correctly).
+        # ANY surprise — older lib without these methods, spidev refusing
+        # bytes — falls back to the stock display() forever after.
+        if self._fast:
+            try:
+                buf = _rgb565(img, 90)
+                self.disp.set_window()
+                self.disp.data(buf)
+                return
+            except Exception as e:
+                self._fast = False
+                log(f"st7789 fast push off ({e.__class__.__name__}: {e})"
+                    f" — using library display()")
         self.disp.display(img)
 
     def _apply(self):
