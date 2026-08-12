@@ -1808,6 +1808,13 @@ class Orchestrator:
                 # through to the spotify-replay path and log the
                 # misleading 'nothing to control' (which also risked
                 # respawning the wrong source).
+                if action in ("next", "prev"):
+                    # stamp BEFORE the command: the player's watchdog
+                    # must never see the resulting track change without
+                    # the human context (field 2026-08-12: four mashed
+                    # nexts read as a dead output and rolled the queue
+                    # back to the last audible episode, three times)
+                    _radio.touch_user_skip()
                 res = mpv_ipc(cmd)
                 if res.get("error") == "success":
                     log(f"{action} -> mpv")

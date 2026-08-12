@@ -313,6 +313,22 @@ def play_spotify(target, fresh=False, exact=False, start_uri=None):
         log(f"now playing: {track['name']} — {artists}")
 
 
+def _count_fast_skip(fast_skips, dwell_s):
+    """Dead-output evidence bookkeeping for the watchdog below. A
+    sub-10s track dwell counts toward "mpv is silently chewing the
+    queue" — EXCEPT right after a human skip: the daemon stamps a
+    marker on every user next/prev, and rapid changes inside its
+    TTL are a finger, not a dying sink (field 2026-08-12: four
+    mashed nexts hit fast_skips>=3 and rolled the kid back to the
+    last audible episode, three times in one minute). The
+    not-audio_ready() clause below is untouched, so a sink that is
+    GENUINELY gone still triggers on the very next track change,
+    mash or no mash."""
+    if radio.user_skip_fresh():
+        return 0
+    return fast_skips + 1 if dwell_s < 10 else 0
+
+
 def main():
     args = sys.argv[1:]
     fresh = False
@@ -655,8 +671,8 @@ def main():
             if path and path != prev_path:
                 was_first = prev_path is None
                 if not was_first and not paused:
-                    fast_skips = fast_skips + 1 \
-                        if now_m - track_started < 10 else 0
+                    fast_skips = _count_fast_skip(
+                        fast_skips, now_m - track_started)
                 prev_path, track_started = path, now_m
                 # dead output = mpv chews through the queue erroring
                 # track after track; with the audio path gone there is

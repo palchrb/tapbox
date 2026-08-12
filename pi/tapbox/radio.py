@@ -34,6 +34,8 @@ BUSY_FILE = os.path.join(_RUN, "tapbox-radio-busy")
 PAGING_FILE = os.path.join(_RUN, "tapbox-bt-paging")
 BUSY_TTL_S = float(os.environ.get("TAPBOX_RADIO_BUSY_TTL", "20"))
 PAGING_TTL_S = float(os.environ.get("TAPBOX_BT_PAGING_TTL", "10"))
+SKIP_FILE = os.path.join(_RUN, "tapbox-user-skip")
+SKIP_TTL_S = float(os.environ.get("TAPBOX_USER_SKIP_TTL", "12"))
 
 
 def _touch(path):
@@ -62,6 +64,17 @@ def touch_busy():
 
 def busy():
     return _fresh(BUSY_FILE, BUSY_TTL_S)
+
+
+def touch_user_skip():
+    """A HUMAN just skipped a track (daemon's next/prev to mpv). The
+    player's dead-output watchdog reads this: rapid track changes right
+    after a user skip are a finger, not a dying sink."""
+    _touch(SKIP_FILE)
+
+
+def user_skip_fresh():
+    return _fresh(SKIP_FILE, SKIP_TTL_S)
 
 
 def touch_paging():
