@@ -835,6 +835,10 @@ Before=shutdown.target
 Conflicts=shutdown.target
 
 [Service]
+# playful-ui experiment: log every carousel slide's frame count/timing
+# ("slide: N/4 frames in Xms") — the rig verdict on the 150ms design.
+# Branch-only; drops away when the experiment merges or dies.
+Environment=TAPBOX_UI_ANIM_LOG=1
 ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-ui
 Restart=always
 RestartSec=5
