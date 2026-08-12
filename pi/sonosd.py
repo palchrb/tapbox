@@ -342,74 +342,79 @@ class Session:
         self.uid, self.kind = uid, kind
         spk = self._spk()
         start = float(body.get("start_s") or 0)
+        unhush = self._hush(spk, start)
         built = None
-        if kind == "url":
-            uri = body["uri"]
-            try:
-                # the transport plays this uri DIRECTLY — the queue is
-                # not involved. Clear it anyway: a leftover spotify queue
-                # in the Sonos app next to a playing podcast read as "the
-                # queue is wrong" (field 2026-08-09, cosmetic)
+        try:
+            if kind == "url":
+                uri = body["uri"]
+                try:
+                    # the transport plays this uri DIRECTLY — the queue is
+                    # not involved. Clear it anyway: a leftover spotify queue
+                    # in the Sonos app next to a playing podcast read as "the
+                    # queue is wrong" (field 2026-08-09, cosmetic)
+                    spk.clear_queue()
+                except Exception:
+                    pass
+                built = didl(uri, body.get("title"), body.get("artist"),
+                             body.get("album"), body.get("art"),
+                             body.get("duration_s"))
+                spk.avTransport.SetAVTransportURI([
+                    ("InstanceID", 0), ("CurrentURI", uri),
+                    ("CurrentURIMetaData", built)])
+                spk.avTransport.Play([("InstanceID", 0), ("Speed", "1")])
+            elif kind == "nrk_program":
+                uri = nrk_program_uri(spk.ip_address, body["series"],
+                                      body["program_id"])
+                built = didl(uri, body.get("title"), body.get("artist"),
+                             body.get("album"), body.get("art"),
+                             body.get("duration_s"),
+                             upnp_class="object.item.audioItem.show",
+                             protocol="sonos.com-http:*:audio/mpeg:*",
+                             desc=nrk_desc())
+                spk.avTransport.SetAVTransportURI([
+                    ("InstanceID", 0), ("CurrentURI", uri),
+                    ("CurrentURIMetaData", built)])
+                spk.avTransport.Play([("InstanceID", 0), ("Speed", "1")])
+            elif kind == "spotify_sharelink":
+                from soco.plugins.sharelink import ShareLinkPlugin
+                # NORMAL kills family shuffle/repeat leftovers AND makes the
+                # queue's play order equal its index order — the legality of
+                # every positional jump rests on this (architect Q2).
+                try:
+                    spk.play_mode = "NORMAL"
+                except Exception:
+                    pass
                 spk.clear_queue()
-            except Exception:
-                pass
-            built = didl(uri, body.get("title"), body.get("artist"),
-                         body.get("album"), body.get("art"),
-                         body.get("duration_s"))
-            spk.avTransport.SetAVTransportURI([
-                ("InstanceID", 0), ("CurrentURI", uri),
-                ("CurrentURIMetaData", built)])
-            spk.avTransport.Play([("InstanceID", 0), ("Speed", "1")])
-        elif kind == "nrk_program":
-            uri = nrk_program_uri(spk.ip_address, body["series"],
-                                  body["program_id"])
-            built = didl(uri, body.get("title"), body.get("artist"),
-                         body.get("album"), body.get("art"),
-                         body.get("duration_s"),
-                         upnp_class="object.item.audioItem.show",
-                         protocol="sonos.com-http:*:audio/mpeg:*",
-                         desc=nrk_desc())
-            spk.avTransport.SetAVTransportURI([
-                ("InstanceID", 0), ("CurrentURI", uri),
-                ("CurrentURIMetaData", built)])
-            spk.avTransport.Play([("InstanceID", 0), ("Speed", "1")])
-        elif kind == "spotify_sharelink":
-            from soco.plugins.sharelink import ShareLinkPlugin
-            # NORMAL kills family shuffle/repeat leftovers AND makes the
-            # queue's play order equal its index order — the legality of
-            # every positional jump rests on this (architect Q2).
-            try:
-                spk.play_mode = "NORMAL"
-            except Exception:
-                pass
-            spk.clear_queue()
-            r = ShareLinkPlugin(spk).add_share_link_to_queue(body["uri"])
-            # FirstTrackNumberEnqueued: never assume the queue starts at
-            # 1, even after clear_queue (architect Q1 outbound)
-            try:
-                self.q_base = int(r) if r else 1
-            except (TypeError, ValueError):
-                self.q_base = 1
-            try:
-                self.q_len = int(spk.queue_size)
-            except Exception:
-                self.q_len = None
-            idx = int(body.get("track_index") or 0)
-            spk.play_from_queue(self.q_base - 1 + idx)
-            uri = body["uri"]
-        else:
-            raise ValueError(f"unknown kind: {kind}")
-        self.uri = uri
-        self.armed = True
-        self._didl_checked = False
-        self._frozen, self._last_pos, self._retried_at = 0, None, None
-        # new session: forget the old speaker's volume/topology and
-        # refresh on the first poll; poll fast while it settles
-        self._aux = {"volume": None, "grouped_away": False,
-                     "coordinator": None}
-        self._aux_n = 0
-        self._fast_at = time.monotonic()
-        sought = self._seek_settled(spk, start) if start >= 5 else True
+                r = ShareLinkPlugin(spk).add_share_link_to_queue(body["uri"])
+                # FirstTrackNumberEnqueued: never assume the queue starts at
+                # 1, even after clear_queue (architect Q1 outbound)
+                try:
+                    self.q_base = int(r) if r else 1
+                except (TypeError, ValueError):
+                    self.q_base = 1
+                try:
+                    self.q_len = int(spk.queue_size)
+                except Exception:
+                    self.q_len = None
+                idx = int(body.get("track_index") or 0)
+                spk.play_from_queue(self.q_base - 1 + idx)
+                uri = body["uri"]
+            else:
+                raise ValueError(f"unknown kind: {kind}")
+            self.uri = uri
+            self.armed = True
+            self._didl_checked = False
+            self._frozen, self._last_pos, self._retried_at = 0, None, None
+            # new session: forget the old speaker's volume/topology and
+            # refresh on the first poll; poll fast while it settles
+            self._aux = {"volume": None, "grouped_away": False,
+                         "coordinator": None}
+            self._aux_n = 0
+            self._fast_at = time.monotonic()
+            sought = self._seek_settled(spk, start) \
+                if start >= 5 else True
+        finally:
+            unhush()
         self._wake.set()
         return {"ok": True, "uid": uid, "uri": uri,
                 "sought": bool(sought), "didl": built,
@@ -417,6 +422,29 @@ class Session:
                 "queue_len": getattr(self, "q_len", None),
                 "play_mode": "NORMAL" if kind == "spotify_sharelink"
                 else None}
+
+    def _hush(self, spk, start_s):
+        """A resume cannot seek until the transport is PLAYING (701,
+        see _seek_settled), so ~1s always plays from 0:00 first — and
+        the field hears that second before the jump (2026-08-12). Mute
+        the speaker across the Play->Seek window instead: same blip,
+        silent. Returns a restore() that puts the OLD mute state back
+        (a deliberately muted speaker stays muted); both directions are
+        best-effort and restore never raises."""
+        if start_s < 5:
+            return lambda: None
+        try:
+            was = bool(spk.mute)
+            spk.mute = True
+        except Exception:
+            return lambda: None
+
+        def restore():
+            try:
+                spk.mute = was
+            except Exception:
+                pass
+        return restore
 
     def _seek_settled(self, spk, start_s, timeout=8):
         """SetURI -> Play -> wait PLAYING -> Seek. Against a STOPPED
@@ -498,9 +526,14 @@ class Session:
             absidx = base - 1 + pos
             if qlen is not None:
                 absidx = max(base - 1, min(absidx, base - 2 + qlen))
-            spk.play_from_queue(absidx)
             start = float(body.get("start_s") or 0)
-            sought = self._seek_settled(spk, start) if start >= 5 else True
+            unhush = self._hush(spk, start)
+            try:
+                spk.play_from_queue(absidx)
+                sought = self._seek_settled(spk, start) \
+                    if start >= 5 else True
+            finally:
+                unhush()
             self._wake.set()
             return {"ok": True, "sought": bool(sought)}
         return {"ok": True}
