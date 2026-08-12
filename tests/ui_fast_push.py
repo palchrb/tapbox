@@ -70,42 +70,67 @@ assert ui._rgb565(img, 90) == reference(img, 90), \
     "fast conversion must match the library layout byte-for-byte"
 print("2. full-frame equivalence with the reference conversion OK")
 
-# 3. the library surprising us (any exception in the low-level calls)
-#    switches to stock display() — permanently, with one log line
-class FakeDisp:
+# 3. the happy path: set_window, DC flipped to data via the library's
+#    own data(b""), then the WHOLE frame in one writebytes2 — the
+#    exact _rgb565 bytes, no chunk loop, nothing read back
+class FakeSpi:
     def __init__(self):
+        self.written = []
+
+    def writebytes2(self, buf):
+        self.written.append(bytes(buf))
+
+
+class FakeDisp:
+    def __init__(self, spi=None):
         self.windows = 0
+        self.dc_data = 0
         self.displayed = []
+        if spi is not None:
+            self._spi = spi
 
     def set_window(self):
         self.windows += 1
 
     def data(self, buf):
-        raise TypeError("spidev says no")
+        assert buf == b"", "fast path must not push pixels via data()"
+        self.dc_data += 1
 
     def display(self, im):
         self.displayed.append(im)
 
 
+spi = FakeSpi()
 d = object.__new__(ui.St7789Display)
-d.disp = FakeDisp()
+d.disp = FakeDisp(spi)
 d._fast = True
 im = Image.new("RGB", (240, 240), (10, 20, 30))
+d.show(im)
+assert d.disp.windows == 1 and d.disp.dc_data == 1
+assert spi.written == [ui._rgb565(im, 90)], \
+    "the frame on the wire must be the _rgb565 bytes, in one write"
+assert d.disp.displayed == []
+print("3. happy path: one writebytes2 with the exact frame bytes OK")
+
+# 4. the library surprising us (no _spi, spidev without writebytes2,
+#    anything) switches to stock display() — permanently, one log line
+d = object.__new__(ui.St7789Display)
+d.disp = FakeDisp()                      # no _spi attribute at all
+d._fast = True
 d.show(im)
 assert d.disp.displayed == [im], "failed fast path must still paint"
 assert d._fast is False
 d.show(im)
 assert d.disp.windows == 1, "fallback must be permanent, not per-frame"
 assert len(d.disp.displayed) == 2
-print("3. fallback paints the frame and sticks OK")
+print("4. fallback paints the frame and sticks OK")
 
-# 4. TAPBOX_FAST_PUSH=0 is the kill switch (mirrors _fast init)
-assert os.environ.get("TAPBOX_FAST_PUSH", "1") != "0" or True
+# 5. TAPBOX_FAST_PUSH=0 is the kill switch (mirrors _fast init)
 d2 = object.__new__(ui.St7789Display)
-d2.disp = FakeDisp()
+d2.disp = FakeDisp(FakeSpi())
 d2._fast = False           # what __init__ does under TAPBOX_FAST_PUSH=0
 d2.show(im)
 assert d2.disp.windows == 0 and len(d2.disp.displayed) == 1
-print("4. kill switch goes straight to library display() OK")
+print("5. kill switch goes straight to library display() OK")
 
 print("\nFAST PUSH OK — same bytes on the wire, no 115200-entry list.")
