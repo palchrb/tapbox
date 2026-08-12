@@ -456,7 +456,14 @@ PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
 # _art_disk_save's pruning; content.py's prune_cache leaves the dir alone.
 UI_ART_DIR = os.path.join(
     os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache"), "ui-art")
-UI_ART_MAX_FILES = int(os.environ.get("TAPBOX_UI_ART_MAX", "400"))
+# Sized to CONVERGE for the real library: a 212-episode show with
+# per-episode art touches 2-3 sizes each (56 rows / 128 / 176), so 400
+# thrashed — every save evicted a thumb that the next browse re-decoded
+# and re-saved, forever (field 2026-08-12: Snipp Snapp Snute fast-skip
+# felt slow while Hallo Bablo, whose episodes share one cover, flew).
+# Thumbs are 5-15KB; 1600 is <=25MB against a 20GB cache partition.
+UI_ART_MAX_FILES = int(os.environ.get("TAPBOX_UI_ART_MAX", "1600"))
+_art_saves = [0]  # cap check amortized: a listdir per save was a tax
 
 
 def _art_disk(ref, size, square=False, mtime=None):
@@ -495,12 +502,14 @@ def _art_disk_save(img, path):
         os.makedirs(UI_ART_DIR, exist_ok=True)
         img.save(path + ".part", "JPEG", quality=85)
         os.replace(path + ".part", path)
-        names = [os.path.join(UI_ART_DIR, n) for n in os.listdir(UI_ART_DIR)
-                 if n.endswith(".jpg")]
-        if len(names) > UI_ART_MAX_FILES:
-            names.sort(key=os.path.getmtime)
-            for p in names[:len(names) - UI_ART_MAX_FILES]:
-                os.remove(p)
+        _art_saves[0] += 1
+        if _art_saves[0] % 25 == 0:  # scan the dir 1-in-25 saves, not per
+            names = [os.path.join(UI_ART_DIR, n)
+                     for n in os.listdir(UI_ART_DIR) if n.endswith(".jpg")]
+            if len(names) > UI_ART_MAX_FILES:
+                names.sort(key=os.path.getmtime)
+                for p in names[:len(names) - UI_ART_MAX_FILES]:
+                    os.remove(p)
     except OSError:
         pass
 FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
