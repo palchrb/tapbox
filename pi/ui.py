@@ -1037,10 +1037,17 @@ def wrap_text(d, text, font, max_w):
 MARQUEE_STEP_S = 0.35  # how fast a too-long selected label slides
 
 
-def marquee(text, maxlen):
+def marquee(text, maxlen, t0=0.0):
     """(visible_window, scrolling?) for a list label. A too-long SELECTED
     row slides through its text — pause at each end — so the whole name
     can be read, instead of forever showing just the start.
+
+    t0 is the PHASE ANCHOR: the moment this label became the selected
+    one (App._marquee_t0). Without it the window position came from the
+    global wall clock, so landing on a tile showed a random MIDDLE of
+    the title instead of its start (field 2026-08-12). With the anchor,
+    a fresh selection rests at the start for the lead-in steps, then
+    slides — the start of the name is always what you see first.
 
     An emoji cluster counts as ONE character here but paints ~TWO chars
     wide (sprite advance ≈ line height), so each live cluster is
@@ -1054,12 +1061,13 @@ def marquee(text, maxlen):
         return text, False
     span = len(text) + n - maxlen
     period = span + 8  # 4 resting steps at each end
-    step = int(time.monotonic() / MARQUEE_STEP_S) % period
+    step = int((time.monotonic() - t0) / MARQUEE_STEP_S) % period
     off = max(0, min(span, step - 4))
     return text[off:off + maxlen], True
 
 
-def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
+def draw_list(draw, title, items, sel, system, hint=None, maxlen=24,
+              t0=0.0):
     draw.text((10, 4), title, font=F_MED, fill=DIM)
     battery_corner(draw, system)
     top, row_h, visible = 30, 30, 6
@@ -1073,7 +1081,7 @@ def draw_list(draw, title, items, sel, system, hint=None, maxlen=24):
                                    radius=6, fill=(40, 40, 60))
         label, right = item if isinstance(item, tuple) else (item, None)
         if idx == sel:
-            label, rolls = marquee(label, maxlen)
+            label, rolls = marquee(label, maxlen, t0=t0)
             scrolling = scrolling or rolls
         else:
             label = label[:maxlen]
@@ -2457,13 +2465,15 @@ class App:
             rolls = draw_list(d, "TapBox", self.current_items(), self.sel,
                               self.system,
                               hint="A: select   hold A+B: settings",
-                              maxlen=17 if art else 24)
+                              maxlen=17 if art else 24,
+                              t0=self._marquee_t0("home", self.sel))
             if art:
                 img.paste(art, (W - art.width - 6, 26))
         elif self.view == "entries":
             art = self.entry_art()
             rolls = draw_list(d, self.section["name"], self.current_items(),
-                              self.sel, self.system, maxlen=17 if art else 24)
+                              self.sel, self.system, maxlen=17 if art else 24,
+                              t0=self._marquee_t0("entries", self.sel))
             if art:
                 img.paste(art, (W - art.width - 6, 26))
         elif self.view == "episodes":
@@ -2471,35 +2481,42 @@ class App:
             rolls = draw_list(d, self.expanded.get("name") or "Episoder",
                               self.current_items(), self.sel, self.system,
                               hint="✓ = downloaded (plays offline)",
-                              maxlen=17 if art else 24)
+                              maxlen=17 if art else 24,
+                              t0=self._marquee_t0("episodes", self.sel))
             if art:
                 img.paste(art, (W - art.width - 6, 26))
         elif self.view == "settings":
             rolls = draw_list(d, "Settings", self.current_items(), self.sel,
-                              self.system, hint="A: change   B: back")
+                              self.system, hint="A: change   B: back",
+                              t0=self._marquee_t0("settings", self.sel))
         elif self.view == "bt":
             rolls = draw_list(d, "Bluetooth speaker", self.current_items(),
                               self.sel, self.system,
-                              hint="● connected   ✓ selected")
+                              hint="● connected   ✓ selected",
+                              t0=self._marquee_t0("bt", self.sel))
         elif self.view == "btscan":
             rolls = draw_list(d, "Nearby devices", self.current_items(),
                               self.sel, self.system,
-                              hint="A: pair and connect   B: back")
+                              hint="A: pair and connect   B: back",
+                              t0=self._marquee_t0("btscan", self.sel))
         elif self.view == "output":
             rolls = draw_list(d, "Sound out of", self.current_items(),
                               self.sel, self.system,
-                              hint="A: choose   B: back")
+                              hint="A: choose   B: back",
+                              t0=self._marquee_t0("output", self.sel))
         elif self.view == "sonos":
             rolls = draw_list(d, "Sonos", self.current_items(),
                               self.sel, self.system,
-                              hint="A: play here   B: back")
+                              hint="A: play here   B: back",
+                              t0=self._marquee_t0("sonos", self.sel))
         elif self.view == "extras":
             # same list chrome as every other menu — the field bug that
             # forced this comment: the view existed (chord opened it, A
             # confirmed a launch) but had no render branch, so the
             # "menu" was a black screen (owner 2026-07-29)
             rolls = draw_list(d, "Extras", self.current_items(), self.sel,
-                              self.system, hint="A: start   B: back")
+                              self.system, hint="A: start   B: back",
+                              t0=self._marquee_t0("extras", self.sel))
         elif self.view == "storage":
             self.render_storage(d)
         elif self.view == "link":
@@ -2655,7 +2672,8 @@ class App:
             # block around during mpv playback, and its last artist has
             # nothing to do with the podcast episode showing.
             if d.textlength(title, font=F_MED) > W - 44:
-                title, rolls = marquee(title, 20)
+                title, rolls = marquee(title, 20,
+                                       t0=self._marquee_t0("now", title))
             d.text((W // 2, ty), title, font=F_MED, fill=FG, anchor="ma")
             sub = ", ".join((st.get("spotify") or {}).get("artists") or [])
             if sub:
@@ -2669,7 +2687,8 @@ class App:
             if len(lines) > 1:
                 l2 = lines[1]
                 if d.textlength(l2, font=F_MED) > W - 44:
-                    l2, rolls = marquee(l2, 20)
+                    l2, rolls = marquee(l2, 20,
+                                        t0=self._marquee_t0("now2", l2))
                 d.text((W // 2, ty + 19), l2, font=F_MED, fill=FG,
                        anchor="ma")
         pos, dur = st.get("position"), st.get("duration")
@@ -2913,6 +2932,16 @@ class App:
             self.bt_connecting_until = 0.0
         threading.Thread(target=go, daemon=True).start()
 
+    def _marquee_t0(self, *key):
+        """Phase anchor for the ONE visible marquee: remembers when the
+        current label became selected, so marquee() rests at the START
+        of the name first (field 2026-08-12: the wall-clock phase
+        showed a random middle of the title on landing)."""
+        if getattr(self, "_mq_key", None) != key:
+            self._mq_key = key
+            self._mq_t0 = time.monotonic()
+        return self._mq_t0
+
     def _cover_tile(self, d, img, art, name, new=False):
         """The shared big-tile layout: a cover (or a stable colored
         initial), the B/Y flip chevrons, the A action marker, and the
@@ -2951,7 +2980,8 @@ class App:
             d.ellipse([cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2],
                       fill=BG)
             d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=GOOD)
-        label, rolls = marquee(name, 20)
+        label, rolls = marquee(name, 20,
+                               t0=self._marquee_t0("tile", name))
         d.text((W // 2, 206), label, font=F_MED, fill=FG, anchor="ma")
         return label, rolls
 
