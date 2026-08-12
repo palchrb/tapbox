@@ -459,11 +459,33 @@ UI_ART_DIR = os.path.join(
 UI_ART_MAX_FILES = int(os.environ.get("TAPBOX_UI_ART_MAX", "400"))
 
 
-def _art_disk(ref, size, square=False):
-    import hashlib
+def _art_disk(ref, size, square=False, mtime=None):
+    """Disk path for one thumbnail. Local sources fold their mtime into
+    the key — a re-synced podcast cover (same path, new bytes) must get
+    a fresh thumb, exactly like the RAM key in _art_key; the stale file
+    is left for the UI_ART_MAX_FILES cap to age out."""
     tag = f"{ref}|{size}|{'sq' if square else 'fit'}"
+    if mtime is not None:
+        tag += f"|{int(mtime)}"
     h = hashlib.sha1(tag.encode()).hexdigest()[:16]
     return os.path.join(UI_ART_DIR, f"{h}.jpg")
+
+
+def _art_disk_load(path):
+    """A cached thumb, or None. Corrupt files are deleted so the next
+    call rebuilds them — same self-heal the remote path always had."""
+    img = None
+    try:
+        img = Image.open(path)
+        img.load()
+        return img
+    except OSError:
+        if img is not None or os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return None
 
 
 def _art_disk_save(img, path):
@@ -1381,17 +1403,7 @@ class App:
                 # fetch per cover EVER; thumbnails persist under
                 # CACHE_DIR/ui-art (prune_cache leaves it alone).
                 disk = _art_disk(ref, size, square)
-                img = None
-                try:
-                    img = Image.open(disk)
-                    img.load()
-                except OSError:
-                    if img is not None or os.path.exists(disk):
-                        try:
-                            os.remove(disk)  # corrupt — refetch below
-                        except OSError:
-                            pass
-                    img = None
+                img = _art_disk_load(disk)
                 if img is None:
                     # 4s, not 10: a stalled fetch showed the placeholder
                     # for 10s before the (fast, escalating) retry could
@@ -1414,7 +1426,22 @@ class App:
                     img = Image.open(io.BytesIO(raw))
                     fetched = True
             else:
-                img = Image.open(ref)
+                # Local sources (podcast covers/episode images the sync
+                # downloaded) get the SAME thumb cache as remote art:
+                # the originals are often 1400-3000px, and re-decoding
+                # them after every UI restart (= every deploy) cost a
+                # 100-500ms placeholder flash per cover at 600MHz
+                # (energy audit follow-up 2026-08-12). mtime keys the
+                # thumb so a re-synced cover refreshes, like _art_key.
+                try:
+                    mt = os.path.getmtime(ref)
+                except OSError:
+                    mt = None
+                disk = _art_disk(ref, size, square, mtime=mt)
+                img = _art_disk_load(disk)
+                if img is None:
+                    img = Image.open(ref)
+                    fetched = True  # decoded from the original -> save
             img = img.convert("RGB")
             if square:
                 # Fill the tile: scale to cover, then centre-crop to a
@@ -1426,7 +1453,8 @@ class App:
             else:
                 img.thumbnail((size, size))
             if fetched:
-                _art_disk_save(img, _art_disk(ref, size, square))
+                _art_disk_save(img, disk)  # the branch-correct path —
+                #                            local keys carry mtime
             # drop stale versions of the same file (older mtime keys) —
             # keyed on (ref, size, square) so a cover crop and a logo fit
             # of the same source never evict each other
