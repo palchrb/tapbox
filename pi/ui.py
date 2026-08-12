@@ -686,7 +686,14 @@ class St7789Display:
             try:
                 buf = _rgb565(img, 90)
                 self.disp.set_window()
-                self.disp.data(buf)
+                # data(b"") sends nothing but flips the DC pin to data
+                # mode through the library's own GPIO handling; then
+                # writebytes2 pushes the whole buffer with C-side
+                # chunking. The library's data(buf) would xfer() in 29
+                # chunks, each building a 4096-int rx list we throw
+                # away — that was ~35ms of the frame.
+                self.disp.data(b"")
+                self.disp._spi.writebytes2(buf)
                 return
             except Exception as e:
                 self._fast = False
