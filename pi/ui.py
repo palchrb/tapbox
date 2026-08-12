@@ -34,6 +34,8 @@ Dev mode (no HAT needed):
                                  s = settings
 """
 
+import hashlib
+import math
 import os
 import re
 import select
@@ -126,7 +128,13 @@ def screen_text(s):
 
 def _screen_safe(obj):
     """Same, over a decoded API payload. Non-strings pass through as
-    themselves — ids, urls and numbers must survive untouched."""
+    themselves — ids, urls and numbers must survive untouched.
+    With the emoji sprite path healthy the payload flows RAW — the
+    drawer renders the emoji, and scrubbing here would kill them
+    before it ever sees them. With it off (no font, failed self-test,
+    TAPBOX_EMOJI=0) this is byte-for-byte the shipped 1a2b642 path."""
+    if emoji_active():
+        return obj
     if isinstance(obj, str):
         return screen_text(obj)
     if isinstance(obj, dict):
@@ -146,6 +154,299 @@ def api_post(*a, **kw):
 
 def api_put(*a, **kw):
     return _screen_safe(boxapi.put(*a, **kw))
+
+
+# --- real emoji sprites ----------------------------------------------------
+# The scrub above is the FALLBACK. With Noto Color Emoji present and
+# healthy (apt: fonts-noto-color-emoji), RichDraw below renders actual
+# color emoji instead. The font is a CBDT bitmap with one ~109px strike
+# (asking Pillow for 17px raises OSError), so each cluster is rendered
+# once at the strike, LANCZOS-scaled to the text line height and cached
+# as a small PNG — after that a frame pays one RGBA paste (~0.004ms,
+# ~200x cheaper than the text beside it). Design review 2026-08-12
+# (architect + QA + implementer, all measured on this Pillow):
+# - GUARD-FIRST: a string without emoji machinery never leaves Pillow's
+#   own code path. Anchor math cannot be made pixel-identical (1px
+#   drift on 90/160 centered draws), so it is only performed where
+#   there is no yesterday to regress against.
+# - NO SHAPING without raqm: ZWJ families, flag pairs and keycaps
+#   decompose into parts. Those clusters decline to screen_text() (the
+#   shipped scrub) rather than faking three heads for a family; skin
+#   tones and variation selectors are stripped and the base is sprited.
+# - the self-test must catch TOFU, not just blank: a .notdef box has a
+#   perfectly good bbox (the 2026-08-11 field bug would re-enter
+#   through the cache as black-box PNGs). Render a guaranteed-absent
+#   codepoint and byte-compare; require non-empty alpha separately
+#   (that half catches a COLR-only font, which renders silently blank).
+# TAPBOX_EMOJI=0 kills the whole path: the box then runs the scrub
+# pipeline byte-for-byte as shipped in 1a2b642.
+
+_EMOJI_FONT_PATHS = (
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf",
+)
+_EMOJI_STRIKES = (109, 128, 136, 160)  # CBDT builds seen in the wild
+UI_EMOJI_DIR = os.path.join(
+    os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache"), "ui-emoji")
+_emoji = {"state": None, "font": None, "asc": 0, "em_h": 0}
+_emoji_lock = threading.Lock()  # probe may be reached from the poller
+_sprites = {}       # (cluster, lh) -> Image | None (failures remembered)
+_SPRITES_MAX = 64   # a 113px tile sprite is ~68KB — cap the RAM side
+
+
+def _probe_emoji():
+    """Open the color font and prove it renders REAL glyphs. Any
+    failure leaves state 'off' and the scrub pipeline in charge."""
+    if os.environ.get("TAPBOX_EMOJI", "1") == "0":
+        _emoji["state"] = "off"
+        return
+    f = None
+    for path in _EMOJI_FONT_PATHS:
+        for size in _EMOJI_STRIKES:
+            try:
+                f = ImageFont.truetype(path, size)
+                break
+            except OSError:
+                continue
+        if f:
+            break
+    if f is None:
+        _emoji["state"] = "off"
+        return
+    try:
+        asc, desc = f.getmetrics()
+        em_h = asc + desc
+
+        def _render(ch):
+            img = Image.new("RGBA", (em_h * 2, em_h), (0, 0, 0, 0))
+            ImageDraw.ImageDraw(img).text((0, 0), ch, font=f,
+                                          embedded_color=True)
+            return img
+
+        probe = _render("\U0001F383")    # 🎃 — the field bug itself
+        absent = _render("\U000FFF00")   # guaranteed .notdef
+        if probe.getbbox() is None:
+            raise OSError("renders blank (COLR-only build?)")
+        if probe.tobytes() == absent.tobytes():
+            raise OSError("renders tofu (wrong font resolved)")
+        _emoji.update(state="on", font=f, asc=asc, em_h=em_h)
+        log(f"emoji sprites on (strike {getattr(f, 'size', '?')}px)")
+    except Exception as e:
+        _emoji["state"] = "off"
+        log(f"emoji sprites off ({e}) — scrub fallback active")
+
+
+def emoji_active():
+    if _emoji["state"] is None:
+        with _emoji_lock:
+            if _emoji["state"] is None:
+                _probe_emoji()
+    return _emoji["state"] == "on"
+
+
+# Sprite-able: the SMP pictograph planes plus the two BMP emoji that
+# actually appear in kids' feeds (⭐ ✨). Other BMP symbols keep their
+# DejaVu twin from the scrub map — ☀️ stays the text sun. Flags and
+# keycaps match as clusters so they decline WHOLE, never half.
+_CLUSTER = re.compile(
+    "(?P<flag>[\U0001F1E6-\U0001F1FF]{2})"
+    "|(?P<keycap>[0-9#*]\uFE0F?\u20E3)"
+    "|(?P<emoji>[\U0001F000-\U0001F1E5\U0001F200-\U0001FAFF"
+    "\u2728\u2B50]"  # RI range excluded: a lone flag half (a
+    #                    sliced 🇳🇴) must fall to the scrub, not
+    #                    become a tofu sprite (QA pin 14)
+    "(?:[\uFE0E\uFE0F\U0001F3FB-\U0001F3FF]"
+    "|\u200D[\U0001F000-\U0001FAFF\u2640\u2642\u2764\uFE0F]?)*)")
+_MODS = re.compile("[\uFE0E\uFE0F\U0001F3FB-\U0001F3FF]")
+# The fast guard: none of these in the string -> Pillow verbatim. Must
+# be a SUPERSET of everything screen_text() would touch, or a missed
+# character class regresses to tofu (QA Q2). 2600-27BF natives (♪ ★ ☀)
+# hit the slow path but come back unchanged from screen_text, so they
+# still render through Pillow's own anchor code.
+_MAYBE = re.compile(
+    "[\U0001F000-\U0001FAFF\U0001F1E6-\U0001F1FF"
+    "\u2600-\u27BF\u2B50\u2B55\u200D\u20E3\uFE0E\uFE0F]")
+
+
+def _sprite_path(cluster, lh):
+    key = hashlib.sha1(("-".join(f"{ord(c):x}" for c in cluster)
+                        + f"|{lh}").encode()).hexdigest()[:16]
+    return os.path.join(UI_EMOJI_DIR, key + ".png")
+
+
+def _build_sprite(cluster, lh, path):
+    f, em_h = _emoji["font"], _emoji["em_h"]
+    try:
+        w = max(1, int(math.ceil(f.getlength(cluster))))
+        canvas = Image.new("RGBA", (w, em_h), (0, 0, 0, 0))
+        ImageDraw.ImageDraw(canvas).text((0, 0), cluster, font=f,
+                                         embedded_color=True)
+        if canvas.getbbox() is None:
+            return None  # nothing rendered — decline this cluster
+        # resize the whole em box, never crop-to-bbox: cropping gives a
+        # per-emoji origin that must be carried through the resize for
+        # zero saved pixels (implementer review)
+        spr = canvas.resize((max(1, round(w * lh / em_h)), lh),
+                            Image.Resampling.LANCZOS)
+        try:  # disk cache is an optimisation, not a need
+            os.makedirs(UI_EMOJI_DIR, exist_ok=True)
+            tmp = path + ".part"
+            spr.save(tmp, "PNG")
+            os.replace(tmp, path)  # atomic, like _art_disk_save
+        except OSError:
+            pass
+        return spr
+    except Exception:
+        return None
+
+
+def emoji_sprite(cluster, lh):
+    """The cluster as an RGBA sprite scaled to line height lh, or None.
+    RAM dict -> disk PNG -> render at the strike. Failures are also
+    remembered, so a bad cluster is not re-attempted every frame.
+    Assumes emoji_active() was checked by the caller."""
+    key = (cluster, lh)
+    if key in _sprites:
+        return _sprites[key]
+    spr = None
+    path = _sprite_path(cluster, lh)
+    try:
+        spr = Image.open(path)
+        spr.load()
+        if spr.mode != "RGBA" or spr.size[1] != lh:
+            raise OSError("wrong shape")
+    except FileNotFoundError:
+        spr = None
+    except OSError:
+        spr = None
+        try:  # corrupt cache file: self-heal like the art cache does
+            os.remove(path)
+        except OSError:
+            pass
+    if spr is None:
+        spr = _build_sprite(cluster, lh, path)
+    if len(_sprites) >= _SPRITES_MAX:
+        _sprites.clear()
+    _sprites[key] = spr
+    return spr
+
+
+def _runs(text, font):
+    """Split into ('t', str) / ('s', sprite) runs. Declined clusters
+    (ZWJ/flag/keycap) and failed sprites dissolve back into the
+    neighbouring text via screen_text; None when nothing is pasteable
+    (the caller then takes the legacy whole-string path)."""
+    asc, desc = font.getmetrics()
+    lh = asc + desc
+    out = []
+
+    def _text(piece):
+        piece = screen_text(piece)
+        if not piece:
+            return
+        if out and out[-1][0] == "t":
+            out[-1] = ("t", out[-1][1] + piece)
+        else:
+            out.append(("t", piece))
+
+    pos = 0
+    any_sprite = False
+    for m in _CLUSTER.finditer(text):
+        if m.start() > pos:
+            _text(text[pos:m.start()])
+        cluster = m.group()
+        spr = None
+        if m.lastgroup == "emoji" and "\u200D" not in cluster:
+            base = _MODS.sub("", cluster)
+            if base:
+                spr = emoji_sprite(base, lh)
+        if spr is not None:
+            out.append(("s", spr))
+            any_sprite = True
+        else:
+            _text(cluster)
+        pos = m.end()
+    if pos < len(text):
+        _text(text[pos:])
+    return out if any_sprite else None
+
+
+class RichDraw(ImageDraw.ImageDraw):
+    """ImageDraw that renders emoji clusters as color sprites.
+
+    Guard-first: text with none of the emoji machinery characters is
+    delegated to Pillow VERBATIM — same bytes as a plain ImageDraw (the
+    pixel-identity pin in tests/ui_emoji.py holds this). Strings that
+    contain scrub-relevant characters but no drawable sprite take the
+    legacy path: screen_text() then Pillow with the ORIGINAL anchor —
+    which is exactly what the api-edge scrub produced before. Only a
+    string with a live sprite gets the split/anchor math, where there
+    is no previous rendering to stay identical to.
+
+    Anchor conversion (measured, 360/360 exact): base x uses Pillow's
+    own rounding ceil(v - 0.5); vertical anchors handled: a/m (the only
+    ones ui.py uses) — 'b'-anchors would fall back to 'a'."""
+
+    def text(self, xy, text, fill=None, font=None, anchor=None, **kw):
+        if (not isinstance(text, str) or "\n" in text
+                or not _MAYBE.search(text)):
+            return super().text(xy, text, fill=fill, font=font,
+                                anchor=anchor, **kw)
+        runs = (_runs(text, font)
+                if font is not None and emoji_active() else None)
+        if not runs:
+            return super().text(xy, screen_text(text), fill=fill,
+                                font=font, anchor=anchor, **kw)
+        asc, desc = font.getmetrics()
+        lh = asc + desc
+        x, y = xy
+        a = anchor or "la"
+        w = 0.0
+        for kind, val in runs:
+            w += (super().textlength(val, font=font) if kind == "t"
+                  else val.width)
+        if a[0] == "m":
+            x = math.ceil(x - w / 2 - 0.5)
+        elif a[0] == "r":
+            x = math.ceil(x - w - 0.5)
+        if a[1] == "m":
+            baseline = y + (asc - desc + 1) // 2  # half-up, like Pillow
+            va = "lm"
+        else:
+            baseline = y + asc
+            va = "la"
+        spr_base = round(_emoji["asc"] * lh / _emoji["em_h"])
+        pos = float(x)
+        for kind, val in runs:
+            if kind == "t":
+                super().text((pos, y), val, fill=fill, font=font,
+                             anchor=va, **kw)
+                pos += super().textlength(val, font=font)
+            else:
+                self._image.paste(val, (int(pos), baseline - spr_base),
+                                  val)
+                pos += val.width
+
+    def textlength(self, text, font=None, *a, **kw):
+        if not isinstance(text, str) or not _MAYBE.search(text):
+            return super().textlength(text, font=font, *a, **kw)
+        runs = (_runs(text, font)
+                if font is not None and emoji_active() else None)
+        if not runs:
+            return super().textlength(screen_text(text), font=font,
+                                      *a, **kw)
+        total = 0.0
+        for kind, val in runs:
+            total += (super().textlength(val, font=font) if kind == "t"
+                      else val.width)
+        return total
+
+
+def _draw(img):
+    """Every UI text call flows through RichDraw — one seam, so no call
+    site can regress to tofu (QA review 2026-08-12)."""
+    return RichDraw(img)
+
 
 W = H = 240
 PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
@@ -717,10 +1018,19 @@ MARQUEE_STEP_S = 0.35  # how fast a too-long selected label slides
 def marquee(text, maxlen):
     """(visible_window, scrolling?) for a list label. A too-long SELECTED
     row slides through its text — pause at each end — so the whole name
-    can be read, instead of forever showing just the start."""
-    if len(text) <= maxlen:
+    can be read, instead of forever showing just the start.
+
+    An emoji cluster counts as ONE character here but paints ~TWO chars
+    wide (sprite advance ≈ line height), so each live cluster is
+    charged 2 in the length math — otherwise a sprite title overruns
+    its row (design review 2026-08-12; the residual ~9px overrun of a
+    sliding window is accepted v1 cosmetics). With sprites off the
+    scrub reduces clusters to single chars and the charge is zero."""
+    n = (sum(1 for _ in _CLUSTER.finditer(text))
+         if emoji_active() and _MAYBE.search(text) else 0)
+    if len(text) + n <= maxlen:
         return text, False
-    span = len(text) - maxlen
+    span = len(text) + n - maxlen
     period = span + 8  # 4 resting steps at each end
     step = int(time.monotonic() / MARQUEE_STEP_S) % period
     off = max(0, min(span, step - 4))
@@ -2089,7 +2399,7 @@ class App:
         """Boot screen: drawn the moment the process starts, long before
         tapboxd (and the rest of the boot) is ready."""
         img = Image.new("RGB", (W, H), BG)
-        d = ImageDraw.Draw(img)
+        d = _draw(img)
         d.text((W // 2, H // 2 - 16), "TapBox", font=F_BIG, fill=HILITE,
                anchor="mm")
         d.text((W // 2, H // 2 + 18), sub, font=F_SMALL, fill=DIM, anchor="mm")
@@ -2097,7 +2407,7 @@ class App:
 
     def draw_message(self, text):
         img = Image.new("RGB", (W, H), BG)
-        d = ImageDraw.Draw(img)
+        d = _draw(img)
         # word-wrap to the panel: long one-liners (the extras 'no TV
         # found' note, verbose bt errors) ran off the 240px edge
         # (field 2026-07-30). Explicit \n stays a hard break.
@@ -2112,7 +2422,7 @@ class App:
 
     def render(self):
         img = Image.new("RGB", (W, H), BG)
-        d = ImageDraw.Draw(img)
+        d = _draw(img)
         rolls = False  # a too-long selected label is sliding -> keep painting
         if self.view == "home":
             art = self.section_art()  # uploaded category logo (PWA)
@@ -2889,7 +3199,7 @@ def _boot_splash(display):
     a splash must never block the real UI coming up."""
     try:
         img = Image.new("RGB", (W, H), BG)
-        d = ImageDraw.Draw(img)
+        d = _draw(img)
         d.text((W // 2, H // 2 - 16), "TapBox", font=F_BIG, fill=HILITE,
                anchor="mm")
         d.text((W // 2, H // 2 + 18), "starting", font=F_SMALL, fill=DIM,
