@@ -22,9 +22,12 @@ family already has: Spotify, NRK, any podcast RSS, local files.
 - **Your own files** *(early support, less battle-tested)*: DRM-free
   audiobooks and rips — upload through the PWA or copy a folder onto
   the box. Track titles and order come from the files' embedded tags;
-  cover art from a `cover.jpg` in the folder (a parent-uploaded cover
-  always wins) or, failing that, extracted automatically from the
-  files' embedded artwork.
+  cover art is extracted automatically from the files' embedded
+  artwork — or override it by uploading an image **named
+  `cover.jpg`/`.png`** alongside the audio files (the uploader accepts
+  images for exactly this; there is no dedicated cover button).
+  Streamed entries take their art from the source; the only custom
+  image for those is the per-category logo.
 
 ## What the kid gets
 
