@@ -3414,6 +3414,9 @@ class App:
         except (OSError, ValueError):
             self.status = {}
         self._boot_landing()
+        # joins the animation thread: the splash and the real UI must
+        # never both own the panel. getattr — tests build App directly.
+        getattr(self, "splash_done", lambda: None)()
         log("ready")
         self._loop_beat = time.monotonic()
         if UI_WATCHDOG_S:
@@ -3518,21 +3521,124 @@ class App:
                 self.render()
 
 
-def _boot_splash(display):
-    """Light the panel with the boot splash the instant the display is up
-    — BEFORE the slower input (lgpio) init — so the screen shows life
-    early instead of staying blank through the rest of startup. Guarded:
-    a splash must never block the real UI coming up."""
+# --- the boot mark ------------------------------------------------------------
+# The vibb logo exactly as drawn: four concentric rings breathing out of
+# phase around a lit core, wordmark to their right. The artwork is
+# 186x84, so it goes on at FULL WIDTH and the screen letterboxes it —
+# the source card colour is this UI's own background, so the card and
+# the letterbox are the same black and the mark simply floats.
+#
+# Drawn as geometry, never a scaled bitmap: at this size a resampled PNG
+# would soften exactly the thin strokes the mark is made of.
+SRC_W, SRC_H = 186.0, 84.0
+MARK_S = W / SRC_W                 # 240/186 — full width, height follows
+MARK_TOP = (H - SRC_H * MARK_S) / 2.0
+MARK_CX = 42.0 * MARK_S            # the artwork's own coordinates,
+MARK_CY = MARK_TOP + 42.0 * MARK_S  # scaled — nothing re-composed
+MARK_RADII = (25.45, 19.58, 14.39, 9.48)
+MARK_CORE_R = 4.3
+MARK_STROKE = 2.6
+MARK_WORD_X = 80.6 * MARK_S        # text-anchor: start, on its baseline
+MARK_WORD_Y = MARK_TOP + 58.6 * MARK_S
+MARK_WORD_SIZE = round(44.4 * MARK_S)
+MARK_RING = (240, 168, 132)        # #f0a884
+MARK_CORE_RGB = (251, 228, 220)    # #fbe4dc
+MARK_WORD = (246, 231, 224)        # #f6e7e0
+BREATHE_S = 4.0                    # one full in-and-out
+SPLASH_FPS = float(os.environ.get("VIBB_SPLASH_FPS", "12"))
+_SS = 3                            # supersample: PIL strokes are aliased
+
+
+def _ease(u):
+    """cubic-bezier(.42,0,.58,1) closely enough for a 10% breathe."""
+    return u * u * (3.0 - 2.0 * u)
+
+
+def _breathe(t, period=BREATHE_S, lo=0.94, hi=1.04, phase=0.0):
+    """Value at time t on a symmetric eased in-out loop."""
+    u = ((t + phase) % period) / period
+    u = _ease(u * 2.0) if u < 0.5 else _ease((1.0 - u) * 2.0)
+    return lo + (hi - lo) * u
+
+
+def _blend(fg, bg, a):
+    """Opacity against a KNOWN solid background — exact, and far cheaper
+    than an RGBA composite for four strokes a frame."""
+    return tuple(int(round(b + (f - b) * a)) for f, b in zip(fg, bg))
+
+
+def _mark_font():
+    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+        if os.path.exists(p):
+            return ImageFont.truetype(p, MARK_WORD_SIZE)
     try:
-        img = Image.new("RGB", (W, H), BG)
-        d = _draw(img)
-        d.text((W // 2, H // 2 - 16), "Vibb", font=F_BIG, fill=HILITE,
-               anchor="mm")
-        d.text((W // 2, H // 2 + 18), "starting", font=F_SMALL, fill=DIM,
-               anchor="mm")
-        display.show(img)
+        return ImageFont.load_default(MARK_WORD_SIZE)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def splash_frame(t, word_font=None):
+    """One frame of the boot mark at time t seconds."""
+    img = Image.new("RGB", (W * _SS, H * _SS), BG)
+    d = ImageDraw.Draw(img)
+    cx, cy = MARK_CX * _SS, MARK_CY * _SS
+    for i, r0 in enumerate(MARK_RADII):
+        # the artwork staggers the rings by 0.28s each, so the breath
+        # travels outward instead of pulsing as one blob
+        phase = -0.28 * (len(MARK_RADII) - i)
+        r = r0 * MARK_S * _breathe(t, phase=phase) * _SS
+        a = _breathe(t, lo=0.55, hi=1.0, phase=phase)
+        d.ellipse([cx - r, cy - r, cx + r, cy + r],
+                  outline=_blend(MARK_RING, BG, a),
+                  width=max(1, round(MARK_STROKE * MARK_S * _SS)))
+    r = MARK_CORE_R * MARK_S * _breathe(t, lo=0.9, hi=1.08) * _SS
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=MARK_CORE_RGB)
+    img = img.resize((W, H), Image.Resampling.LANCZOS)
+    ImageDraw.Draw(img).text((MARK_WORD_X, MARK_WORD_Y), "vibb",
+                             font=word_font or _mark_font(),
+                             fill=MARK_WORD, anchor="ls")
+    return img
+
+
+def _boot_splash(display):
+    """Light the panel the instant the display is up — BEFORE the slower
+    input (lgpio) init — so the screen shows life early instead of
+    staying blank through the rest of startup.
+
+    The mark BREATHES, on its own thread, filling dead time that already
+    exists rather than adding any: everything after this call (lgpio,
+    the library fetch, the first /status) runs while it animates.
+
+    Returns a stop() that the caller MUST call before painting the real
+    UI — it joins the thread, so the two can never fight over the panel.
+    A splash must never block, or break, the real UI coming up."""
+    stop = threading.Event()
+
+    def loop():
+        t0 = time.monotonic()
+        interval = 1.0 / max(1.0, SPLASH_FPS)
+        word = _mark_font()
+        try:
+            while not stop.is_set():
+                frame = time.monotonic()
+                display.show(splash_frame(frame - t0, word))
+                stop.wait(max(0.0, interval - (time.monotonic() - frame)))
+        except Exception as e:
+            log(f"boot splash stopped: {e!r}")
+
+    try:
+        display.show(splash_frame(0.0))   # something lit before the thread
+        th = threading.Thread(target=loop, daemon=True)
+        th.start()
     except Exception as e:
         log(f"boot splash skipped: {e!r}")
+        return lambda: None
+
+    def done():
+        stop.set()
+        th.join(timeout=2.0)
+    return done
 
 
 def blank_screen(display):
@@ -3554,7 +3660,8 @@ def blank_screen(display):
 
 def main():
     display = make_display()
-    _boot_splash(display)          # screen lights up now, not after input init
+    splash_done = _boot_splash(display)   # lights up now, and BREATHES
+    #                                       through the slow init below
 
     def _term(*_a):
         # systemd stops us for a handoff (extras), a service restart or
@@ -3565,6 +3672,8 @@ def main():
     signal.signal(signal.SIGTERM, _term)
 
     app = App(display, make_input())
+    app.splash_done = splash_done   # run() stops the breathing mark the
+    #                                 moment it is ready to paint for real
     try:
         app.run()
     finally:
