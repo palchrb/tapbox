@@ -741,7 +741,7 @@ async function loadSettings() {
   $("#set-idle").value = String(s.idle_shutdown_min);
   $("#set-spotcache").value = String(s.spotify_cache_gb);
   $("#set-bitrate").value = String(s.spotify_bitrate || 160);
-  $("#set-resume").value = String(s.resume_on_boot);
+  $("#set-resume").value = String(s.resume_window_h);
   $("#set-kidnav").value = String(s.simple_nav || 0);
   $("#set-wifioff").value = String(s.wifi_auto_off_min);
   $("#set-wifiprobe").value = String(s.wifi_probe);
@@ -754,7 +754,7 @@ for (const [id, key] of [["#set-screen", "screen_timeout_s"],
                          ["#set-idle", "idle_shutdown_min"],
                          ["#set-spotcache", "spotify_cache_gb"],
                          ["#set-bitrate", "spotify_bitrate"],
-                         ["#set-resume", "resume_on_boot"],
+                         ["#set-resume", "resume_window_h"],
                          ["#set-kidnav", "simple_nav"],
                          ["#set-wifioff", "wifi_auto_off_min"],
                          ["#set-wifiprobe", "wifi_probe"],

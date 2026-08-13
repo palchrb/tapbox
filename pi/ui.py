@@ -529,6 +529,8 @@ def _art_disk_save(img, path):
 FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
+SESSION_WAIT_TICKS = 16  # x0.5s: how long the splash waits for the
+#                          daemon's session verdict at boot
 BURST_POLL_S = 0.3   # /status cadence while a command is in flight
 #                      (poll_burst_until); measured from fetch
 #                      completion, so a slow daemon self-paces
@@ -3315,6 +3317,49 @@ class App:
                 log(f"render loop stalled {stale:.0f}s — restarting UI")
                 os._exit(1)
 
+    def _boot_landing(self):
+        """Where the screen opens at power-on. A live session (boot
+        resume) or a bookmarked-paused ghost lands on now-playing; an
+        EXPIRED session (switched off longer ago than the resume window)
+        wakes up on the browse root instead, with the remembered tile
+        selected. Split out of run() so the rule can be pinned.
+        """
+        # An expired session means "wake up in the carousel": the daemon
+        # still serves a ghost card for the remembered entry (a tile with
+        # its progress is right), but the screen must not open INSIDE it.
+        landed = (self.status.get("title")
+                  and self.status.get("session", "fresh") != "expired")
+        nav = self._nav_mode()
+        if nav in (1, 2):
+            # carousel modes: position on whatever is (or last was)
+            # playing — opens on now-playing if live, else on the browse
+            # root (the flat carousel, or the category carousel).
+            tgt = self.status.get("target")
+            root = "carousel"
+            if nav == 2:
+                self.car_section = None
+                root = "cats"
+                for s in (self.library or {}).get("sections", []):
+                    for i, e in enumerate(s.get("entries") or []):
+                        if e.get("target") == tgt:
+                            self.car_section, self.car_sel = s.get("id"), i
+                            root = "carousel"
+                            break
+                    if self.car_section is not None:
+                        break
+            else:
+                for i, e in enumerate(self.flat_entries()):
+                    if e["target"] == tgt:
+                        self.car_sel = i
+                        break
+            if landed:
+                self.stack, self.view = [(root, 0)], "now"
+            else:
+                self.stack, self.view = [], root
+        elif landed:
+            self.stack = [("home", 0)]
+            self.view = "now"
+
     def run(self):
         # Show the splash immediately, then wait for tapboxd — during boot
         # it is usually a few seconds behind us.
@@ -3353,38 +3398,18 @@ class App:
         # bookmarked-paused ghost puts the screen straight on now-playing.
         try:
             self.status = api_get("/status", timeout=3)
+            # The daemon may still be waiting for the RTC/NTP correction
+            # before it can judge the session (it starts before both, on
+            # purpose). Splash a moment longer rather than land on the
+            # wrong screen — the panel already says "starting...".
+            for _ in range(SESSION_WAIT_TICKS):
+                if self.status.get("session") != "pending":
+                    break
+                time.sleep(0.5)
+                self.status = api_get("/status", timeout=3)
         except (OSError, ValueError):
             self.status = {}
-        nav = self._nav_mode()
-        if nav in (1, 2):
-            # carousel modes: position on whatever is (or last was)
-            # playing — opens on now-playing if live, else on the browse
-            # root (the flat carousel, or the category carousel).
-            tgt = self.status.get("target")
-            root = "carousel"
-            if nav == 2:
-                self.car_section = None
-                root = "cats"
-                for s in (self.library or {}).get("sections", []):
-                    for i, e in enumerate(s.get("entries") or []):
-                        if e.get("target") == tgt:
-                            self.car_section, self.car_sel = s.get("id"), i
-                            root = "carousel"
-                            break
-                    if self.car_section is not None:
-                        break
-            else:
-                for i, e in enumerate(self.flat_entries()):
-                    if e["target"] == tgt:
-                        self.car_sel = i
-                        break
-            if self.status.get("title"):
-                self.stack, self.view = [(root, 0)], "now"
-            else:
-                self.stack, self.view = [], root
-        elif self.status.get("title"):
-            self.stack = [("home", 0)]
-            self.view = "now"
+        self._boot_landing()
         log("ready")
         self._loop_beat = time.monotonic()
         if UI_WATCHDOG_S:

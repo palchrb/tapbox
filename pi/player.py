@@ -722,7 +722,13 @@ def main():
             if path and isinstance(pos, (int, float)):
                 if not paused and now_m - track_started > 15:
                     stable = (path, pos)  # last spot that audibly played
-                if not live and not no_resume:
+                # Position is persisted for EVERY entry, including
+                # 'always from the start' ones: the power-on session
+                # continues where the box was switched off, whatever the
+                # entry's per-tap flag says. That flag is enforced on the
+                # READ side (clear_state + st=None above), so a tap still
+                # starts such an entry at track 1.
+                if not live:
                     if (path != bm_last[1] or bool(paused) != bm_last[2]
                             or time.monotonic() - bm_last[0] >= bm_flush_s):
                         save_state(key, path, pos, ids.get(path), dur)

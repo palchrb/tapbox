@@ -37,7 +37,12 @@ SETTING_SPECS = {
     "volume_cap": (100, 30, 100),
     "spotify_cache_gb": (20, 1, 100),
     "spotify_bitrate": (160, 96, 320),  # further constrained to BITRATES
-    "resume_on_boot": (1, 0, 1),
+    # Continue what was playing when the box was switched off: -1 always
+    # (the pre-2026-08-13 boolean behaviour), 0 never, N = only if it
+    # stopped less than N hours ago. -1-as-always mirrors the library's
+    # cache setting. The OLD boolean key cannot be widened in place: a
+    # saved 1 meant "always" and would silently become "1 hour".
+    "resume_window_h": (-1, -1, 168),
     "wifi_auto_off_min": (15, 0, 240),  # 0 = never auto-off
     "wifi_ps_bt_off": (0, 0, 1),  # 1 = hold wifi power save OFF while BT
     # audio plays (fewer beacon-wake coex arbitrations against A2DP — the
@@ -57,6 +62,7 @@ BITRATES = (96, 160, 320)
 
 def load_settings():
     out = {k: spec[0] for k, spec in SETTING_SPECS.items()}
+    saved = {}
     try:
         with open(SETTINGS_FILE) as f:
             saved = json.load(f)
@@ -65,6 +71,13 @@ def load_settings():
                 out[k] = max(spec[1], min(spec[2], int(saved[k])))
     except (OSError, ValueError):
         pass
+    # Legacy resume_on_boot (bool/0/1) -> the hours window. Pure, so it
+    # is safe in the hot path and in every process that loads settings
+    # on its own; the first PWA save drops the old key for good.
+    if not isinstance(saved, dict):
+        saved = {}
+    if "resume_window_h" not in saved and "resume_on_boot" in saved:
+        out["resume_window_h"] = -1 if saved["resume_on_boot"] else 0
     if out["spotify_bitrate"] not in BITRATES:
         out["spotify_bitrate"] = SETTING_SPECS["spotify_bitrate"][0]
     return out

@@ -151,9 +151,16 @@
         <option value="0">never</option>
       </select>
     </label>
-    <label>Resume on power-on
+    <label>Continue after power-on
       <select id="set-resume">
-        <option value="1">on</option><option value="0">off</option>
+        <option value="-1">always</option>
+        <option value="24">if switched off &lt; 24 hours ago</option>
+        <option value="12">if switched off &lt; 12 hours ago</option>
+        <option value="8">if switched off &lt; 8 hours ago</option>
+        <option value="4">if switched off &lt; 4 hours ago</option>
+        <option value="2">if switched off &lt; 2 hours ago</option>
+        <option value="1">if switched off &lt; 1 hour ago</option>
+        <option value="0">never — always start in the menu</option>
       </select>
     </label>
     <label>Browsing style (on the box screen)

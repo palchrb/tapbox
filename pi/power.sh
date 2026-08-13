@@ -303,6 +303,9 @@ PY
     done
     before="$(date '+%F %T')"
     pisugar_cmd rtc_rtc2pi >/dev/null || true
+    # the clock is now real (not fake-hwclock's "when we last ran"), so
+    # cross-reboot age comparisons — the resume session — may trust it
+    : > /run/tapbox-clock-ok 2>/dev/null || true
     echo "RTC -> system clock (was $before, now $(date '+%F %T'))"
     ;;
   rtc-save)  # write the current time back to the RTC — but ONLY when the

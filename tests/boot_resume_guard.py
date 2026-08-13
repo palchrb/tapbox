@@ -87,7 +87,7 @@ def set_output(device):
         json.dump({"output": device, "pcm": f"tapbox_{device}"}, f)
 
 
-daemon.load_settings = lambda: {"resume_on_boot": True}
+daemon.load_settings = lambda: {"resume_window_h": -1}   # always
 
 
 class _FakeSock:
@@ -171,6 +171,37 @@ KICKED.clear()
 daemon._boot_resume()  # was_playing already consumed
 assert not KICKED and not PLAYED, "one resume attempt per shutdown"
 print("8. audio never up: gives up; one attempt per shutdown OK")
+
+# 9. the resume WINDOW (2026-08-13): a session older than the setting
+#    consumes its arm-bit and plays nothing — the box wakes up in the
+#    menu instead of three days inside an album. The clock must be
+#    trustworthy to conclude that, so mark it as the RTC load does.
+from tapbox import paths as _paths  # noqa: E402
+
+daemon.load_settings = lambda: {"resume_window_h": 6}
+_paths.note_clock_ok()
+READY[0] = True
+KICKED.clear()
+PLAYED.clear()
+write_last()
+daemon.ORCH.boot_stopped_at = time.time() - 99 * 3600   # off for days
+daemon._SESSION.update(verdict=None, live=True)
+daemon._boot_resume()
+assert not PLAYED, "an expired session must not start audio"
+with open(daemon.LAST_FILE) as f:
+    assert not json.load(f)["was_playing"], \
+        "an expired boot must still consume the flag (no live leftover)"
+
+# ...while a session from an hour ago continues exactly as before
+KICKED.clear()
+PLAYED.clear()
+write_last()
+daemon.ORCH.boot_stopped_at = time.time() - 3600
+daemon._SESSION.update(verdict=None, live=True)
+daemon.ORCH.child_started = 0.0
+daemon._boot_resume()
+assert PLAYED, "a session inside the window must still resume"
+print("9. resume window: old session starts fresh, recent one continues OK")
 
 print("BOOT RESUME GUARD OK — grace then ask, one starter wins the "
       "race, and no silent deaths.")

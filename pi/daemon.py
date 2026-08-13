@@ -119,7 +119,8 @@ from tapbox.bookmarks import (episode_pos as _bm_episode_pos,  # noqa: E402
                               load_state as _bm_load,
                               save_state as _bm_save)
 from tapbox.paths import (  # noqa: E402
-    ART_DIR, MEDIA_DIR, RUN_DIR, STATE_DIR, go_restarted_within,
+    ART_DIR, MEDIA_DIR, RUN_DIR, STATE_DIR, clock_trusted,
+    go_restarted_within,
     note_go_restart)
 
 # Module-level aliases: internal code (and the tests, which monkeypatch
@@ -282,10 +283,15 @@ class Orchestrator:
             self.target, self.source = d.get("target"), d.get("source")
             self.reverse = bool(d.get("reverse"))
             self.resume = bool(d.get("resume", True))
+            # The session stamp, captured HERE: _persist() rewrites
+            # LAST_FILE (dropping it) the moment anything plays, and
+            # ORCH is built at import time — before any thread runs.
+            self.boot_stopped_at = float(d.get("stopped_at") or 0)
             if self.target:
                 log(f"remembered last play: [{self.source}] {self.target}")
         except (OSError, ValueError):
             pass
+        self.boot_stopped_at = getattr(self, "boot_stopped_at", 0.0)
         self.child_started = 0.0
         # Sonos renderer session: the poller's last /state snapshot (with
         # a monotonic stamp — a stale snapshot must read as NOT playing,
@@ -680,6 +686,8 @@ class Orchestrator:
         # resume-in-place shortcut anyway (its API is down), and when
         # the shortcut does hit, the extra is-active probe is a no-op.
         backend_ok = not is_spotify(target) or self._ensure_spotify_backend()
+        if not boot:
+            _SESSION["live"] = False   # a tap ends the power-on session
         with self.lock:
             if boot:
                 # The boot-resume thread is the LAST of three possible
@@ -1909,7 +1917,7 @@ class Orchestrator:
                 log(f"{action}: no internet — spotify can't start")
                 return {"routed": None, "error": "no-internet"}
             self._spawn(self.target, reverse=self.reverse,
-                        resume=self.resume)
+                        resume=self.resume or session_resume())
             log(f"{action} -> resuming last: {self.target}")
             return {"routed": "resume", "target": self.target}
         log(f"{action}: nothing to control")
@@ -1957,6 +1965,7 @@ class Orchestrator:
                "title": None, "position": None, "duration": None,
                "artwork": None, "episode_id": None, "shuffle": False,
                "spotify_offline": bool(_SPOT_OFFLINE[0]),
+               "session": _SESSION["verdict"] or "pending",
                "output": current_output()["output"]}
         if source == "sonos":
             # Same keys, same units as the mpv card — that identity IS
@@ -2244,7 +2253,8 @@ class Orchestrator:
                 out["artwork"] = bm.get("artwork")
                 out["position"] = (bm.get("position") or 0) / 1000
                 out["duration"] = (bm.get("duration") or 0) / 1000 or None
-        if out["title"] is None and target and not is_spotify(target):
+        if out["title"] is None and target and not is_spotify(target) \
+                and (self.resume or session_resume()):
             try:
                 with open(os.path.join(STATE_DIR,
                                        state_key(target) + ".json")) as f:
@@ -3480,16 +3490,22 @@ def _sonos_poller():
                         ORCH.source = ("spotify" if ORCH.target
                                        and is_spotify(ORCH.target)
                                        else "mpv")
-                if load_settings().get("resume_on_boot") and ORCH.target:
+                if load_settings().get("resume_window_h") != 0 \
+                        and ORCH.target:
                     try:
                         with open(LAST_FILE) as f:
                             was = json.load(f).get("was_playing")
                     except (OSError, ValueError):
                         was = False
-                    if was:
+                    if was and session_verdict(block_s=CLOCK_WAIT_S) \
+                            != "expired":
+                        # the SECOND boot gate (the sonos reconcile owns
+                        # this case, _boot_resume returns early for it) —
+                        # it must judge the session too, or a sonos box
+                        # would resume a three-day-old one
                         log("renderer was sonos at boot — resuming on "
                             "the BOX instead")
-                        ORCH.play(ORCH.target, boot=True)
+                        ORCH.play(ORCH.target, resume=True, boot=True)
         except _renderer.SidecarDown:
             log("sonos: sidecar not up yet — reconcile on next tick")
     ends_near = 0
@@ -4283,6 +4299,12 @@ def _flag_was_playing():
         with open(LAST_FILE) as f:
             last = json.load(f)
         last["was_playing"] = bool(playing)
+        # When it stopped, for the resume window. Only with a clock we
+        # trust: a stamp taken on the pre-RTC clock would read up to an
+        # hour stale next boot (field 2026-08-12: RTC moved the clock 46
+        # min AFTER the daemon was up). No stamp = the window can't
+        # judge = resume, which is the pre-window behaviour.
+        last["stopped_at"] = time.time() if clock_trusted() else 0
         with open(LAST_FILE + ".tmp", "w") as f:
             json.dump(last, f)
         os.replace(LAST_FILE + ".tmp", LAST_FILE)
@@ -4336,6 +4358,75 @@ def _sonos_on_term():
         pass  # never block a shutdown on a speaker
 
 
+# --- the power-on session ------------------------------------------------------
+# One global slot (LAST_FILE) already records what was playing and gets
+# replaced whenever anything else starts. Adding a stop-stamp turns it
+# into a SESSION: power on soon after switching off and the box carries
+# on exactly where it was; power on days later and it just wakes up in
+# the carousel. The per-entry `resume` flag is untouched — it still
+# decides what a TAP does (podcast: continue forever; music: track 1).
+
+SESSION_ALWAYS = -1
+CLOCK_WAIT_S = float(os.environ.get("TAPBOX_CLOCK_WAIT", "25"))
+_SESSION = {"verdict": None, "live": True}
+
+
+def session_age_verdict(stopped_at, window_h, now, trusted):
+    """'fresh' | 'expired' | 'unknown'. Pure — the tests drive this one.
+
+    Every uncertain case resolves to 'fresh', i.e. today's behaviour:
+    boxes with no RTC that boot offline never get a trustworthy clock,
+    and silently dropping THEIR resume would be a regression nobody
+    could see. Only a confidently old session expires."""
+    if window_h == 0:
+        return "expired"                    # never resume: no clock needed
+    if window_h == SESSION_ALWAYS:
+        return "fresh"                      # always: no clock needed
+    if not stopped_at:
+        return "fresh"                      # unstamped (upgrade, hard cut)
+    if not trusted:
+        return "unknown"                    # ask again once the clock lands
+    age = now - stopped_at
+    if age < 0:
+        return "fresh"                      # clock jumped back — no signal
+    return "expired" if age >= window_h * 3600 else "fresh"
+
+
+def session_verdict(block_s=0.0):
+    """This boot's verdict, decided ONCE and remembered. Waits up to
+    block_s for the clock to become trustworthy (the RTC load lands
+    after us on purpose — the daemon is deliberately unordered at
+    basic.target). A clock that never settles reads as fresh."""
+    if _SESSION["verdict"]:
+        return _SESSION["verdict"]
+    window = load_settings().get("resume_window_h", SESSION_ALWAYS)
+    stopped = ORCH.boot_stopped_at
+    deadline = time.monotonic() + block_s
+    while True:
+        v = session_age_verdict(stopped, window, time.time(), clock_trusted())
+        if v != "unknown":
+            break
+        if time.monotonic() >= deadline:
+            log("session: clock never became trustworthy — continuing "
+                "the last session")
+            v = "fresh"
+            break
+        time.sleep(BOOT_TICK_S)
+    _SESSION["verdict"] = v
+    _SESSION["live"] = v == "fresh"
+    if v == "expired":
+        log(f"session older than the {window}h resume window — "
+            f"starting fresh")
+    return v
+
+
+def session_resume():
+    """This power-on still owns playback: boot resume AND the play
+    button continue it, whatever the entry's per-TAP resume flag says.
+    Ends at the first tap (Orchestrator.play with boot=False)."""
+    return _SESSION["live"] and session_verdict() == "fresh"
+
+
 def _boot_resume():
     """Power on -> the story continues where it stopped (setting-gated).
     Both mpv content and Spotify resume at the exact second via their
@@ -4345,8 +4436,8 @@ def _boot_resume():
         return  # the sonos poller's startup reconcile owns this case:
         #         adopt a live session, or resume ON THE SPEAKER —
         #         starting local audio here is the double-play trap
-    if not load_settings().get("resume_on_boot"):
-        return
+    if load_settings().get("resume_window_h") == 0:
+        return   # "never continue" — no clock, no waiting, no session
     try:
         with open(LAST_FILE) as f:
             last = json.load(f)
@@ -4362,6 +4453,12 @@ def _boot_resume():
     except OSError:
         return
     target = last["target"]
+    # The verdict may need the RTC/NTP correction, which lands after us
+    # by design — so block for it here, before anything is spawned. The
+    # was_playing flag above is already consumed either way, so an
+    # expired boot can't leave a live flag for the next one.
+    if session_verdict(block_s=CLOCK_WAIT_S) == "expired":
+        return
     log(f"boot resume: waiting for the audio path, then continuing {target}")
     # Silent grace first (the speaker usually reconnects in 10-20s), then
     # — if the output is bt and the speaker is still away — raise the
@@ -4411,8 +4508,13 @@ def _boot_resume():
     with _BT_WAIT_LOCK:
         _BT_WAIT.update(lost=0.0, since=0.0, ready_until=0.0)
         _BT_WAIT.pop("lost_spotify", None)
+    # resume=True unconditionally: a power-on inside the window continues
+    # the SESSION, whatever the entry's per-tap flag says. That flag still
+    # rules taps — player.py enforces it on the READ side (it clears and
+    # ignores the bookmark for a --no-resume spawn), so "music starts at
+    # track 1 when you tap it" is untouched.
     ORCH.play(target, reverse=bool(last.get("reverse")),
-              resume=bool(last.get("resume", True)), boot=True)
+              resume=True, boot=True)
 
 
 class PortalHandler(BaseHTTPRequestHandler):

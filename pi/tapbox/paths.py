@@ -82,6 +82,31 @@ def go_restarted_within(secs):
     return 0 <= age < secs
 
 
+# Is the wall clock trustworthy THIS boot? The Zero has no RTC, so at
+# boot systemd/fake-hwclock restore roughly the time the box was last
+# running — i.e. approximately the moment it was switched off. Anything
+# that compares wall-clock stamps across a reboot (the resume session)
+# must therefore wait for a real correction: the PiSugar RTC load or
+# NTP. Same tmpfs-marker contract as the radio/go-restart markers —
+# advisory, crash-safe, and per-boot by construction.
+CLOCK_OK_FILE = os.path.join(RUN_DIR, "tapbox-clock-ok")
+NTP_SYNC_FILE = "/run/systemd/timesync/synchronized"
+
+
+def note_clock_ok():
+    """Record that something authoritative just set the wall clock."""
+    try:
+        with open(CLOCK_OK_FILE, "w"):
+            pass
+    except OSError:
+        pass
+
+
+def clock_trusted():
+    """True once the RTC load or NTP has set the clock this boot."""
+    return os.path.exists(CLOCK_OK_FILE) or os.path.exists(NTP_SYNC_FILE)
+
+
 def read_settings():
     """The raw settings dict ({} when missing/invalid). Validation and
     defaults live in the daemon — consumers treat this as advisory."""
