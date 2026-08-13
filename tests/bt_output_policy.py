@@ -12,7 +12,7 @@ radio and a wrecked bookmark.
 
 Rules asserted here:
   1. bt is announced only once the A2DP PCM exists (never mid-setup)
-  2. local fallback needs the target away for a sustained window
+  2. an absent speaker NEVER flips the output to the built-in one
   3. a failed attempt while already connected is a no-op (no churn)
   4. a quick drop->reconnect flap never touches the output
 """
@@ -78,7 +78,7 @@ def main():
     os.environ.update(
         VIBB_BT_FILE=os.path.join(tmp, "mac"),
         VIBB_BT_LOCKFILE=os.path.join(tmp, "lock"),
-        VIBB_RECON_FALLBACK="1", VIBB_RECON_DROP_RETRY="1")
+        VIBB_RECON_DROP_RETRY="1")
     open(os.environ["VIBB_BT_FILE"], "w").write("AA:BB:CC:DD:EE:FF\n")
 
     connected, timers, delays = _install_stubs()
@@ -125,8 +125,12 @@ def main():
     print("1. bt announce waits for the A2DP PCM OK")
 
     # 2: drop -> lost-notify fires ONCE (vibbd stops the player before
-    # mpv error-skips the queue); within the window no local fallback,
-    # sustained absence -> local
+    # mpv error-skips the queue) — and the output is NEVER moved to the
+    # built-in speaker, however long the speaker stays away (owner
+    # decision 2026-08-13). It used to flip after a sustained absence;
+    # nothing played through it then, but the next thing to start audio
+    # did, at a volume set for quiet headphones. On a bedtime box,
+    # silence is the right failure and the speaker is one press away.
     posts.clear()
     connected["v"] = False
     r._props_changed("org.bluez.Device1", {"Connected": False}, [],
@@ -134,14 +138,16 @@ def main():
     assert losts() == ["/bt/lost"], f"drop must notify vibbd: {posts}"
     timers.clear()
     r.state = "WAITING"
-    r._attempt_failed("page-timeout")          # inside FALLBACK window
+    r._attempt_failed("page-timeout")
     assert outputs() == [], f"premature fallback to local: {posts}"
     time.sleep(1.1)
     timers.clear()
-    r._attempt_failed("page-timeout")          # past the window
-    assert outputs() == ["local"], posts
-    print("2. drop notifies vibbd; local fallback only after "
-          "sustained absence OK")
+    r._attempt_failed("page-timeout")          # long absence: still no
+    r._attempt_failed("page-timeout")          # flip, however patient
+    assert outputs() == [], \
+        f"an absent speaker must never move audio to the box: {posts}"
+    print("2. drop notifies vibbd; the box speaker is never taken "
+          "automatically OK")
 
     # 3: a failed attempt while already connected must not churn output
     posts.clear()

@@ -105,7 +105,6 @@ RECENT_RETRY_S = float(os.environ.get("VIBB_RECON_RECENT_RETRY", "15"))
 ABSENT_AFTER_S = float(os.environ.get("VIBB_RECON_ABSENT_AFTER", "3600"))
 DEBOUNCE_S = float(os.environ.get("VIBB_RECON_DEBOUNCE", "5"))
 LOCK_RETRY_S = float(os.environ.get("VIBB_RECON_LOCK_RETRY", "10"))
-FALLBACK_S = float(os.environ.get("VIBB_RECON_FALLBACK", "20"))
 CONNECT_TIMEOUT_S = 30
 # Radio yield: blind pages hold while wifi is mid-setup at boot or a
 # network stream/track load is in flight (advisory marker from vibbd).
@@ -727,11 +726,19 @@ class Reconnector:
             f"{int(self.backoff)}s")
         if self.disconnected_since is None:
             self.disconnected_since = time.monotonic()
-        if time.monotonic() - self.disconnected_since >= FALLBACK_S:
-            # away for real — a speaker mid-power-cycle flaps drop/connect
-            # for many seconds, and each premature local/bt swing restarts
-            # go-librespot and yanks mpv's audio device (episode skips)
-            self._output("local")
+        # NO automatic switch to the built-in speaker (owner decision
+        # 2026-08-13). It used to flip the output here once the speaker
+        # had been away FALLBACK_S. Nothing played through it at the
+        # time — the fault handling had already killed mpv — but the
+        # NEXT thing to start audio did: a play press, a boot resume, a
+        # blip resume, all landing on the HAT amplifier at a volume the
+        # parent set for quiet headphones. On a bedtime box, going
+        # silent is the right failure: the story continuing out loud in
+        # a dark room is not a recovery, it is a fright. The speaker is
+        # still one press away — the play-against-an-absent-speaker
+        # popup offers it, with a person present and the screen lit.
+        # (A FORGOTTEN speaker still falls back at _on_target_changed:
+        # with no bt target at all, local is the only output there is.)
         away_s = time.monotonic() - self.disconnected_since
         if away_s >= ABSENT_AFTER_S:
             log(f"speaker away {int(away_s / 60)} min — parking blind pages "

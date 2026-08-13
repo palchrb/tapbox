@@ -107,7 +107,6 @@ def main():
     env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS=addr,
                VIBB_BT_FILE=mac_file, VIBB_BT_LOCKFILE=lock_file,
                VIBB_DAEMON=f"http://127.0.0.1:{stub.server_port}",
-               VIBB_RECON_FALLBACK="1",
                VIBB_RECON_BOOT_RETRY="1", VIBB_RECON_BOOT_WINDOW="15",
                VIBB_RECON_BACKOFF_MIN="2", VIBB_RECON_BACKOFF_MAX="8",
                VIBB_RECON_DROP_RETRY="1", VIBB_RECON_DEBOUNCE="0.5",
