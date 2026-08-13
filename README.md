@@ -9,6 +9,23 @@ and presses play; there is no store, no ads, no algorithm, and no open
 internet on the device. Content comes from subscriptions and feeds the
 family already has: Spotify, NRK, any podcast RSS, local files.
 
+## Content sources
+
+- **Spotify** (Premium; family member accounts work): playlists,
+  albums, artists and audiobooks, played through a pinned
+  [go-librespot](https://github.com/devgianlu/go-librespot) fork with
+  an **on-disk audio cache** — repeat plays start fast and spend
+  little data.
+- **Podcasts — any RSS/XML feed**, with first-class **NRK** support:
+  episodes cache offline (newest N per show, your choice), each with
+  its own episode art and exact per-episode resume.
+- **Your own files** *(early support, less battle-tested)*: DRM-free
+  audiobooks and rips — upload through the PWA or copy a folder onto
+  the box. Track titles and order come from the files' embedded tags;
+  cover art from a `cover.jpg` in the folder (a parent-uploaded cover
+  always wins) or, failing that, extracted automatically from the
+  files' embedded artwork.
+
 ## What the kid gets
 
 - **A cover carousel** — big album art, one cover at a time, an
