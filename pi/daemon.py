@@ -192,6 +192,15 @@ FREEZE_PROGRESS_S = float(os.environ.get("VIBB_FREEZE_PROGRESS", "10"))
 # hold releases once live is within TOL of the target, and never lasts
 # longer than MAX_S after spawn
 RESUME_MIN_S = float(os.environ.get("VIBB_RESUME_MIN", "20"))
+# The resume overlap, in seconds. Norwegian read-aloud runs ~2.5 words/s,
+# so 3s is about one clause — under the 5s the spotify layer already
+# treats as "the same spot" (spotify.py PREV_RESTART_MS). Music repeats
+# less: 3s of a song is a stutter, not a re-read.
+RESUME_OVERLAP_SPEECH_S = float(os.environ.get("VIBB_RESUME_OVERLAP", "3"))
+RESUME_OVERLAP_MUSIC_S = float(os.environ.get("VIBB_RESUME_OVERLAP_MUSIC",
+                                              "1"))
+RESUME_OVERLAP_LONG_S = float(os.environ.get("VIBB_RESUME_OVERLAP_LONG", "8"))
+RESUME_LONG_GAP_S = float(os.environ.get("VIBB_RESUME_LONG_GAP", "120"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("VIBB_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("VIBB_SETTLE_TOL", "3"))
 # boot resume: silent grace before the speaker popup, and the wait tick
@@ -516,7 +525,8 @@ class Orchestrator:
                     if (self.target and self.source == "mpv"
                             and not self._mpv_alive()):
                         self._spawn(self.target, reverse=self.reverse,
-                                    resume=self.resume)
+                                    resume=self.resume,
+                                    rewind=self._resume_overlap())
                 last_pos, last_change = None, time.monotonic()
                 last_tx, last_tx_change = None, time.monotonic()
             except Exception as e:
@@ -566,7 +576,8 @@ class Orchestrator:
             log(f"player died (rc {child.poll()}) while playing — "
                 f"respawning ({self._crash_respawns}/2 this boot)")
             self.child = None
-            self._spawn(target, reverse=reverse, resume=resume)
+            self._spawn(target, reverse=reverse, resume=resume,
+                        rewind=self._resume_overlap())
         return 0.0
 
     def _persist(self):
@@ -640,8 +651,29 @@ class Orchestrator:
             pass
         return True
 
+    def _resume_overlap(self, source=None):
+        """How far to back up when resuming after an OUTAGE (never after
+        a tap). The child should hear a word or two twice; missing a
+        sentence is what reads as "it broke".
+
+        This lives in the daemon because a player process cannot know
+        it: every fault spawns a fresh one, so it sees neither how long
+        the output was gone nor whether this is the third attempt in a
+        minute. Speech gets a clause, music gets a beat, a long outage
+        gets a run-up, and a flapping speaker gets nothing — ten faults
+        would otherwise walk the story ten clauses backwards."""
+        src = source or self.source
+        lost_at = _BT_WAIT.get("lost") or 0.0
+        gone_s = (time.monotonic() - lost_at) if lost_at else 0.0
+        if self._crash_respawns > 1 and gone_s < 15:
+            return 0.0                       # flap guard
+        if gone_s > RESUME_LONG_GAP_S:
+            return RESUME_OVERLAP_LONG_S     # they stopped listening
+        return (RESUME_OVERLAP_MUSIC_S if src == "spotify"
+                else RESUME_OVERLAP_SPEECH_S)
+
     def _spawn(self, target, fresh=False, episode=None, reverse=False,
-               cache=None, resume=True, exact=False):
+               cache=None, resume=True, exact=False, rewind=0.0):
         args = [sys.executable, player_path()]
         if fresh:
             args.append("--fresh")
@@ -649,6 +681,8 @@ class Orchestrator:
             args.append("--no-resume")
         if exact:
             args.append("--exact")
+        if rewind:
+            args += ["--rewind", f"{rewind:g}"]
         if reverse:
             args.append("--reverse")
         if episode:
@@ -1917,7 +1951,8 @@ class Orchestrator:
                 log(f"{action}: no internet — spotify can't start")
                 return {"routed": None, "error": "no-internet"}
             self._spawn(self.target, reverse=self.reverse,
-                        resume=self.resume or session_resume())
+                        resume=self.resume or session_resume(),
+                        exact=True, rewind=self._resume_overlap())
             log(f"{action} -> resuming last: {self.target}")
             return {"routed": "resume", "target": self.target}
         log(f"{action}: nothing to control")
@@ -3385,7 +3420,8 @@ def _bt_resume(resume):
         target, reverse, resume = ORCH.target, ORCH.reverse, ORCH.resume
         if target and not ORCH._mpv_alive():
             log("bt connect done — resuming playback on the new output")
-            ORCH._spawn(target, reverse=reverse, resume=resume)
+            ORCH._spawn(target, reverse=reverse, resume=resume,
+                        exact=True, rewind=ORCH._resume_overlap())
 
 
 def _wifi_boot_reenable():
@@ -3865,16 +3901,17 @@ def _bt_blip_resume():
         if (target and source == "mpv"
                 and not ORCH._mpv_alive()):
             log("speaker back within the blip window — resuming")
-            ORCH._spawn(target, reverse=ORCH.reverse,
-                        resume=ORCH.resume)
+            ORCH._spawn(target, reverse=ORCH.reverse, resume=ORCH.resume,
+                        rewind=ORCH._resume_overlap("mpv"))
             return
     if source == "spotify" and target:
         _go_output_rebuild()
         with ORCH.lock:
             if ORCH.target == target and not ORCH._mpv_alive():
                 log("speaker back within the blip window — resuming spotify")
-                ORCH._spawn(target, reverse=ORCH.reverse,
-                            resume=ORCH.resume)
+                ORCH._spawn(target, reverse=ORCH.reverse, resume=ORCH.resume,
+                            exact=True,
+                            rewind=ORCH._resume_overlap("spotify"))
 
 
 def _bt_transport_lost():

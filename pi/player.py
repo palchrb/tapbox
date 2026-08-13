@@ -208,7 +208,8 @@ def accept_spot_bookmark(bm, uri, exact=False):
 PLAY_TIMEOUT_S = float(os.environ.get("VIBB_SPOT_PLAY_TIMEOUT", "8"))
 
 
-def play_spotify(target, fresh=False, exact=False, start_uri=None):
+def play_spotify(target, fresh=False, exact=False, start_uri=None,
+                 rewind=0.0):
     uri = spotify.to_uri(target)
     if not uri:
         log(f"could not parse spotify link: {target}")
@@ -260,8 +261,16 @@ def play_spotify(target, fresh=False, exact=False, start_uri=None):
         # looked 'empty', and a slow (>20s) load silently skipped the
         # seek and resumed at 0:00 (field 2026-07-18). One call, no race.
         # (An early bookmark has position 0 -> omit it, play from the top.)
+        # The resume overlap lands here for spotify: the mpv branch never
+        # runs for these targets, so subtracting it there was a no-op
+        # (QA 2026-08-13). Milliseconds, clamped at 0.
         if bm["position"]:
-            body["position"] = int(bm["position"])
+            pos_ms = max(0, int(bm["position"]) - int(rewind * 1000))
+            if pos_ms != int(bm["position"]):
+                log(f"resume overlap: backing up {rewind:g}s to "
+                    f"{pos_ms // 1000}s")
+            if pos_ms:
+                body["position"] = pos_ms
     # Even with the session up, the FIRST request after a restart can be
     # slow server-side (dealer/audio-key fetch still warming: 'context
     # deadline exceeded' in go-librespot's log) — retry instead of dying.
@@ -337,8 +346,13 @@ def main():
     cache_n = None   # library entry cache setting; None = legacy behaviour
     no_resume = False  # library 'from start' setting: never remember position
     exact = False    # output-switch resume: honor even a sub-threshold pos
+    rewind = 0.0     # seconds to back up when resuming after an outage: the
+    #                  child should hear a word or two twice, never miss a
+    #                  sentence. The DAEMON picks the value — it knows how
+    #                  long the output was gone and whether this is a repeat
+    #                  fault; a player process only ever sees one fault.
     while args and args[0] in ("--fresh", "--reverse", "--episode", "--cache",
-                               "--no-resume", "--exact"):
+                               "--no-resume", "--exact", "--rewind"):
         if args[0] == "--fresh":
             fresh = True
             args = args[1:]
@@ -348,6 +362,12 @@ def main():
         elif args[0] == "--exact":
             exact = True
             args = args[1:]
+        elif args[0] == "--rewind":
+            try:
+                rewind = max(0.0, float(args[1]))
+            except (IndexError, ValueError):
+                rewind = 0.0
+            args = args[2:]
         elif args[0] == "--reverse":
             reverse = True
             args = args[1:]
@@ -373,7 +393,8 @@ def main():
     if is_spotify(target):
         # --episode on a spotify target = a track pick from the song
         # picker: the id IS the track uri, played via skip_to_uri
-        play_spotify(target, fresh=fresh, exact=exact, start_uri=episode)
+        play_spotify(target, fresh=fresh, exact=exact,
+                     start_uri=episode, rewind=rewind)
         return
 
     titles, ids, images = {}, {}, {}
@@ -451,6 +472,16 @@ def main():
                      or st.get("url") == urls[0]):
             log(f"continuing at '{titles.get(urls[0]) or urls[0]}' "
                 "(from its start)")
+
+    # The resume overlap: back up a beat so the child hears a word twice
+    # instead of missing a sentence. Applied HERE, where start_pos is
+    # final and before the publish below — subtracting at the seek would
+    # leave vibbd holding the display at the un-rewound position for the
+    # whole overlap (_settle_position), so the bar would freeze and
+    # now-playing.json would lie (QA 2026-08-13).
+    if rewind and start_pos:
+        start_pos = max(0.0, start_pos - rewind)
+        log(f"resume overlap: backing up {rewind:g}s to {int(start_pos)}s")
 
     # Publish the FIRST item before mpv even starts: vibbd's /status
     # then serves the right episode name + artwork from the first frame,
