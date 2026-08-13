@@ -99,6 +99,17 @@ migrate_from_tapbox() {
         mv -n "$f" "$(dirname "$f")/.vibb-meta.json" || true
       done
   fi
+  # /etc/asound.conf carries the PCM NAMES, and the bt one is written
+  # dynamically (it embeds the speaker's MAC) so the installer's own
+  # template never replaces it — the "bluealsa" match below makes it
+  # look present and correct. Rename in place, or go-librespot opens a
+  # pcm that no longer exists and every Spotify play dies on
+  # "Unknown PCM vibb_bt" while the screen happily says it is playing.
+  if [[ -f /etc/asound.conf ]] && grep -q 'pcm\.tapbox_' /etc/asound.conf; then
+    sed -i 's/pcm\.tapbox_bt/pcm.vibb_bt/g;
+            s/pcm\.tapbox_local/pcm.vibb_local/g' /etc/asound.conf
+    moved=1
+  fi
   # Old services MUST go: their unit files are still enabled and would
   # come up alongside the new ones — two daemons fighting over :3679,
   # the screen and the GPIO pins. But the HARDWARE-gated ones (screen,
@@ -298,7 +309,7 @@ EOF
   echo "    wrote placeholder /etc/asound.conf"
 fi
 # Migration: older asound.conf versions lack the vibb_local pcm
-if ! grep -q "vibb_local" /etc/asound.conf 2>/dev/null; then
+if ! grep -q "pcm\.vibb_local" /etc/asound.conf 2>/dev/null; then
   cat >> /etc/asound.conf <<'EOF'
 # Built-in/HAT speaker (Pirate Audio / Amp SHIM, MAX98357A over I2S).
 # Needs dtoverlay=hifiberry-dac (sudo vibb-power hat-audio-on) + reboot.
