@@ -3421,7 +3421,13 @@ class App:
         # joins the animation thread: the splash and the real UI must
         # never both own the panel. getattr — tests build App directly.
         getattr(self, "splash_done", lambda: None)()
-        log("ready")
+        t0 = getattr(self, "boot_t0", None)
+        if t0 is None:
+            log("ready")                       # tests build App directly
+        else:
+            up = time.monotonic() - t0
+            log(f"ready after {up:.1f}s in the ui "
+                f"(splash shown {up - self.splash_at:.1f}s)")
         self._loop_beat = time.monotonic()
         if UI_WATCHDOG_S:
             threading.Thread(target=self._render_watchdog,
@@ -3729,9 +3735,17 @@ def blank_screen(display):
 
 
 def main():
+    # Boot timing, logged because it cannot be derived: the box's clock
+    # JUMPS mid-boot when the PiSugar RTC lands, so journal timestamps
+    # that straddle it lie about durations by ~20s. These deltas are
+    # measured on the monotonic clock and are immune to that.
+    t0 = time.monotonic()
     display = make_display()
+    log(f"display up after {time.monotonic() - t0:.1f}s")
     splash_done = _boot_splash(display)   # lights up now, and BREATHES
     #                                       through the slow init below
+    splash_at = time.monotonic() - t0
+    log(f"splash lit after {splash_at:.1f}s")
 
     def _term(*_a):
         # systemd stops us for a handoff (extras), a service restart or
@@ -3742,6 +3756,9 @@ def main():
     signal.signal(signal.SIGTERM, _term)
 
     app = App(display, make_input())
+    log(f"inputs ready after {time.monotonic() - t0:.1f}s")
+    app.boot_t0 = t0
+    app.splash_at = splash_at
     app.splash_done = splash_done   # run() stops the breathing mark the
     #                                 moment it is ready to paint for real
     try:
