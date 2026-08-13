@@ -65,7 +65,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # the new one does not, so a re-run is a no-op and a fresh box skips it.
 migrate_from_tapbox() {
   local moved=0
-  for pair in "/var/lib/tapbox /var/lib/vibb" "/etc/tapbox /etc/vibb"; do
+  for pair in "/var/lib/tapbox /var/lib/vibb" "/etc/tapbox /etc/vibb" \
+              "/opt/tapbox /opt/vibb"; do
     set -- $pair
     if [[ -d $1 && ! -e $2 ]]; then
       mv "$1" "$2" && moved=1
@@ -90,6 +91,12 @@ migrate_from_tapbox() {
     moved=1
   done
   rm -f /usr/local/bin/tapbox-* 2>/dev/null || true
+  # A venv built at the new path before this ran (an install that raced
+  # the rename) leaves the old tree behind as dead weight — tens of MB
+  # of wheels on an SD card that also holds the offline episodes.
+  if [[ -d /opt/tapbox && -d /opt/vibb ]]; then
+    rm -rf /opt/tapbox && moved=1
+  fi
   if (( moved )); then
     systemctl daemon-reload
     echo "    migrated this box from tapbox to vibb (data kept, old"
