@@ -81,12 +81,19 @@ migrate_from_tapbox() {
   fi
   # Old services MUST go: their unit files are still enabled and would
   # come up alongside the new ones — two daemons fighting over :3679,
-  # the screen and the GPIO pins.
-  local old
+  # the screen and the GPIO pins. But the HARDWARE-gated ones (screen,
+  # card reader) are installed DISABLED by design, so a box that had
+  # them switched on would silently lose them here — the screen simply
+  # goes dark after the rename. Carry that choice across.
+  local old base
   for old in /etc/systemd/system/tapbox-*.service \
              /etc/systemd/system/tapbox-*.timer; do
     [[ -e $old ]] || continue
-    systemctl disable --now "$(basename "$old")" >/dev/null 2>&1 || true
+    base="$(basename "$old")"
+    if systemctl is-enabled --quiet "$base" 2>/dev/null; then
+      echo "${base#tapbox-}" >> /run/vibb-was-enabled
+    fi
+    systemctl disable --now "$base" >/dev/null 2>&1 || true
     rm -f "$old"
     moved=1
   done
@@ -1141,6 +1148,19 @@ fi
 [[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart vibb-idle.service; }
 [[ ${SONOS_CHANGED:-0} -eq 1 ]] && { echo "    sonos sidecar changed — restarting"; systemctl restart vibb-sonos.service; }
 [[ ${CHARGE_CHANGED:-0} -eq 1 ]] && { echo "    charger-follow changed — restarting"; systemctl restart vibb-chargefollow.service; }
+# Hardware-gated units the box had switched on before the rename: their
+# new equivalents exist by now, so restore the choice the owner made.
+if [[ -f /run/vibb-was-enabled ]]; then
+  while read -r svc; do
+    [[ $svc == ui.service || $svc == rfid.service ]] || continue
+    if ! systemctl is-enabled --quiet "vibb-$svc" 2>/dev/null; then
+      systemctl enable --now "vibb-$svc" >/dev/null 2>&1 \
+        && echo "    vibb-${svc%.service} re-enabled (it was on before the rename)"
+    fi
+  done < /run/vibb-was-enabled
+  rm -f /run/vibb-was-enabled
+fi
+
 [[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet vibb-rfid.service 2>/dev/null \
   && { echo "    rfid daemon changed — restarting"; systemctl restart vibb-rfid.service; }
 [[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart vibb-buttons.service; }
