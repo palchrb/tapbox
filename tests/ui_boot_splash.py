@@ -26,15 +26,47 @@ os.environ["VIBB_SPLASH_FPS"] = "60"      # keep the test quick
 
 import ui  # noqa: E402
 
-# 1. the geometry is the ARTWORK's own, not eyeballed or re-fitted
+# 1. the rings come from the ARTWORK FILE, and they are not circles:
+#    the radius wanders ~4% around the turn. Drawing them as ellipses
+#    flattened exactly the hand-shaped character the mark has.
+import math  # noqa: E402
+
+assert os.path.exists(ui.MARK_SVG), ui.MARK_SVG
+rings = ui.mark_rings()
+assert len(rings) == 4, f"four rings, got {len(rings)}"
+for pts in rings:
+    assert len(pts) > 100, "a ring is a dense polyline, not a few corners"
+    rad = [math.hypot(x, y) for x, y in pts]
+    assert (max(rad) - min(rad)) / max(rad) > 0.02, \
+        "these rings are organic — a perfect circle means we lost them"
+# biggest first, so the phase stagger runs outward
+assert [max(math.hypot(x, y) for x, y in p) for p in rings] == \
+    sorted([max(math.hypot(x, y) for x, y in p) for p in rings], reverse=True)
 assert (ui.MARK_S, ui.MARK_CX, ui.MARK_CY) == (1.9, 120.0, 96.0)
-assert ui.MARK_RADII == (25.45, 19.58, 14.39, 9.48)
 assert (ui.MARK_WORD_X, ui.MARK_WORD_Y) == (120.0, 196.0)
 assert ui.MARK_WORD_SIZE == 52 and ui.MARK_WORD_TRACK == -1.56
 # and it all fits: the outer ring at full breath must not clip
-assert ui.MARK_CY - ui.MARK_RADII[0] * ui.MARK_S * 1.04 > 0
-assert ui.MARK_WORD_Y < ui.H
-print("1. geometry is the artwork's own numbers, and fits OK")
+assert ui.MARK_CY - 25.5 * ui.MARK_S * 1.04 > 0 and ui.MARK_WORD_Y < ui.H
+print(f"1. {len(rings)} organic rings read from the artwork, and they fit OK")
+
+# 1b. an unreadable artwork must not stop a boot — plain rings instead
+saved, ui._RINGS[:] = list(ui._RINGS), []
+real_svg, ui.MARK_SVG = ui.MARK_SVG, "/nonexistent/nope.svg"
+try:
+    fb = ui.mark_rings()
+    assert len(fb) == 4 and len(fb[0]) > 100
+finally:
+    ui.MARK_SVG = real_svg
+    ui._RINGS[:] = saved
+print("1b. a missing artwork falls back to plain rings, never breaks OK")
+
+# 1c. the wordmark uses the artwork's own face. Nunito ships VARIABLE,
+#     so the Black axis must be selected — the default instance is
+#     ExtraLight, the opposite of the mark.
+name = ui._mark_font().getname()
+if os.path.exists(os.path.join(os.path.dirname(ui.MARK_SVG), "Nunito.ttf")):
+    assert name == ("Nunito", "Black"), f"got {name} — hairline wordmark"
+print(f"1c. wordmark face: {name[0]} {name[1]} OK")
 
 # 2. the breathe: symmetric, bounded, and STAGGERED across the rings —
 #    the stagger is what makes the breath travel outward

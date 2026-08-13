@@ -3522,15 +3522,30 @@ class App:
 
 
 # --- the boot mark ------------------------------------------------------------
-# The vibb logo, drawn from the 240x240 artwork's own numbers: the mark
-# group sits at (120,96) scaled 1.9, the wordmark is centred on baseline
-# 196. Nothing is re-composed or re-fitted — the screen IS the artboard.
+# The vibb logo, drawn from the artwork FILE (art/vibb-mark.svg) rather
+# than from numbers copied out of it. The rings are not circles: their
+# radius wanders about 4% around the turn — hand-shaped, and drawing
+# them as ellipses flattened exactly the character the mark has. So the
+# four ring outlines are read as the polylines they are, and the SVG
+# stays the source: re-draw the logo, replace the file, done.
 #
-# Geometry, never a scaled bitmap: at this size a resampled PNG would
-# soften exactly the thin strokes the mark is made of.
+# Only the little that this one file uses is parsed — M/L polylines, the
+# group transform, the core circle, the wordmark. Anything unexpected
+# falls back to plain circles, because a splash must never break a boot.
+def _art_dir():
+    """Where the artwork lives — beside this file when run from the repo,
+    under share/ once install.sh has copied ui.py into /usr/local/bin."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (os.path.join(here, "art"), "/usr/local/share/vibb/art"):
+        if os.path.isdir(d):
+            return d
+    return os.path.join(here, "art")
+
+
+MARK_SVG = os.path.join(_art_dir(), "vibb-logo-pust-240-natt.svg")
 MARK_S = 1.9                       # the artwork's own group transform
 MARK_CX, MARK_CY = 120.0, 96.0
-MARK_RADII = (25.45, 19.58, 14.39, 9.48)
+MARK_FALLBACK_R = (25.45, 19.58, 14.39, 9.48)   # if the file is unreadable
 MARK_CORE_R = 4.3
 MARK_STROKE = 2.6                  # scales with the group, as in SVG
 MARK_WORD_X, MARK_WORD_Y = 120.0, 196.0     # centred, on its baseline
@@ -3542,6 +3557,29 @@ MARK_WORD = (246, 231, 224)        # #f6e7e0
 BREATHE_S = 4.0                    # one full in-and-out
 SPLASH_FPS = float(os.environ.get("VIBB_SPLASH_FPS", "12"))
 _SS = 3                            # supersample: PIL strokes are aliased
+_RINGS = []                        # [[(x, y), ...], ...] in artwork units
+
+
+def mark_rings():
+    """The ring outlines from the artwork, biggest first. Parsed once."""
+    if _RINGS:
+        return _RINGS
+    try:
+        svg = open(MARK_SVG, encoding="utf-8").read()
+        for dattr in re.findall(r'<path[^>]*\sd="([^"]+)"', svg):
+            pts = [(float(x), float(y)) for x, y in
+                   re.findall(r'[ML](-?[\d.]+)\s+(-?[\d.]+)', dattr)]
+            if len(pts) > 8:       # a ring, not some stray decoration
+                _RINGS.append(pts)
+    except (OSError, ValueError) as e:
+        log(f"boot mark: {e.__class__.__name__} reading the artwork — "
+            f"drawing plain rings")
+    if not _RINGS:
+        _RINGS.extend([[(r * math.cos(a * math.pi / 90),
+                         r * math.sin(a * math.pi / 90)) for a in range(180)]
+                       for r in MARK_FALLBACK_R])
+    _RINGS.sort(key=lambda p: -max(abs(x) for x, _ in p))
+    return _RINGS
 
 
 def _ease(u):
@@ -3563,6 +3601,21 @@ def _blend(fg, bg, a):
 
 
 def _mark_font():
+    """The wordmark's own typeface. Nunito ships as a VARIABLE font, so
+    the Black weight has to be selected — and if this FreeType cannot
+    (built without variable support), the default instance is
+    ExtraLight, which is the opposite of the mark. So a failure there
+    falls through to DejaVu Bold rather than quietly drawing a hairline
+    wordmark."""
+    nunito = os.path.join(_art_dir(), "Nunito.ttf")
+    if os.path.exists(nunito):
+        try:
+            f = ImageFont.truetype(nunito, MARK_WORD_SIZE)
+            f.set_variation_by_name("Black")
+            return f
+        except Exception as e:
+            log(f"boot mark: Nunito Black unavailable ({e.__class__.__name__})"
+                f" — using the system face")
     for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
         if os.path.exists(p):
@@ -3589,15 +3642,17 @@ def splash_frame(t, word_font=None):
     img = Image.new("RGB", (W * _SS, H * _SS), BG)
     d = ImageDraw.Draw(img)
     cx, cy = MARK_CX * _SS, MARK_CY * _SS
-    for i, r0 in enumerate(MARK_RADII):
+    rings = mark_rings()
+    wide = max(1, round(MARK_STROKE * MARK_S * _SS))
+    for i, pts in enumerate(rings):
         # the artwork staggers the rings 0.28s apart, so the breath
         # travels outward instead of pulsing as one blob
-        phase = -0.28 * (len(MARK_RADII) - i)
-        r = r0 * MARK_S * _breathe(t, phase=phase) * _SS
+        phase = -0.28 * (len(rings) - i)
+        k = MARK_S * _breathe(t, phase=phase) * _SS
         a = _breathe(t, lo=0.55, hi=1.0, phase=phase)
-        d.ellipse([cx - r, cy - r, cx + r, cy + r],
-                  outline=_blend(MARK_RING, BG, a),
-                  width=max(1, round(MARK_STROKE * MARK_S * _SS)))
+        xy = [(cx + x * k, cy + y * k) for x, y in pts]
+        d.line(xy + [xy[0]], fill=_blend(MARK_RING, BG, a),
+               width=wide, joint="curve")
     r = MARK_CORE_R * MARK_S * _breathe(t, lo=0.9, hi=1.08) * _SS
     d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=MARK_CORE_RGB)
     img = img.resize((W, H), Image.Resampling.LANCZOS)

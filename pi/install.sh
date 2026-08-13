@@ -764,6 +764,15 @@ install_if_changed 755 "$SCRIPT_DIR/extra.sh" /usr/local/bin/vibb-extra || true
 install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/vibb-lib   || true
 UI_CHANGED=$PKG_CHANGED
 install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/vibb-ui    && UI_CHANGED=1
+# The boot mark's artwork and its typeface. ui.py is copied INTO
+# /usr/local/bin, so "beside the script" is not where these can live;
+# the screen looks here next. A changed logo restarts the UI.
+mkdir -p /usr/local/share/vibb/art
+for _a in "$SCRIPT_DIR"/art/*; do
+  [[ -e $_a ]] || continue
+  install_if_changed 644 "$_a" "/usr/local/share/vibb/art/$(basename "$_a")" \
+    && UI_CHANGED=1
+done
 install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/vibb-play  || true
 
 # mDNS: advertise the box as <BOX_NAME>.local regardless of the system
