@@ -529,8 +529,12 @@ def _art_disk_save(img, path):
 FIFO_PATH = os.environ.get("VIBB_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
-SESSION_WAIT_TICKS = 16  # x0.5s: how long the splash waits for the
-#                          daemon's session verdict at boot
+SESSION_WAIT_TICKS = 6   # x0.5s the splash waits for the daemon's
+#                          session verdict. It is normally instant (the
+#                          daemon settles it in its own boot thread), so
+#                          this is only a guard against a slow clock —
+#                          and an unresolved one lands on now-playing,
+#                          which is what it did before any of this.
 BURST_POLL_S = 0.3   # /status cadence while a command is in flight
 #                      (poll_burst_until); measured from fetch
 #                      completion, so a slow daemon self-paces

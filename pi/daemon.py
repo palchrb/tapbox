@@ -4902,6 +4902,15 @@ def main():
         pass  # not the main thread (tests run main() in a thread)
     _library.BUSY_CHECK = _audible_now  # the sweep yields to live audio
     threading.Thread(target=_wifi_ps_governor, daemon=True).start()
+    # Settle the session verdict in its own thread, NOT as a side effect
+    # of _boot_resume: that function returns early on the common boots
+    # (nothing was playing, sonos, resume off), so the verdict stayed
+    # unset, /status answered "pending" forever, and the screen sat on
+    # the splash for its full patience every single time. With the
+    # default window it resolves instantly; only an hours window ever
+    # waits, and it waits here instead of in front of the child.
+    threading.Thread(target=session_verdict, args=(CLOCK_WAIT_S,),
+                     daemon=True).start()
     threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_prewarm_mpv, daemon=True).start()
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()
