@@ -676,6 +676,12 @@ def _rgb565(img, rotation=90):
 
 class St7789Display:
     def __init__(self):
+        # Split-timed: bringing the panel up is the biggest single item
+        # inside this process (2.2s measured on the box 2026-08-13) and
+        # it has two very different halves — the SPI panel's own reset
+        # sequence, and gpiozero, which probes its GPIO backends in turn
+        # unless told which to use.
+        t = time.monotonic()
         import st7789  # Pimoroni library
         # backlight=None: we drive BCM13 ourselves so we can DIM it (the
         # library only does on/off). PWMLED via the lgpio pin factory
@@ -683,10 +689,12 @@ class St7789Display:
         self.disp = st7789.ST7789(
             height=240, width=240, rotation=90, port=0, cs=1, dc=9,
             backlight=None, spi_speed_hz=80 * 1000 * 1000)
+        panel = time.monotonic() - t
         self.on = True
         self.brightness = 100
         self._fast = os.environ.get("VIBB_FAST_PUSH", "1") != "0"
         self._bl = None
+        t = time.monotonic()
         try:
             from gpiozero import PWMLED
             self._bl = PWMLED(BACKLIGHT_PIN)
@@ -694,6 +702,7 @@ class St7789Display:
         except Exception as e:
             log(f"backlight PWM unavailable ({e.__class__.__name__}) — "
                 f"on/off only")
+        log(f"panel {panel:.1f}s + backlight {time.monotonic() - t:.1f}s")
 
     def show(self, img):
         # Fast path: convert ourselves, push bytes through the library's
