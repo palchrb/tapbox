@@ -66,7 +66,9 @@
       recordings straight to the box — no subscription, works offline.
       Group files into a collection, then add it below as a library entry
       using the folder path shown.</p>
-    <input id="up-collection" placeholder="Collection (e.g. Ronja)">
+    <input id="up-collection" list="collection-names"
+           placeholder="Collection (e.g. Ronja)">
+    <datalist id="collection-names"></datalist>
     <input id="up-files" type="file" multiple
            accept="audio/*,.m4b,.opus,.flac,image/jpeg,image/png">
     <div id="up-progress" hidden>

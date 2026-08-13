@@ -514,6 +514,126 @@ def collection_image(target):
     return None
 
 
+# --- per-track embedded art (local collections) ---------------------------------
+# iTunes buys and CD rips carry the cover INSIDE each file (ID3 APIC /
+# MP4 covr). One cover.jpg per folder is right for an album but wrong
+# for a folder of loose singles — so each file's art is extracted once
+# to .art/<file>.jpg (300px, the podcast-art cap) and each track shows
+# its own. The folder cover stays the collection's face outward.
+
+AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav")
+ART_DIR = ".art"
+
+
+def track_art_path(folder, fname):
+    return os.path.join(folder, ART_DIR, fname + ".jpg")
+
+
+def _track_art_neg(folder, fname):
+    return os.path.join(folder, ART_DIR, fname + ".none")
+
+
+def drop_track_art(folder, fname):
+    """Remove one file's extracted art + marker (file deleted)."""
+    for p in (track_art_path(folder, fname), _track_art_neg(folder, fname)):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def extract_track_art(folder, fname):
+    """Embedded art -> .art/<fname>.jpg, once ever per file.
+
+    NEVER rewrites an existing jpg — mtime keys the UI's disk thumbs,
+    and an identical rewrite would invalidate every cached size (QA
+    2026-08-13). A file with no picture stream gets a .none marker so
+    the nightly heal never re-runs ffprobe/ffmpeg on it. The probe uses
+    -show_streams (attached pictures are invisible to -show_format);
+    ffmpeg only ever runs when the probe saw a picture."""
+    dest = track_art_path(folder, fname)
+    neg = _track_art_neg(folder, fname)
+    if os.path.exists(dest):
+        return True
+    if os.path.exists(neg):
+        return False
+    src = os.path.join(folder, fname)
+    try:
+        os.makedirs(os.path.join(folder, ART_DIR), exist_ok=True)
+    except OSError:
+        return False
+    has_pic = False
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", src],
+            capture_output=True, text=True, timeout=30)
+        for st in json.loads(r.stdout or "{}").get("streams") or []:
+            if st.get("codec_type") == "video":
+                has_pic = True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    if has_pic:
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-i", src, "-an",
+                 "-frames:v", "1", "-update", "1",
+                 "-vf", "scale='min(300,iw)':-2", dest],
+                capture_output=True, timeout=60)
+            if r.returncode == 0 and os.path.getsize(dest) > 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+    try:
+        open(neg, "w").close()
+    except OSError:
+        pass
+    return False
+
+
+def folder_art_pending(folder):
+    """Any audio file with neither art nor a no-art marker? Pure stats —
+    the sweep uses this to skip the heal subprocess entirely."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    return any(f.lower().endswith(AUDIO_EXTS)
+               and not os.path.exists(track_art_path(folder, f))
+               and not os.path.exists(_track_art_neg(folder, f))
+               for f in names)
+
+
+def heal_folder_art(folder):
+    """One pass for a whole folder: extract what's missing (hand-copied
+    collections never went through the uploader) and prune art whose
+    audio file is gone (files deleted outside the PWA). Idempotent —
+    the second run does only stats."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return 0
+    audio = [f for f in sorted(names) if f.lower().endswith(AUDIO_EXTS)]
+    got = sum(1 for f in audio if extract_track_art(folder, f))
+    art_d = os.path.join(folder, ART_DIR)
+    try:
+        keep = {f + ".jpg" for f in audio} | {f + ".none" for f in audio}
+        for a in os.listdir(art_d):
+            if a not in keep:
+                try:
+                    os.remove(os.path.join(art_d, a))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    _log(f"track art: {got}/{len(audio)} covers in {folder}")
+    return got
+
+
 # While a remote renderer (Sonos) is active the box is a controller, not
 # a player: a cached LOCAL PATH is unplayable for the speaker, so the
 # original stream url must win — otherwise exactly the shows synced for
@@ -848,9 +968,8 @@ def expand_entries(target):
         # Local folder (e.g. a DRM-free audiobook): sorted playlist of audio
         # files, each keyed on its filename so resume survives moves/renames
         # of the parent folder. A cover.jpg in the folder becomes the art.
-        exts = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav")
         files = sorted(f for f in os.listdir(target)
-                       if f.lower().endswith(exts))
+                       if f.lower().endswith(AUDIO_EXTS))
         if files:
             _log(f"folder with {len(files)} audio files: {target}")
             cover = collection_image(target)
@@ -871,10 +990,20 @@ def expand_entries(target):
                 nums = [meta.get(f, {}).get("track") for f in files]
                 if all(isinstance(n, int) for n in nums):
                     files = [f for _, f in sorted(zip(nums, files))]
+            # Per-track art beats the folder cover: a folder of loose
+            # singles (each mp3 with its own embedded art) shows each
+            # song's OWN cover in the list and the now view. An album
+            # whose files all carry the same art looks unchanged. The
+            # exists-probe (not the meta sidecar) is deliberate: it
+            # self-heals on delete/rename and works for hand-copied
+            # folders (QA 2026-08-13).
+            def _img(f):
+                art = track_art_path(target, f)
+                return art if os.path.exists(art) else cover
             return [{"url": os.path.join(target, f),
                      "title": (meta.get(f, {}).get("title")
                                or os.path.splitext(f)[0]),
-                     "id": f, "image": cover}
+                     "id": f, "image": _img(f)}
                     for f in files]
         return passthrough
     try:
@@ -996,6 +1125,8 @@ if __name__ == "__main__":
     elif len(sys.argv) >= 3 and sys.argv[1] == "sync-feed":
         sync_feed(sys.argv[2],
                   int(sys.argv[3]) if len(sys.argv) > 3 else SYNC_COUNT)
+    elif len(sys.argv) == 3 and sys.argv[1] == "art-heal":
+        heal_folder_art(sys.argv[2])
     elif len(sys.argv) == 2:
         print("\n".join(expand(sys.argv[1])))
     else:

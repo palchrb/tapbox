@@ -1254,6 +1254,18 @@ async function loadMedia() {
   try { r = await api("/media"); } catch (e) { box.textContent = ""; return; }
   const gb = (n) => (n / 1e9).toFixed(1) + " GB";
   box.innerHTML = "";
+  /* Existing collections as datalist suggestions: adding more files to
+     "Ronja" means picking it, not retyping it — a typo ("Ronja ")
+     silently created a NEW collection. */
+  const dl = $("#collection-names");
+  if (dl) {
+    dl.innerHTML = "";
+    for (const c of r.collections || []) {
+      const o = document.createElement("option");
+      o.value = c.name;
+      dl.appendChild(o);
+    }
+  }
   for (const c of r.collections || []) {
     const el = document.createElement("div");
     el.className = "entry";

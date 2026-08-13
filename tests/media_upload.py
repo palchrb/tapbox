@@ -107,7 +107,13 @@ print("3. path traversal in the filename is neutralized OK")
 # so the listing assertions below are about the real uploads
 for f in os.listdir(os.path.join(MEDIA, "Ronja")):
     if f not in ("01-kapittel.mp3", "02-kapittel.mp3"):
-        os.remove(os.path.join(MEDIA, "Ronja", f))
+        fp = os.path.join(MEDIA, "Ronja", f)
+        if os.path.isdir(fp):     # .art/ — same shape /media/delete handles
+            for a in os.listdir(fp):
+                os.remove(os.path.join(fp, a))
+            os.rmdir(fp)
+        else:
+            os.remove(fp)
 
 # 3b. unknown extensions are refused (no scripts/binaries onto the box)
 for bad in ("evil.sh", "evil.py", "noext"):

@@ -85,7 +85,8 @@ print("6. wifi-up + speaker-off shows green wifi and dim BT together OK")
 # bt_connected into self.system (which the icon reads) so the BT icon
 # tracks connect/drop as fast as the popup, not the 30s /system poll.
 stub = type("S", (), {"status": {}, "system": {}, "dirty": False,
-                       "_pp_expect": None})()
+                       "_pp_expect": None,
+                       "_expect_target": None})()
 ui.App._set(stub, "status", {"bt_connected": True, "playing": False})
 assert stub.system.get("bt_ready") is True, stub.system
 ui.App._set(stub, "status", {"bt_connected": False, "playing": False})
@@ -93,7 +94,8 @@ assert stub.system.get("bt_ready") is False, stub.system
 # a /status with no bt_connected key (no speaker configured) must not
 # invent one — else a built-in-only box would sprout a BT icon
 stub2 = type("S", (), {"status": {}, "system": {}, "dirty": False,
-                       "_pp_expect": None})()
+                       "_pp_expect": None,
+                       "_expect_target": None})()
 ui.App._set(stub2, "status", {"playing": True})
 assert "bt_ready" not in stub2.system, stub2.system
 print("7. /status folds live bt_connected into the icon (fast, gated) OK")

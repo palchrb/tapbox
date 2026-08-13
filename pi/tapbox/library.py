@@ -537,6 +537,30 @@ def _cache_sweeper():
                     except OSError as exc:
                         log(f"spotify pre-cache {e['name']}: {exc!r}")
                     continue
+                if os.path.isdir(e["target"]):
+                    # Local collection: heal per-track art for files that
+                    # never went through the uploader (hand-copied) —
+                    # runs regardless of the cache setting (the files ARE
+                    # the cache). folder_art_pending is pure stats, so a
+                    # healed folder costs no subprocess; the .none
+                    # markers keep art-less files from re-probing forever
+                    # (QA 2026-08-13).
+                    if not content.folder_art_pending(e["target"]):
+                        continue
+                    while _busy():
+                        _sync_wake.wait(SYNC_BUSY_RECHECK_S)
+                        _sync_wake.clear()
+                    log(f"cache sweep: {e['name']} (art-heal)")
+                    try:
+                        _sync_one(["art-heal", e["target"]])
+                    except SweepYield:
+                        log(f"cache sweep yields to playback ({e['name']} "
+                            "abandoned — retried next sweep)")
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        log(f"cache sweep failed for {e['name']}: {exc!r}")
+                    _sync_wake.wait(SYNC_STAGGER_S)
+                    _sync_wake.clear()
+                    continue
                 args = _sync_args_for(e["target"], n) if n != 0 else None
                 if not args:
                     continue

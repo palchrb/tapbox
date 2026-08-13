@@ -52,6 +52,7 @@ class PollStub:
     last_system = -1e9
     view = "carousel"
     last_status = 0.0
+    poll_burst_until = 0.0
     status = {}
     settings = {}
     user_touched = False

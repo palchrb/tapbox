@@ -22,6 +22,7 @@ now = time.monotonic()
 app.view = "now"
 app.user_touched = False
 app.last_status = now   # fresh — the poll skips the /status fetch itself
+app.poll_burst_until = 0.0
 app.last_system = now   # fresh — skips the /system branch
 app.load_library = lambda: None
 app.status = {"spotify": {"next_artwork": "https://i.scdn.co/next-cover"}}

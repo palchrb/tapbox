@@ -2744,6 +2744,11 @@ class Handler(BaseHTTPRequestHandler):
         if os.path.splitext(name)[1].lower() in MEDIA_EXTS[:7]:  # audio
             tags = _media_note_meta(d, name, dest)
             art = _media_extract_cover(dest, d)
+            # ... and the file's OWN art to .art/<name>.jpg: a folder of
+            # loose singles shows each song's cover, not the first
+            # upload's (QA-reviewed 2026-08-13). No picture stream ->
+            # a .none marker, so the nightly heal skips the file.
+            content.extract_track_art(d, name)
         log(f"media: uploaded {coll}/{name} ({got // 1000} kB)"
             + (f" — {tags['title']}" if tags.get("title") else "")
             + (" +cover" if art else ""))
@@ -3102,7 +3107,16 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     if name:  # one file
                         os.remove(os.path.join(d, name))
-                    else:     # the whole collection
+                        content.drop_track_art(d, name)  # + its art/marker
+                    else:     # the whole collection — .art/ first: a bare
+                        # os.remove on a DIRECTORY raises and left the
+                        # collection undeletable from the PWA (QA blocker
+                        # 2026-08-13)
+                        art_d = os.path.join(d, content.ART_DIR)
+                        if os.path.isdir(art_d):
+                            for f in os.listdir(art_d):
+                                os.remove(os.path.join(art_d, f))
+                            os.rmdir(art_d)
                         for f in os.listdir(d):
                             os.remove(os.path.join(d, f))
                         os.rmdir(d)
