@@ -19,6 +19,28 @@ def log(msg):
     print(f"vibbd: {msg}", flush=True)
 
 
+def local_volume(stored, pcm, cap):
+    """The volume to actually use, given where the sound is going.
+
+    The built-in speaker and a pair of headphones do not share a scale,
+    and the box keeps ONE volume number. So the level a parent set for
+    a child's headphones — often near the top, they are quiet — becomes
+    a room-filling level the moment audio lands on the HAT's amplifier.
+    That matters because the speaker is what the box falls back to in
+    the dark, when a child has just pulled dead headphones off: the
+    loudest event this box can produce was, until now, the one action
+    it offers in exactly that moment.
+
+    Cap it. Applied at USE, never written back (`_save_volume` is the
+    only writer and must keep meaning "what the user chose"), so the
+    headphone level is still there when the headphones come back.
+    cap=0 disables the whole thing.
+    """
+    if not cap or pcm != OUTPUT_PCMS["local"]:
+        return stored
+    return min(stored, cap)
+
+
 def resize_spotify_cache(gb):
     """Write the size limit into go-librespot's config (startup-only there,
     like audio_device) and restart it. Eviction prunes on next start."""

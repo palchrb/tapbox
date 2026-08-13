@@ -136,6 +136,12 @@ mpv_get = _mpv.get
 
 LAST_FILE = os.path.join(STATE_DIR, "last-play.json")
 VOL_FILE = os.path.join(STATE_DIR, "volume.json")
+
+
+def _local_volume(stored, pcm):
+    """Volume to USE for this pcm — capped on the built-in speaker."""
+    return _cap_local_volume(
+        stored, pcm, load_settings().get("local_fallback_cap", 35))
 NOW_FILE = os.path.join(STATE_DIR, "now-playing.json")
 QUEUE_FILE = os.path.join(STATE_DIR, "now-queue.json")
 
@@ -260,7 +266,8 @@ from vibb.netmgmt import (  # noqa: E402
     wifi_scan, wifi_state, _wifi_watchdog)
 from vibb.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
-    reopen_go_output, _retarget_go_librespot)
+    local_volume as _cap_local_volume, reopen_go_output,
+    _retarget_go_librespot)
 from vibb import sysinfo as _sysinfo  # noqa: E402 — cache-size invalidation
 from vibb.sysinfo import (  # noqa: E402
     load_settings, plugged_cached, shutdown, system_status,
@@ -811,6 +818,14 @@ class Orchestrator:
             log(f"play [{self.source}] {target}"
                 + (f" (episode {episode})" if episode else ""))
             return {"source": self.source, "target": target}
+
+    def _volume_setting(self):
+        """The volume the user chose (volume.json), not what is in use."""
+        try:
+            with open(VOL_FILE) as f:
+                return max(0, min(100, round(json.load(f)["volume"])))
+        except (OSError, ValueError, KeyError, TypeError):
+            return 100
 
     def _save_volume(self, v):
         """Remember the box volume so player.py can start mpv at it."""
@@ -1429,6 +1444,16 @@ class Orchestrator:
                         mpv_switched = mpv_ipc(
                             ["set_property", "audio-device", f"alsa/{pcm}"]
                         ).get("error") == "success"
+                        # The live retarget is the loudest path in the
+                        # box: it moves audio onto the HAT amplifier
+                        # while mpv keeps the softvol a parent set for
+                        # HEADPHONES. Re-apply the cap for the device we
+                        # just landed on — at use only, so volume.json
+                        # still holds what the user actually chose.
+                        if mpv_switched:
+                            v = _local_volume(
+                                self._volume_setting(), pcm)
+                            mpv_ipc(["set_property", "volume", v])
                     except OSError:
                         pass
             # A resume IN FLIGHT loads its track PAUSED (play_spotify

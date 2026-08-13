@@ -48,8 +48,8 @@ for _p in (_HERE, "/usr/local/lib/vibb-py"):
             sys.path.insert(0, _p)
         break
 from vibb import content, mpv as _mpv, radio, spotify  # noqa: E402
-from vibb.output import audio_ready  # noqa: E402
-from vibb.paths import STATE_DIR  # noqa: E402
+from vibb.output import audio_ready, local_volume  # noqa: E402
+from vibb.paths import STATE_DIR, read_settings  # noqa: E402
 
 is_spotify = spotify.is_spotify
 POLL_S = 3
@@ -536,7 +536,13 @@ def main():
         # remote stream: claim the radio, let an in-flight BT page finish
         radio.touch_busy()
         radio.wait_paging_clear()
-    proc = subprocess.Popen(mpv_command(urls, volume, sock, output_pcm(),
+    # The box keeps one volume number but the built-in speaker and a pair
+    # of headphones do not share a scale — cap what reaches the amplifier
+    # (never written back, so the headphone level survives).
+    pcm = output_pcm()
+    volume = local_volume(
+        volume, pcm, read_settings().get("local_fallback_cap", 35))
+    proc = subprocess.Popen(mpv_command(urls, volume, sock, pcm,
                                         paused=bool(start_pos)))
     terminated = []  # set when WE are told to stop (reboot/daemon restart)
 
