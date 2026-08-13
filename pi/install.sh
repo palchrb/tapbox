@@ -72,6 +72,20 @@ migrate_from_tapbox() {
       mv "$1" "$2" && moved=1
     fi
   done
+  # Moving the directories is not enough: config and state files store
+  # ABSOLUTE paths into them. go-librespot's config.yml (which we keep
+  # on purpose) names the audio cache dir, and the library/feed caches
+  # name every downloaded cover. Left alone, go-librespot dies in a
+  # restart loop on 'permission denied' and the screen logs artwork
+  # failures forever — both seen on the first real migration.
+  local f
+  while IFS= read -r -d '' f; do
+    sed -i 's#/var/lib/tapbox#/var/lib/vibb#g; s#/etc/tapbox#/etc/vibb#g;
+            s#/opt/tapbox#/opt/vibb#g; s#/run/tapbox#/run/vibb#g' "$f" \
+      && moved=1
+  done < <(grep -rlZ -e /var/lib/tapbox -e /etc/tapbox -e /opt/tapbox \
+                    -e /run/tapbox /var/lib/vibb /etc/vibb "$CONF_DIR" \
+                    2>/dev/null || true)
   # the per-collection tag sidecars carry the name in their filename
   if [[ -d /var/lib/vibb/media ]]; then
     find /var/lib/vibb/media -name '.tapbox-meta.json' 2>/dev/null |
