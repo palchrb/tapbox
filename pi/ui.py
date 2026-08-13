@@ -44,6 +44,15 @@ import subprocess
 import sys
 import threading
 import time
+
+# Time from HERE — the very first thing after the stdlib bits — so the
+# heavy imports below are inside the measurement. On a cold boot those
+# come off an SD card with nothing in page cache, and the ACT LED
+# blinking right up until the screen lights says that is where the
+# seconds are. systemd stamps when it FORKED us, not when main() runs,
+# so nothing outside this file can see that gap (field 2026-08-13).
+_T_START = time.monotonic()
+
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -3739,7 +3748,8 @@ def main():
     # JUMPS mid-boot when the PiSugar RTC lands, so journal timestamps
     # that straddle it lie about durations by ~20s. These deltas are
     # measured on the monotonic clock and are immune to that.
-    t0 = time.monotonic()
+    t0 = _T_START
+    log(f"imports took {time.monotonic() - t0:.1f}s")
     display = make_display()
     log(f"display up after {time.monotonic() - t0:.1f}s")
     splash_done = _boot_splash(display)   # lights up now, and BREATHES
