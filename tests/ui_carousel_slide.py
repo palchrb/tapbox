@@ -115,7 +115,7 @@ print("3. mash rule: abort + requeue, press never lost OK")
 # 4. A caught mid-slide plays the LANDED album, never the departing one
 app = make_app(FakeInputs(batches=[[], ["a"]]))
 played = []
-app._play_async = lambda body: played.append(body["id"])
+app._play_async = lambda body, entry=None: played.append(body["id"])
 app.handle_carousel("y")              # 0 -> 1, "a" caught mid-slide
 pend, app._pending = app._pending, []
 for ev in pend:

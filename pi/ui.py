@@ -1231,6 +1231,8 @@ class App:
         self.play_offline = False   # _play_async parked a no-internet verdict
         self._pp_expect = None      # optimistic play/pause: expected playing
         self._pp_until = 0.0        #   state, held until a poll confirms it
+        self._expect_target = None  # optimistic new-tile card: only /status
+        self._expect_until = 0.0    #   for THIS target may replace it
         self.last_status = 0.0
         self.last_system = 0.0
         self.last_input = time.monotonic()
@@ -1266,6 +1268,20 @@ class App:
                 self._pp_expect = None  # confirmed or timed out -> accept
             else:
                 value = {**value, "playing": self._pp_expect}
+        # Optimistic new-tile card: after a tap the screen already shows
+        # the tapped entry (_play_async). The daemon commits its source
+        # switch LATE — until then /status truthfully describes the
+        # PREVIOUS playback (field 2026-08-12: old track shown seconds
+        # after a tap) — so inside the window only a status that talks
+        # about the tapped target may replace the card. Expiry lets the
+        # truth win no matter what (a failed play falls back honestly).
+        if attr == "status" and isinstance(value, dict) \
+                and self._expect_target is not None:
+            if time.monotonic() >= self._expect_until \
+                    or value.get("target") == self._expect_target:
+                self._expect_target = None  # confirmed or expired
+            else:
+                return
         if getattr(self, attr) != value:
             setattr(self, attr, value)
             self.dirty = True
@@ -1578,6 +1594,13 @@ class App:
                 return None
         elif key in self.artwork_cache:
             return cached
+        # A disk-warm cover needs NO network: decode it inline (~10-30ms
+        # for the now-card's 128px) instead of the thread + next-tick
+        # detour, which made every already-cached cover trail its title
+        # by one repaint beat (field 2026-08-12). The deferral below is
+        # for FETCHES only.
+        if os.path.exists(_art_disk(ref, size, square)):
+            return self.artwork(ref, size, square)
         if key not in self._art_pending:
             self._art_pending.add(key)
 
@@ -1794,7 +1817,7 @@ class App:
             self._force_poll()  # kick the poller so the icon confirms fast
         threading.Thread(target=go, daemon=True).start()
 
-    def _play_async(self, body):
+    def _play_async(self, body, entry=None):
         """Start playback off the UI thread, optimistically.
 
         /play is the SLOWEST endpoint the screen calls: for a Spotify
@@ -1812,6 +1835,20 @@ class App:
         contract as _control_async. The one answer the UI still needs
         is 'no-internet': a background thread must not draw, so it
         parks the verdict and the main loop runs the reconnect flow."""
+        if entry is not None:
+            # The tapped identity, painted NOW. The daemon serves the
+            # old source's fully valid card until its switch commits
+            # (0.5-3s; worse when the old child is slow to die), and the
+            # screen knows better — it is holding the tapped entry. The
+            # tile cover is local and 128sq-prewarmed, so the card is
+            # complete on the very first paint; the real track title
+            # arrives with the first on-target /status.
+            self.status = {"target": entry.get("target"),
+                           "title": entry.get("name"),
+                           "artwork": entry.get("image"),
+                           "playing": True}
+            self._expect_target = entry.get("target")
+            self._expect_until = time.monotonic() + 6
         self._enter_now()
 
         def go():
@@ -1981,7 +2018,7 @@ class App:
                 if "spotify" in e["target"] and self._no_internet():
                     self._reconnect_for_spotify()  # try to GET the net
                     return
-                self._play_async({"id": e["id"]})
+                self._play_async({"id": e["id"]}, entry=e)
             elif ev == "x":
                 self._volume_mode(delta=None)  # open/extend the volume card
         except OSError as e:
@@ -2230,7 +2267,8 @@ class App:
                     if self.expanded["kind"] == "spotify" and self._no_internet():
                         self._reconnect_for_spotify()  # get the net now
                         return
-                    self._play_async({"id": self.entry["id"]})
+                    self._play_async({"id": self.entry["id"]},
+                                     entry=self.entry)
                 else:
                     self.push("episodes")
             elif self.view == "episodes":
@@ -2239,7 +2277,7 @@ class App:
                     ep = self.expanded["episodes"][self.sel - 1]
                     if ep.get("id"):
                         body["episode"] = ep["id"]
-                self._play_async(body)
+                self._play_async(body, entry=self.entry)
             elif self.view == "settings":
                 self.select_setting()
             elif self.view == "extras":
