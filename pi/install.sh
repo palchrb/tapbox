@@ -83,9 +83,15 @@ migrate_from_tapbox() {
     sed -i 's#/var/lib/tapbox#/var/lib/vibb#g; s#/etc/tapbox#/etc/vibb#g;
             s#/opt/tapbox#/opt/vibb#g; s#/run/tapbox#/run/vibb#g' "$f" \
       && moved=1
-  done < <(grep -rlZ -e /var/lib/tapbox -e /etc/tapbox -e /opt/tapbox \
+  done < <(grep -rlZ --include='*.json' --include='*.yml' \
+                    --include='*.yaml' --include='*.conf' \
+                    -e /var/lib/tapbox -e /etc/tapbox -e /opt/tapbox \
                     -e /run/tapbox /var/lib/vibb /etc/vibb "$CONF_DIR" \
                     2>/dev/null || true)
+  # (the --include filters are not cosmetic: without them grep reads
+  # every byte under the state dir — gigabytes of cached episodes and
+  # spotify audio — off an SD card on a 600MHz box. Paths only ever
+  # live in the text files.)
   # the per-collection tag sidecars carry the name in their filename
   if [[ -d /var/lib/vibb/media ]]; then
     find /var/lib/vibb/media -name '.tapbox-meta.json' 2>/dev/null |
