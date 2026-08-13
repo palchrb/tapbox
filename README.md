@@ -193,7 +193,10 @@ files under `/var/lib/tapbox/cache`; Spotify caches encrypted audio
   boot-on`. Undo per-box with `sudo tapbox-power boot-off`; back to
   full speed anytime with `sudo tapbox-power perf`.
 - Settings in the PWA: auto-off when idle, Wi-Fi auto-off away from
-  known networks, screen timeout, volume cap, resume on power-on.
+  known networks, screen timeout, volume cap, and **continue after
+  power-on** (always, never, or only if the box was switched off less
+  than N hours ago — so an interrupted car ride carries on, while last
+  week's album starts from the top).
 - Squeezing the last drops: add `maxcpus=2` to
   `/boot/firmware/cmdline.txt` by hand (the RPi OS kernel has no CPU
   hotplug, so `tapbox-power save` can't park cores at runtime).
