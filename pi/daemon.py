@@ -118,6 +118,16 @@ from vibb import spotify_web as _spotify_web  # noqa: E402
 from vibb.bookmarks import (episode_pos as _bm_episode_pos,  # noqa: E402
                               load_state as _bm_load,
                               save_state as _bm_save)
+def _uptime():
+    """Seconds since the KERNEL started — the only clock here that never
+    jumps (the wall clock moves when the PiSugar RTC lands mid-boot)."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError):
+        return 0.0
+
+
 from vibb.paths import (  # noqa: E402
     ART_DIR, MEDIA_DIR, RUN_DIR, STATE_DIR, clock_trusted,
     go_restarted_within,
@@ -305,6 +315,7 @@ class Orchestrator:
             self.boot_stopped_at = float(d.get("stopped_at") or 0)
             if self.target:
                 log(f"remembered last play: [{self.source}] {self.target}")
+            log(f"orchestrator up at boot+{_uptime():.1f}s")
         except (OSError, ValueError):
             pass
         self.boot_stopped_at = getattr(self, "boot_stopped_at", 0.0)
@@ -4521,7 +4532,8 @@ def _boot_resume():
     # expired boot can't leave a live flag for the next one.
     if session_verdict(block_s=CLOCK_WAIT_S) == "expired":
         return
-    log(f"boot resume: waiting for the audio path, then continuing {target}")
+    log(f"boot resume at boot+{_uptime():.1f}s: waiting for the audio "
+        f"path, then continuing {target}")
     # Silent grace first (the speaker usually reconnects in 10-20s), then
     # — if the output is bt and the speaker is still away — raise the
     # bt_waiting popup via _kick_bt_connect and KEEP the resume armed for

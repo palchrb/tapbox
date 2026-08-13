@@ -53,6 +53,20 @@ import time
 # so nothing outside this file can see that gap (field 2026-08-13).
 _T_START = time.monotonic()
 
+
+def _uptime():
+    """Seconds since the KERNEL started. The one clock in this box that
+    cannot jump: the wall clock moves ~30s when the PiSugar RTC lands
+    mid-boot, systemd measures from its own start, and time.monotonic()
+    from ours — three timebases that cannot be compared, which is how an
+    evening of boot analysis produced two confident wrong answers
+    (2026-08-13). Every timing below is anchored here instead."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError):
+        return 0.0
+
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -3444,8 +3458,9 @@ class App:
             log("ready")                       # tests build App directly
         else:
             up = time.monotonic() - t0
-            log(f"ready after {up:.1f}s in the ui "
-                f"(splash shown {up - self.splash_at:.1f}s)")
+            log(f"READY at boot+{_uptime():.1f}s "
+                f"({up:.1f}s in the ui, splash shown "
+                f"{up - self.splash_at:.1f}s, landed on {self.view})")
         self._loop_beat = time.monotonic()
         if UI_WATCHDOG_S:
             threading.Thread(target=self._render_watchdog,
@@ -3758,13 +3773,14 @@ def main():
     # that straddle it lie about durations by ~20s. These deltas are
     # measured on the monotonic clock and are immune to that.
     t0 = _T_START
-    log(f"imports took {time.monotonic() - t0:.1f}s")
+    log(f"imports took {time.monotonic() - t0:.1f}s "
+        f"(we are {_uptime():.1f}s into this boot)")
     display = make_display()
     log(f"display up after {time.monotonic() - t0:.1f}s")
     splash_done = _boot_splash(display)   # lights up now, and BREATHES
     #                                       through the slow init below
     splash_at = time.monotonic() - t0
-    log(f"splash lit after {splash_at:.1f}s")
+    log(f"splash lit at boot+{_uptime():.1f}s")
 
     def _term(*_a):
         # systemd stops us for a handoff (extras), a service restart or
@@ -3775,7 +3791,7 @@ def main():
     signal.signal(signal.SIGTERM, _term)
 
     app = App(display, make_input())
-    log(f"inputs ready after {time.monotonic() - t0:.1f}s")
+    log(f"inputs ready at boot+{_uptime():.1f}s")
     app.boot_t0 = t0
     app.splash_at = splash_at
     app.splash_done = splash_done   # run() stops the breathing mark the
