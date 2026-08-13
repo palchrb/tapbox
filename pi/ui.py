@@ -529,6 +529,9 @@ def _art_disk_save(img, path):
 FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
+BURST_POLL_S = 0.3   # /status cadence while a command is in flight
+#                      (poll_burst_until); measured from fetch
+#                      completion, so a slow daemon self-paces
 SYSTEM_POLL_S = 30.0
 DARK_POLL_TICK_S = 5.0  # P1 poller: while the screen is dark it only waits for
                         # a wake kick (no HTTP all night); TICK_S when the
@@ -1233,6 +1236,7 @@ class App:
         self._pp_until = 0.0        #   state, held until a poll confirms it
         self._expect_target = None  # optimistic new-tile card: only /status
         self._expect_until = 0.0    #   for THIS target may replace it
+        self.poll_burst_until = 0.0  # /status at BURST_POLL_S until then
         self.last_status = 0.0
         self.last_system = 0.0
         self.last_input = time.monotonic()
@@ -1339,12 +1343,19 @@ class App:
             except (OSError, ValueError):
                 self._set("status", {})
         elif self.view in ("now", "episodes", "carousel", "cats") \
-                and now - self.last_status > STATUS_POLL_S:
+                and now - self.last_status > (
+                    BURST_POLL_S if now < self.poll_burst_until
+                    else STATUS_POLL_S):
             self.last_status = now
             try:
                 self._set("status", api_get("/status", timeout=2))
             except OSError:
                 self._set("status", {})
+            if time.monotonic() < self.poll_burst_until:
+                # burst cadence counts from COMPLETION: a slow status()
+                # (50-400ms, 2s timeout worst) must widen the gap, never
+                # produce back-to-back fetches (QA 2026-08-13)
+                self.last_status = time.monotonic()
         # v0.1.0: the fork's metadata cache names the UPCOMING track's
         # cover — fetch it into the art disk cache now, while nothing is
         # being skipped, so the next press paints its art instantly (the
@@ -1703,6 +1714,7 @@ class App:
         self.push("now")
         self._force_poll()                         # poll now, not in ~1s
         self.catch_up_until = time.monotonic() + 6
+        self.poll_burst_until = time.monotonic() + 6
 
     def _no_internet(self):
         """Instant offline check from the last /system poll — no network
@@ -1775,15 +1787,17 @@ class App:
         in_vol = time.monotonic() < self.vol_mode_until
         try:
             if ev == "a":
-                self._control_async("/playpause")
                 # optimistic: flip the icon NOW (see PP_RECONCILE_S) so it
                 # matches the music instead of waiting for the poller's next
-                # /status, which can be a second+ behind on a busy daemon
+                # /status, which can be a second+ behind on a busy daemon.
+                # Set BEFORE the control kicks the poller — a pre-toggle
+                # /status racing the gap could flicker the icon back.
                 cur = bool((self.status or {}).get("playing"))
                 self._pp_expect = not cur
                 self._pp_until = time.monotonic() + PP_RECONCILE_S
                 self.status = {**(self.status or {}), "playing": self._pp_expect}
                 self.dirty = True
+                self._control_async("/playpause")
             elif ev == "b":
                 if in_vol:  # volume card open: B/Y are - / +
                     self._volume_mode(delta=-5)
@@ -1809,6 +1823,15 @@ class App:
         """POST a transport control off the UI thread. A slow control
         (wedged go-librespot api) must never freeze rendering or eat
         the next button press — hold-B to the carousel always works."""
+        # Kick at SEND, not only at return: the metadata fetch overlaps
+        # the command instead of queuing behind it (the daemon serves
+        # /status and /command on separate threads), and open the burst
+        # window so follow-up polls catch the truth when it lands (QA
+        # 2026-08-13: a dedicated deadline, NOT catch_up_until — that
+        # one also forces identical-frame repaints at 5fps).
+        self.poll_burst_until = time.monotonic() + 3
+        self._force_poll()
+
         def go():
             try:
                 api_post(path, timeout=CONTROL_TIMEOUT)
