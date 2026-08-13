@@ -15,14 +15,14 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
-os.environ["TAPBOX_BT_KICK"] = os.path.join(TMP, "bt-kick")
-os.environ["TAPBOX_WLAN_OPERSTATE"] = os.path.join(TMP, "operstate")
-os.environ["TAPBOX_NET_ROUTE"] = os.path.join(TMP, "route")
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
+os.environ["VIBB_BT_KICK"] = os.path.join(TMP, "bt-kick")
+os.environ["VIBB_WLAN_OPERSTATE"] = os.path.join(TMP, "operstate")
+os.environ["VIBB_NET_ROUTE"] = os.path.join(TMP, "route")
 MAC = "30:C0:1B:BD:13:B2"
-with open(os.environ["TAPBOX_BT_FILE"], "w") as f:
+with open(os.environ["VIBB_BT_FILE"], "w") as f:
     f.write(MAC + "\n")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
@@ -63,7 +63,7 @@ for name, mod in (("dbus", dbus_mod), ("dbus.mainloop", mainloop),
     sys.modules[name] = mod
 
 import btwatchd  # noqa: E402
-from tapbox import radio  # noqa: E402
+from vibb import radio  # noqa: E402
 
 rec = btwatchd.Reconnector(bus=None)
 rec._adapter_up = lambda: None
@@ -78,9 +78,9 @@ HDR = ("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask"
 
 
 def wifi(settled):
-    with open(os.environ["TAPBOX_WLAN_OPERSTATE"], "w") as f:
+    with open(os.environ["VIBB_WLAN_OPERSTATE"], "w") as f:
         f.write("up\n")
-    with open(os.environ["TAPBOX_NET_ROUTE"], "w") as f:
+    with open(os.environ["VIBB_NET_ROUTE"], "w") as f:
         f.write(HDR + ("wlan0\t00000000\t0102A8C0\t0003\t0\t0\t600"
                        "\t00000000\t0\t0\t0\n" if settled else ""))
 

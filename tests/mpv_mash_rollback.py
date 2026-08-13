@@ -14,12 +14,12 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-for k in ("TAPBOX_RUN", "TAPBOX_STATE", "TAPBOX_CACHE"):
+for k in ("VIBB_RUN", "VIBB_STATE", "VIBB_CACHE"):
     os.environ[k] = TMP
-os.environ["TAPBOX_SETTINGS"] = os.path.join(TMP, "settings.json")
+os.environ["VIBB_SETTINGS"] = os.path.join(TMP, "settings.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import radio  # noqa: E402
+from vibb import radio  # noqa: E402
 import player  # noqa: E402
 
 # 1. no marker: sub-10s dwells count up — the shipped protection

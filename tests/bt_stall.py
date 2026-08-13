@@ -9,7 +9,7 @@ restarting the player; ensure() would no-op against the lying state.
 Also gates: the frozen-position stall still restarts (without touching
 the radio when the output is ready), pause/local-output/no-adapter
 never trigger, a TX counter wrap doesn't false-positive, and the poll
-cadence honors TAPBOX_STALL_POLL. Runs the REAL watchdog thread against
+cadence honors VIBB_STALL_POLL. Runs the REAL watchdog thread against
 fakes — no hardware needed."""
 import json
 import os
@@ -19,18 +19,18 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", tempfile.mkdtemp())
-os.environ["TAPBOX_BT_FILE"] = os.path.join(STATE, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(STATE, "bt.lock")
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ.setdefault("VIBB_CACHE", tempfile.mkdtemp())
+os.environ["VIBB_BT_FILE"] = os.path.join(STATE, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(STATE, "bt.lock")
 # test timescale: stall after 0.4s, sampled every 0.05s
-os.environ["TAPBOX_STALL_S"] = "0.4"
-os.environ["TAPBOX_STALL_POLL"] = "0.05"
+os.environ["VIBB_STALL_S"] = "0.4"
+os.environ["VIBB_STALL_POLL"] = "0.05"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import bt as bt_mod  # noqa: E402
+from vibb import bt as bt_mod  # noqa: E402
 
 MAC = "AA:BB:CC:DD:EE:FF"
 

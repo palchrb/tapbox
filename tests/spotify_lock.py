@@ -14,10 +14,10 @@ STATE = os.path.join(tmp, "state.json")
 open(CONF, "w").write(
     "device_name: zero2\nzeroconf_enabled: true\n"
     "credentials:\n  type: zeroconf\n")
-os.environ["TAPBOX_GO_CONFIG"] = CONF
+os.environ["VIBB_GO_CONFIG"] = CONF
 
 sys.path.insert(0, os.path.join(REPO, "pi"))
-from tapbox import spotify as s  # noqa: E402
+from vibb import spotify as s  # noqa: E402
 
 
 def logged_in(user):

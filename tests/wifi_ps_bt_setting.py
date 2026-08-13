@@ -12,15 +12,15 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import sysinfo  # noqa: E402
+from vibb import sysinfo  # noqa: E402
 
 # 1. the setting exists, defaults OFF, and is bounded 0..1
 d, lo, hi = sysinfo.SETTING_SPECS["wifi_ps_bt_off"]

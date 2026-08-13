@@ -20,7 +20,7 @@ HARNESS = r"""
 const fs = require("fs");
 process.on("unhandledRejection", () => {});  // background pollStatus noise
 
-/* --- in-memory tapboxd: GET/PUT /library only ------------------------- */
+/* --- in-memory vibbd: GET/PUT /library only ------------------------- */
 let server = null;
 global.fetch = async (path, opts = {}) => {
   const ok = (obj) => ({ ok: true, json: async () => JSON.parse(JSON.stringify(obj)) });

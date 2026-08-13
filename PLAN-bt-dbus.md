@@ -1,6 +1,6 @@
 # Plan: bt.py step 2 — BlueZ D-Bus port
 
-Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py, field-verified (speaker switching over dbus). C implemented + rig-gated (tests/bt_reconnect.py PASSED 5/5 on the rig 2026-07-08). btwatchd is the live unit; bash kept as tapbox-bt-reconnect-poll fallback. Follow-the-speaker output policy added with anti-flap protections (PCM-gated bt announce, sustained-absence local fallback, stale-failure no-op, deferred mpv/go-librespot switch) — regression-gated by tests/bt_output_policy.py. Pairing stays cli until B2. Remaining: confirm <5s power-on reconnect once the firmware-crash issue is settled (HAT antenna), then B2 (Agent1), then D (cleanup). **B2 is now implemented — together with the new incoming pairing mode ("pair from car") — per [PLAN-bt-b2-pairing.md](./PLAN-bt-b2-pairing.md) (built 2026-07-17, `TAPBOX_BT_PAIR=dbus` opt-in until its §6 rig matrix passes), which also amends §5 below (btwatchd never hosts an agent).** Drafted 2026-07-07 and refined by three
+Status: **in progress** — A0 landed; A1 parity PASSED on the rig 2026-07-07 (`auto` prefers dbus for reads); B1 actions implemented + gated by tests/bt_actions.py, field-verified (speaker switching over dbus). C implemented + rig-gated (tests/bt_reconnect.py PASSED 5/5 on the rig 2026-07-08). btwatchd is the live unit; bash kept as vibb-bt-reconnect-poll fallback. Follow-the-speaker output policy added with anti-flap protections (PCM-gated bt announce, sustained-absence local fallback, stale-failure no-op, deferred mpv/go-librespot switch) — regression-gated by tests/bt_output_policy.py. Pairing stays cli until B2. Remaining: confirm <5s power-on reconnect once the firmware-crash issue is settled (HAT antenna), then B2 (Agent1), then D (cleanup). **B2 is now implemented — together with the new incoming pairing mode ("pair from car") — per [PLAN-bt-b2-pairing.md](./PLAN-bt-b2-pairing.md) (built 2026-07-17, `VIBB_BT_PAIR=dbus` opt-in until its §6 rig matrix passes), which also amends §5 below (btwatchd never hosts an agent).** Drafted 2026-07-07 and refined by three
 review passes (architecture, implementation, test) against the codebase
 as of commit `c379b01`. This document is the implementation bible; the
 reviews' full findings are folded in below.
@@ -8,9 +8,9 @@ reviews' full findings are folded in below.
 ## 1. Goal & scope
 
 Replace the `bluetoothctl` text-parsing transport (~19 parse sites in
-`pi/tapbox/bt.py`) and the `bluealsa-aplay -L` fork in `audio_ready()`
+`pi/vibb/bt.py`) and the `bluealsa-aplay -L` fork in `audio_ready()`
 with direct D-Bus (org.bluez + org.bluealsa), and replace the bash
-`tapbox-bt-reconnect` poll loop with an event-driven daemon.
+`vibb-bt-reconnect` poll loop with an event-driven daemon.
 
 Amendments accepted from review:
 
@@ -45,9 +45,9 @@ Agent1), raw sockets (not worth it).
 
 | Process | Loop? | Why |
 |---|---|---|
-| tapboxd (imports bt.py) | **never** | blocking calls only (`GetManagedObjects` per bt_status); preserves the threading model exactly |
+| vibbd (imports bt.py) | **never** | blocking calls only (`GetManagedObjects` per bt_status); preserves the threading model exactly |
 | bt.py CLI subprocess | only during `pair` | Agent1 export needs dispatch; short-lived process, no leak surface |
-| tapbox-bt-reconnect | yes (the only long-lived loop) | signal subscriptions |
+| vibb-bt-reconnect | yes (the only long-lived loop) | signal subscriptions |
 
 `DBusGMainLoop(set_as_default=True)` must run before bus acquisition
 (classic gotcha). Footprint: the Python reconnect daemon costs ~20-25MB
@@ -55,9 +55,9 @@ RSS vs ~1-2MB bash, but kills the 1-3 bluetoothctl forks/min (~10MB
 each, themselves D-Bus clients); net wakeups drop sharply — the metric
 that matters on battery.
 
-**Module structure:** new **`tapbox/btbus.py`** transport layer with
+**Module structure:** new **`vibb/btbus.py`** transport layer with
 two backends behind one narrow primitive surface, chosen once at
-process start (`TAPBOX_BT_BACKEND=cli|dbus|auto`, default `auto`: try
+process start (`VIBB_BT_BACKEND=cli|dbus|auto`, default `auto`: try
 dbus, fall back to cli on import/bus failure, log which):
 
 ```
@@ -77,7 +77,7 @@ pre/post checks, PCM wait, MAC_FILE write, `_route_alsa`,
 the backend. MAC_FILE/ASOUND/one-output policy are policy, not
 transport; they stay in bt.py.
 
-**Lazy bus init is mandatory:** importing `tapbox.bt` must not open a
+**Lazy bus init is mandatory:** importing `vibb.bt` must not open a
 bus (venv processes without dbus bindings, test environments without a
 bus, daemon that only wants bt_status). One-shot paths build proxies
 fresh per call and cache nothing — bluetoothd restarts become a
@@ -94,16 +94,16 @@ returns `InProgress` per device but will happily start an A2DP connect
 to speaker B while a pair of speaker A runs (the documented firmware
 crasher). `BT_LOCK` is a threading.Lock, invisible across processes,
 and Phase C adds a second long-lived BT actor. Add **flock on
-`/run/tapbox/bt.lock`**: bt.py CLI `main()` takes it for
+`/run/vibb/bt.lock`**: bt.py CLI `main()` takes it for
 connect/pair/forget/ensure/recover; the reconnect daemon tries LOCK_NB
 before any connect and re-arms its timer if held. flock auto-releases
-on process death; ~10 lines. tapboxd does not hold it — the bt.py
+on process death; ~10 lines. vibbd does not hold it — the bt.py
 subprocess is the process doing radio work.
 
 ## 3. Phases (revised cut)
 
 - **A0 — the seam, no D-Bus.** Extract btbus.py with the *cli* backend
-  only + `TAPBOX_BT_BACKEND` env. Pure refactor; existing E2E repros
+  only + `VIBB_BT_BACKEND` env. Pure refactor; existing E2E repros
   (racing guard, heal) must pass unchanged with `cli` exported. This is
   the real risk reducer.
 - **A1 — read-only D-Bus.** bt_status()/discover()/audio_ready() via
@@ -152,7 +152,7 @@ connection closes (a crashing CLI can't leak a scan).
 
 ## 5. Pairing agent (Agent1) — B2
 
-- Export agent at `/org/tapbox/agent`; register via
+- Export agent at `/org/vibb/agent`; register via
   `org.bluez.AgentManager1` at path **`/org/bluez`**:
   `RegisterAgent(path, "NoInputNoOutput")`. `AlreadyExists` on
   re-register: unregister-then-register or ignore.
@@ -206,7 +206,7 @@ loop:
 - **STEADY**: target `Connected=True` — zero timers, pure signal wait.
 - **WAITING**: attempt on InterfacesAdded/PropertiesChanged for the
   target path; GLib backoff timer 20->300s re-armed on events. Gio file
-  monitor on `/etc/tapbox/bt-headset` for instant retarget.
+  monitor on `/etc/vibb/bt-headset` for instant retarget.
 - **NO_TARGET**: idle on the file monitor only.
 
 Name-owner watch on org.bluez (and org.bluealsa): owner lost -> drop
@@ -226,11 +226,11 @@ that auto-reconnects would loop).
 
 **Build order (test-driven):**
 1. A0 seam in the all-cli tree; re-run racing-guard + heal E2E repros
-   with `TAPBOX_BT_BACKEND=cli` — must pass byte-identical.
+   with `VIBB_BT_BACKEND=cli` — must pass byte-identical.
 2. `fake-bluezd.py` harness (~150 lines): python3-dbus service on a
    private `dbus-daemon --print-address` bus, exporting /org/bluez
    (ObjectManager + Adapter1 + Device1 + agent-caller) and /org/bluealsa
-   (PCM1), plus a control interface `org.tapbox.Mock`: AddDevice,
+   (PCM1), plus a control interface `org.vibb.Mock`: AddDevice,
    SetPairResult("auth-failed"|...), CrashAdapter, DropName,
    EmitConnected. Matches the repo's process-level fake style; no
    pytest. (python3-dbusmock's bluez5 template rejected as primary: no
@@ -244,7 +244,7 @@ that auto-reconnects would loop).
 
 Bus injection: standard `DBUS_SYSTEM_BUS_ADDRESS` (dbus-python honors
 it). Verify the daemon unit doesn't scrub env; if it does, add
-`TAPBOX_DBUS_ADDRESS` read before SystemBus(). PATH fakes for
+`VIBB_DBUS_ADDRESS` read before SystemBus(). PATH fakes for
 hciconfig/journalctl/systemctl keep intercepting under both backends
 (recovery stays subprocess).
 
@@ -253,7 +253,7 @@ hciconfig/journalctl/systemctl keep intercepting under both backends
 | Trap | Test |
 |---|---|
 | BT_LOCK per-process; C adds a 2nd BT actor | fake-bluezd logs call order; EmitConnected during a paired connect -> assert no overlapping Connect + flock demanded |
-| dbus backend connecting at import | `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent python3 -c "from tapbox import bt; bt.bt_status()"` must succeed via fallback |
+| dbus backend connecting at import | `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent python3 -c "from vibb import bt; bt.bt_status()"` must succeed via fallback |
 | recover() kills proxies / daemon goes deaf | heal E2E: fake systemctl respawns fake-bluezd under a new name owner; bt_status works after, EmitConnected still triggers reconnect |
 | Boot fast-window lost | fake rejects Connect for first N seconds; assert <=5s retries inside window, backoff only after |
 | Quiesce ordering | timestamps in fake-mpv + fake-bluezd logs: StartDiscovery only after mpv stop |
@@ -271,7 +271,7 @@ hciconfig/journalctl/systemctl keep intercepting under both backends
   resume on new, old disconnected); stale-key repro (forget on Pi only,
   re-pair) hits the clear-bond path; charger-pull heal **<40s** from
   crash line to "audio output is back"; forget/disconnect from PWA incl.
-  active-device MAC_FILE clear; one full day on `TAPBOX_BT_BACKEND=cli`
+  active-device MAC_FILE clear; one full day on `VIBB_BT_BACKEND=cli`
   (rollback path is real).
 - *C*: reboot reconnect <30s, no Host-is-down spam; speaker off->on
   reconnect **<5s** (vs <=60s poll today); 30 min away -> backoff
@@ -305,8 +305,8 @@ hciconfig/journalctl/systemctl keep intercepting under both backends
 - install.sh: `apt install python3-dbus python3-gi` (likely present);
   new unit for the Python reconnect daemon in C, bash loop kept behind
   a variable for one release.
-- Kill switch at every stage: `TAPBOX_BT_BACKEND=cli` in
-  `/etc/tapbox/rfid.conf`-style env file or the unit — documented in
+- Kill switch at every stage: `VIBB_BT_BACKEND=cli` in
+  `/etc/vibb/rfid.conf`-style env file or the unit — documented in
   README.
 - Success metrics: speaker power-on reconnect <5s (from <=60s);
   charger-pull heal <=40s (no regression from 19-22s baseline + real

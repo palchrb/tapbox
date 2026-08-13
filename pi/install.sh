@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# TapBox test rig — install script for Raspberry Pi Zero 2 W (Raspberry Pi OS, Trixie/Bookworm)
+# Vibb test rig — install script for Raspberry Pi Zero 2 W (Raspberry Pi OS, Trixie/Bookworm)
 #
 # Installs:
 #   - go-librespot : Spotify Connect daemon with a local HTTP API (this is our
@@ -8,7 +8,7 @@
 #                    what lets play.sh start a track from a share link)
 #   - BlueZ + bluez-alsa : Bluetooth stack + ALSA bridge for A2DP headphones
 #   - mpv + yt-dlp : local files, NRK and internet radio playback
-#   - PN532 RFID support (tapbox-rfid daemon) + tapbox-card / tapbox-power tools
+#   - PN532 RFID support (vibb-rfid daemon) + vibb-card / vibb-power tools
 #
 # Then walks you through Spotify login (zeroconf): you pick the device in the
 # Spotify app on your phone, credentials are persisted on the Pi.
@@ -33,29 +33,70 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Box name -> <name>.local (mDNS) and the Spotify device name. Default is
-# "tapbox"; override with TAPBOX_NAME=<name>, or answer the one-time prompt
+# "vibb"; override with VIBB_NAME=<name>, or answer the one-time prompt
 # on the first install. Re-runs keep whatever avahi already advertises.
-BOX_NAME="${TAPBOX_NAME:-}"
+BOX_NAME="${VIBB_NAME:-}"
 if [[ -z $BOX_NAME ]]; then
   if [[ -f /etc/avahi/avahi-daemon.conf ]] \
       && grep -q '^host-name=' /etc/avahi/avahi-daemon.conf; then
     BOX_NAME="$(sed -n 's/^host-name=//p' /etc/avahi/avahi-daemon.conf | head -n1)"
   elif [[ -t 0 ]]; then
-    read -r -p "Name for this box (=> <name>.local) [tapbox]: " BOX_NAME || true
+    read -r -p "Name for this box (=> <name>.local) [vibb]: " BOX_NAME || true
   fi
 fi
-BOX_NAME="$(echo "${BOX_NAME:-tapbox}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
-[[ -n $BOX_NAME ]] || BOX_NAME=tapbox
-if [[ $BOX_NAME == tapbox ]]; then
-  DEVICE_NAME="TapBox Test"
+BOX_NAME="$(echo "${BOX_NAME:-vibb}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+[[ -n $BOX_NAME ]] || BOX_NAME=vibb
+if [[ $BOX_NAME == vibb ]]; then
+  DEVICE_NAME="Vibb Test"
 else
-  DEVICE_NAME="TapBox ($BOX_NAME)"
+  DEVICE_NAME="Vibb ($BOX_NAME)"
 fi
 
 RUN_USER="${SUDO_USER:-pi}"
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 CONF_DIR="$RUN_HOME/.config/go-librespot"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- one-time migration: tapbox -> vibb (2026-08-13) -------------------------
+# The project was renamed. A box installed under the old name keeps ALL
+# its data — library, bookmarks, offline episodes (gigabytes), uploaded
+# media, settings, the paired phone's token — by moving the two state
+# roots across. Idempotent: only ever fires when the old path exists and
+# the new one does not, so a re-run is a no-op and a fresh box skips it.
+migrate_from_tapbox() {
+  local moved=0
+  for pair in "/var/lib/tapbox /var/lib/vibb" "/etc/tapbox /etc/vibb"; do
+    set -- $pair
+    if [[ -d $1 && ! -e $2 ]]; then
+      mv "$1" "$2" && moved=1
+    fi
+  done
+  # the per-collection tag sidecars carry the name in their filename
+  if [[ -d /var/lib/vibb/media ]]; then
+    find /var/lib/vibb/media -name '.tapbox-meta.json' 2>/dev/null |
+      while read -r f; do
+        mv -n "$f" "$(dirname "$f")/.vibb-meta.json" || true
+      done
+  fi
+  # Old services MUST go: their unit files are still enabled and would
+  # come up alongside the new ones — two daemons fighting over :3679,
+  # the screen and the GPIO pins.
+  local old
+  for old in /etc/systemd/system/tapbox-*.service \
+             /etc/systemd/system/tapbox-*.timer; do
+    [[ -e $old ]] || continue
+    systemctl disable --now "$(basename "$old")" >/dev/null 2>&1 || true
+    rm -f "$old"
+    moved=1
+  done
+  rm -f /usr/local/bin/tapbox-* 2>/dev/null || true
+  if (( moved )); then
+    systemctl daemon-reload
+    echo "    migrated this box from tapbox to vibb (data kept, old"
+    echo "    services removed)"
+  fi
+}
+migrate_from_tapbox
 
 # --- helpers -----------------------------------------------------------------
 
@@ -83,12 +124,12 @@ write_if_changed() {
 # every run: it is the recovery path when a screen breaks, and the only
 # copy anyone gets on a box whose screen isn't enabled.
 # Point at the token, never print it. The secret only appears when
-# someone explicitly runs `tapbox-token` — an install log (or a
+# someone explicitly runs `vibb-token` — an install log (or a
 # scrollback shared while debugging) shouldn't carry it.
 print_token() {
   echo
   echo "    Pair a phone:   on the box, Settings -> Link phone (scan the QR)"
-  echo "    Or over ssh:    sudo tapbox-token"
+  echo "    Or over ssh:    sudo vibb-token"
 }
 
 # install(1) only if content differs. Returns 0 when changed.
@@ -123,7 +164,7 @@ fi
 
 # --- 2. go-librespot ---------------------------------------------------------
 
-# TapBox fork: upstream + on-disk cache for the encrypted audio files, so a
+# Vibb fork: upstream + on-disk cache for the encrypted audio files, so a
 # track a kid replays is downloaded once instead of every time (bandwidth on
 # hotspots; NOT offline playback — the session and audio keys are still live).
 GO_LIBRESPOT_REPO="palchrb/go-librespot"
@@ -169,11 +210,11 @@ GO_LIBRESPOT_VERSION="v0.2.0"  # v0.0.8 Fast skip: debounced next/prev (a
 # fields in /status (additive; nothing here reads them yet). v0.1.9
 # (fork #24): /context/tracks lists EPISODES too, so a show enumerates
 # — the song picker and the PWA queue show a podcast's episodes with no
-# tapbox change; and the Liked Songs collection
+# vibb change; and the Liked Songs collection
 # (spotify:user:<id>:collection) is accepted, matched by to_uri here.
 # Audiobooks are wired upstream but untested (unavailable market).
 # v0.2.0 (fork #25): upstream sync — the API server is now CODEGENED
-# from api-spec.yml (verified: every field tapbox reads keeps its json
+# from api-spec.yml (verified: every field vibb reads keeps its json
 # name — track/artist_names/album_cover_url/pending_track/next_track/
 # ready/cached etc.), unsupported URIs are rejected early with the
 # user-scoped collection form recognized explicitly, richer track
@@ -206,33 +247,33 @@ fi
 
 echo "==> [3/8] ALSA + go-librespot config..."
 # Placeholder ALSA device: play.sh rewrites this with your headset's MAC.
-if [[ ! -e /etc/asound.conf ]] || ! grep -q "bluealsa\|tapbox_bt" /etc/asound.conf; then
+if [[ ! -e /etc/asound.conf ]] || ! grep -q "bluealsa\|vibb_bt" /etc/asound.conf; then
   cat > /etc/asound.conf <<'EOF'
-# Managed by tapbox pi/play.sh — replaced with a bluealsa device on first connect
-pcm.tapbox_bt {
+# Managed by vibb pi/play.sh — replaced with a bluealsa device on first connect
+pcm.vibb_bt {
     type plug
     slave.pcm "null"
 }
 # Built-in/HAT speaker (Pirate Audio / Amp SHIM, MAX98357A over I2S).
-# Needs dtoverlay=hifiberry-dac (sudo tapbox-power hat-audio-on) + reboot.
-pcm.tapbox_local {
+# Needs dtoverlay=hifiberry-dac (sudo vibb-power hat-audio-on) + reboot.
+pcm.vibb_local {
     type plug
     slave.pcm "hw:sndrpihifiberry"
 }
 EOF
   echo "    wrote placeholder /etc/asound.conf"
 fi
-# Migration: older asound.conf versions lack the tapbox_local pcm
-if ! grep -q "tapbox_local" /etc/asound.conf 2>/dev/null; then
+# Migration: older asound.conf versions lack the vibb_local pcm
+if ! grep -q "vibb_local" /etc/asound.conf 2>/dev/null; then
   cat >> /etc/asound.conf <<'EOF'
 # Built-in/HAT speaker (Pirate Audio / Amp SHIM, MAX98357A over I2S).
-# Needs dtoverlay=hifiberry-dac (sudo tapbox-power hat-audio-on) + reboot.
-pcm.tapbox_local {
+# Needs dtoverlay=hifiberry-dac (sudo vibb-power hat-audio-on) + reboot.
+pcm.vibb_local {
     type plug
     slave.pcm "hw:sndrpihifiberry"
 }
 EOF
-  echo "    added tapbox_local pcm to /etc/asound.conf"
+  echo "    added vibb_local pcm to /etc/asound.conf"
 fi
 
 if [[ -f "$CONF_DIR/config.yml" ]]; then
@@ -244,18 +285,18 @@ device_name: "$DEVICE_NAME"
 device_type: speaker
 bitrate: 160  # 96 | 160 | 320 (kbps, Ogg Vorbis)
 audio_backend: alsa
-audio_device: tapbox_bt
+audio_device: vibb_bt
 server:
   enabled: true
   address: localhost
   port: $API_PORT
 zeroconf_enabled: true
 disable_autoplay: true  # playlist ends -> silence, not algorithm radio
-# TapBox fork feature: encrypted audio files cached on disk (repeat plays
+# Vibb fork feature: encrypted audio files cached on disk (repeat plays
 # skip the CDN download; still requires a live session + audio key).
 cache:
   enabled: true
-  dir: /var/lib/tapbox/spotify-cache
+  dir: /var/lib/vibb/spotify-cache
   size_limit: 20GB
 credentials:
   type: zeroconf
@@ -273,21 +314,21 @@ if [[ -f "$CONF_DIR/config.yml" ]] && ! grep -q '^disable_autoplay:' "$CONF_DIR/
   echo "    config: added disable_autoplay: true"
   GO_RESTART_NEEDED=1
 fi
-# Audio cache (TapBox fork feature) — see the config template above.
+# Audio cache (Vibb fork feature) — see the config template above.
 if [[ -f "$CONF_DIR/config.yml" ]] && ! grep -q '^cache:' "$CONF_DIR/config.yml"; then
   cat >> "$CONF_DIR/config.yml" <<'EOF'
 cache:
   enabled: true
-  dir: /var/lib/tapbox/spotify-cache
+  dir: /var/lib/vibb/spotify-cache
   size_limit: 20GB
 EOF
-  echo "    config: enabled the audio cache (20GB, /var/lib/tapbox/spotify-cache)"
+  echo "    config: enabled the audio cache (20GB, /var/lib/vibb/spotify-cache)"
   GO_RESTART_NEEDED=1
 fi
 # The cache dir must be writable by the service user (go-librespot runs
-# as $RUN_USER, unlike the root-owned tapbox daemons).
-mkdir -p /var/lib/tapbox/spotify-cache
-chown "$RUN_USER:" /var/lib/tapbox/spotify-cache
+# as $RUN_USER, unlike the root-owned vibb daemons).
+mkdir -p /var/lib/vibb/spotify-cache
+chown "$RUN_USER:" /var/lib/vibb/spotify-cache
 
 # Persistent journal: a wedged box always gets a power cycle, and the
 # default volatile journal loses exactly the evidence we need afterwards
@@ -296,7 +337,7 @@ chown "$RUN_USER:" /var/lib/tapbox/spotify-cache
 # below (bluealsa at warning, NetworkManager at WARN) that still holds
 # days of history, prunes oldest-first, and wears the SD card less.
 # Small files = finer-grained rotation, so pruning frees space sooner.
-if write_if_changed /etc/systemd/journald.conf.d/tapbox.conf <<'EOF'
+if write_if_changed /etc/systemd/journald.conf.d/vibb.conf <<'EOF'
 [Journal]
 Storage=persistent
 SystemMaxUse=64M
@@ -314,7 +355,7 @@ fi
 # the box. The field evidence we actually diagnose with — association,
 # 4-way handshake, deauth reason codes — comes from wpa_supplicant,
 # which keeps logging. NM warnings/errors still land.
-if write_if_changed /etc/NetworkManager/conf.d/90-tapbox-logging.conf <<'EOF'
+if write_if_changed /etc/NetworkManager/conf.d/90-vibb-logging.conf <<'EOF'
 [logging]
 level=WARN
 EOF
@@ -331,7 +372,7 @@ fi
 # so a dead peer is closed within ~4 min; a live shell is never touched.
 # Drop-ins are Include'd at the TOP of sshd_config on Debian and sshd is
 # first-value-wins, so this beats the stock file.
-if write_if_changed /etc/ssh/sshd_config.d/tapbox-keepalive.conf <<'EOF'
+if write_if_changed /etc/ssh/sshd_config.d/vibb-keepalive.conf <<'EOF'
 ClientAliveInterval 60
 ClientAliveCountMax 3
 EOF
@@ -390,7 +431,7 @@ if [[ $BGSCAN_MISSING = 1 ]]; then
   echo "          verify on the box: wpa_cli -i wlan0 status (rig task)"
 fi
 
-# avahi: keep tapbox.local, drop the extra advertisement chatter — every
+# avahi: keep vibb.local, drop the extra advertisement chatter — every
 # multicast answer wakes the radio after each DTIM regardless of power
 # save (review P7)
 if [[ -f /etc/avahi/avahi-daemon.conf ]]; then
@@ -421,7 +462,7 @@ rfkill unblock bluetooth 2>/dev/null || true
 # (field 2026-07-18 20:16: headset on since before boot, first inbound
 # window missed, connected a full retry cycle later). '-' = a missing
 # rfkill binary must never block bluetoothd itself.
-if write_if_changed /etc/systemd/system/bluetooth.service.d/tapbox-rfkill.conf <<'EOF'
+if write_if_changed /etc/systemd/system/bluetooth.service.d/vibb-rfkill.conf <<'EOF'
 [Service]
 ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
 EOF
@@ -436,7 +477,7 @@ fi
 # 2026-07-18 R6). Debian ships bluetooth.service with no Restart= at all;
 # on-failure covers exactly the uncovered case, while clean stops (the
 # recovery's own systemctl stop, an operator's) stay stopped.
-if write_if_changed /etc/systemd/system/bluetooth.service.d/tapbox-restart.conf <<'EOF'
+if write_if_changed /etc/systemd/system/bluetooth.service.d/vibb-restart.conf <<'EOF'
 [Service]
 Restart=on-failure
 RestartSec=5
@@ -457,10 +498,10 @@ systemctl enable --now bluealsa.service 2>/dev/null \
 # on the SHARED wifi/bt radio (the Zero 2 W firmware-crash trigger), plus
 # the headset's reconnect chime each time. Holding the transport lets a
 # play-within-the-window reuse it: no renegotiation, no chime. Default
-# 120s covers realistic pauses/episode gaps; override TAPBOX_BT_KEEPALIVE
+# 120s covers realistic pauses/episode gaps; override VIBB_BT_KEEPALIVE
 # (0 disables). A live-but-silent transport keeps the radio out of sleep,
 # so this is a small standing battery cost — hence not maxed out.
-BT_KEEPALIVE="${TAPBOX_BT_KEEPALIVE:-120}"
+BT_KEEPALIVE="${VIBB_BT_KEEPALIVE:-120}"
 BA_UNIT=""
 for u in bluealsa.service bluealsad.service; do
   systemctl cat "$u" >/dev/null 2>&1 && BA_UNIT="$u" && break
@@ -503,10 +544,10 @@ GO_CHANGED=0
 write_if_changed /etc/systemd/system/go-librespot.service <<EOF && GO_CHANGED=1
 [Unit]
 Description=go-librespot Spotify Connect daemon
-# After tapbox-rtc so a TLS handshake to the Spotify AP never runs against
+# After vibb-rtc so a TLS handshake to the Spotify AP never runs against
 # an unset (1970) clock on the RTC-less Zero — a cert notBefore failure
 # there would exit go-librespot straight into the retry backoff.
-After=network-online.target bluetooth.service tapbox-rtc.service
+After=network-online.target bluetooth.service vibb-rtc.service
 Wants=network-online.target
 # A single early exit (a DNS blip, dealer/audio-key warmup, a clock/TLS
 # hiccup) must NOT cost 30s of silence on the Spotify path — retry in 2s.
@@ -538,12 +579,12 @@ WantedBy=multi-user.target
 EOF
 
 RECON_CHANGED=0
-write_if_changed /usr/local/bin/tapbox-bt-reconnect-poll <<'EOF' && RECON_CHANGED=1
+write_if_changed /usr/local/bin/vibb-bt-reconnect-poll <<'EOF' && RECON_CHANGED=1
 #!/usr/bin/env bash
 # Reconnects the remembered BT headset (written by play.sh) whenever it is
 # powered on near the box, so turning the headset on is all it takes.
 # FALLBACK poll loop: btwatchd (the D-Bus event daemon, phase C of
-# PLAN-bt-dbus.md) exec's this when TAPBOX_BT_BACKEND=cli or the dbus
+# PLAN-bt-dbus.md) exec's this when VIBB_BT_BACKEND=cli or the dbus
 # bindings are missing. Worst case 60s to notice the speaker vs the
 # daemon's seconds — keep for one release, then reevaluate.
 #
@@ -551,7 +592,7 @@ write_if_changed /usr/local/bin/tapbox-bt-reconnect-poll <<'EOF' && RECON_CHANGE
 # plus a bluetoothd 'Host is down' journal line, and most speakers connect
 # back to us BY THEMSELVES when powered on (the box stays connectable) —
 # the poll only needs to catch the stragglers.
-MAC_FILE=/etc/tapbox/bt-headset
+MAC_FILE=/etc/vibb/bt-headset
 rfkill unblock bluetooth 2>/dev/null || true
 bluetoothctl power on >/dev/null 2>&1 || true
 bluetoothctl pairable on >/dev/null 2>&1 || true
@@ -575,42 +616,42 @@ while true; do
   sleep "$delay"
 done
 EOF
-chmod 755 /usr/local/bin/tapbox-bt-reconnect-poll
+chmod 755 /usr/local/bin/vibb-bt-reconnect-poll
 # pre-phase-C name — remove so a stale copy can never be started by hand
-rm -f /usr/local/bin/tapbox-bt-reconnect
+rm -f /usr/local/bin/vibb-bt-reconnect
 
-install_if_changed 755 "$SCRIPT_DIR/btwatchd.py" /usr/local/bin/tapbox-btwatchd && RECON_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/btwatchd.py" /usr/local/bin/vibb-btwatchd && RECON_CHANGED=1
 MPRIS_CHANGED=0
-install_if_changed 755 "$SCRIPT_DIR/mpris.py" /usr/local/bin/tapbox-mpris && MPRIS_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/mpris.py" /usr/local/bin/vibb-mpris && MPRIS_CHANGED=1
 # AVRCP media player: answers the head unit's player polling (which
 # otherwise runs an endless Invalid-Player-ID error loop DURING live
 # A2DP — the known channel-ops-while-streaming crasher on this chip),
 # shows title/artist on the car display, and routes the car's transport
 # buttons to the daemon's idempotent endpoints.
-write_if_changed /etc/systemd/system/tapbox-mpris.service <<'EOF' && MPRIS_CHANGED=1
+write_if_changed /etc/systemd/system/vibb-mpris.service <<'EOF' && MPRIS_CHANGED=1
 [Unit]
-Description=TapBox AVRCP media player (bluez MPRIS bridge)
-After=bluetooth.service tapbox-daemon.service
+Description=Vibb AVRCP media player (bluez MPRIS bridge)
+After=bluetooth.service vibb-daemon.service
 Wants=bluetooth.service
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-mpris
+ExecStart=/usr/bin/python3 /usr/local/bin/vibb-mpris
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-write_if_changed /etc/systemd/system/tapbox-bt-reconnect.service <<'EOF' && RECON_CHANGED=1
+write_if_changed /etc/systemd/system/vibb-bt-reconnect.service <<'EOF' && RECON_CHANGED=1
 [Unit]
-Description=TapBox BT reconnect daemon (event-driven, btwatchd)
+Description=Vibb BT reconnect daemon (event-driven, btwatchd)
 After=bluetooth.service bluealsa.service bluealsad.service
 Wants=bluetooth.service
 
 [Service]
-# Kill switch: systemctl edit tapbox-bt-reconnect ->
-#   [Service] Environment=TAPBOX_BT_BACKEND=cli   (poll-loop fallback)
-ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-btwatchd
+# Kill switch: systemctl edit vibb-bt-reconnect ->
+#   [Service] Environment=VIBB_BT_BACKEND=cli   (poll-loop fallback)
+ExecStart=/usr/bin/python3 /usr/local/bin/vibb-btwatchd
 Restart=always
 RestartSec=5
 
@@ -622,63 +663,63 @@ EOF
 
 echo "==> [5/8] RFID reader support (PN532 over I2C) + tools..."
 raspi-config nonint do_i2c 0 2>/dev/null || true
-# SPI drives the Pirate Audio display (tapbox-ui); harmless when unused
+# SPI drives the Pirate Audio display (vibb-ui); harmless when unused
 raspi-config nonint do_spi 0 2>/dev/null || true
-if [[ ! -x /opt/tapbox/venv/bin/python3 ]]; then
-  python3 -m venv /opt/tapbox/venv
+if [[ ! -x /opt/vibb/venv/bin/python3 ]]; then
+  python3 -m venv /opt/vibb/venv
 fi
-if [[ $UPDATE -eq 1 ]] || ! /opt/tapbox/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio, qrcode, soco' 2>/dev/null; then
+if [[ $UPDATE -eq 1 ]] || ! /opt/vibb/venv/bin/python3 -c 'import adafruit_pn532, evdev, PIL, gpiozero, lgpio, qrcode, soco' 2>/dev/null; then
   echo "    installing python libs (this can take a few minutes on a Zero)..."
-  # soco: the tapbox-sonos sidecar (UPnP control of Sonos speakers).
+  # soco: the vibb-sonos sidecar (UPnP control of Sonos speakers).
   # In the COMBINED probe above — a lib added outside it is silently
   # skipped by every future --update (architect review 2026-08-09).
-  /opt/tapbox/venv/bin/pip install --quiet --upgrade \
+  /opt/vibb/venv/bin/pip install --quiet --upgrade \
     adafruit-circuitpython-pn532 evdev pillow gpiozero qrcode soco
   # lgpio is gpiozero's pin factory on kernel 6.x — without it gpiozero
   # falls back to RPi.GPIO, whose edge detection is broken there
-  # ('RuntimeError: Failed to add edge detection' from tapbox-ui).
+  # ('RuntimeError: Failed to add edge detection' from vibb-ui).
   # No prebuilt wheel for this python: pip builds from source, which
   # needs swig + the lg library headers. Never abort the install on it.
-  if ! /opt/tapbox/venv/bin/python3 -c 'import lgpio' 2>/dev/null; then
+  if ! /opt/vibb/venv/bin/python3 -c 'import lgpio' 2>/dev/null; then
     apt-get install -y -qq swig liblgpio-dev >/dev/null 2>&1 || true
-    /opt/tapbox/venv/bin/pip install --quiet --upgrade lgpio \
-      || echo "    WARNING: lgpio build failed — tapbox-ui buttons need it (apt install swig liblgpio-dev, then rerun)"
+    /opt/vibb/venv/bin/pip install --quiet --upgrade lgpio \
+      || echo "    WARNING: lgpio build failed — vibb-ui buttons need it (apt install swig liblgpio-dev, then rerun)"
   fi
   # Screen driver for the Pirate Audio HAT (harmless without the hardware)
-  /opt/tapbox/venv/bin/pip install --quiet --upgrade st7789 spidev 2>/dev/null \
+  /opt/vibb/venv/bin/pip install --quiet --upgrade st7789 spidev 2>/dev/null \
     || echo "    (st7789 screen lib skipped — install when the HAT arrives)"
 else
   echo "    python libs already installed — skipping pip"
 fi
 
-# Shared python package (tapbox/): one copy under /usr/local/lib/tapbox-py.
+# Shared python package (vibb/): one copy under /usr/local/lib/vibb-py.
 # The entry scripts bootstrap it from there (repo checkout wins when present).
 PKG_CHANGED=0
-mkdir -p /usr/local/lib/tapbox-py/tapbox
-for f in "$SCRIPT_DIR"/tapbox/*.py; do
-  install_if_changed 644 "$f" "/usr/local/lib/tapbox-py/tapbox/$(basename "$f")" && PKG_CHANGED=1
+mkdir -p /usr/local/lib/vibb-py/vibb
+for f in "$SCRIPT_DIR"/vibb/*.py; do
+  install_if_changed 644 "$f" "/usr/local/lib/vibb-py/vibb/$(basename "$f")" && PKG_CHANGED=1
 done
 # The pre-package layout installed nrk.py loose in /usr/local/bin — remove it
 # so a stale copy can never shadow the package (we've been bitten before).
 rm -f /usr/local/bin/nrk.py
-# btwatchd imports tapbox.bt — a package change must restart it too
+# btwatchd imports vibb.bt — a package change must restart it too
 [[ $PKG_CHANGED -eq 1 ]] && RECON_CHANGED=1
 
 RFID_CHANGED=$PKG_CHANGED
-install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/tapbox-rfid   && RFID_CHANGED=1
-install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/tapbox-player && RFID_CHANGED=1
-install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/tapbox-card  || true
-install_if_changed 755 "$SCRIPT_DIR/token.sh" /usr/local/bin/tapbox-token || true
+install_if_changed 755 "$SCRIPT_DIR/rfid.py"   /usr/local/bin/vibb-rfid   && RFID_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/player.py" /usr/local/bin/vibb-player && RFID_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/card.sh"  /usr/local/bin/vibb-card  || true
+install_if_changed 755 "$SCRIPT_DIR/token.sh" /usr/local/bin/vibb-token || true
 # Extras: owner-dropped launch scripts (docs/extras.md — RetroPie etc.).
 # The dir is created once and its CONTENT is never touched by re-runs;
 # scripts arrive over SSH only (root-owned, no API route, no upload
 # path). The wrapper is the handoff/return machinery for the X+Y chord.
-install -d -m 755 /etc/tapbox/extras
-install_if_changed 755 "$SCRIPT_DIR/extra.sh" /usr/local/bin/tapbox-extra || true
-install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/tapbox-lib   || true
+install -d -m 755 /etc/vibb/extras
+install_if_changed 755 "$SCRIPT_DIR/extra.sh" /usr/local/bin/vibb-extra || true
+install_if_changed 755 "$SCRIPT_DIR/lib.py"   /usr/local/bin/vibb-lib   || true
 UI_CHANGED=$PKG_CHANGED
-install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/tapbox-ui    && UI_CHANGED=1
-install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/tapbox-play  || true
+install_if_changed 755 "$SCRIPT_DIR/ui.py"    /usr/local/bin/vibb-ui    && UI_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/play.sh"  /usr/local/bin/vibb-play  || true
 
 # mDNS: advertise the box as <BOX_NAME>.local regardless of the system
 # hostname (avahi's host-name option). iOS/macOS/Windows resolve .local
@@ -695,14 +736,14 @@ else
   systemctl enable --now avahi-daemon 2>/dev/null || true
 fi
 
-# PiSugar battery curve: apply the calibrated TapBox curve (measured on a
+# PiSugar battery curve: apply the calibrated Vibb curve (measured on a
 # full discharge run; percent = remaining playtime) — but only when the
 # config has NO curve yet, so a hand-tuned one is never overwritten.
-# Re-apply/overwrite explicitly with: sudo tapbox-power curve
+# Re-apply/overwrite explicitly with: sudo vibb-power curve
 if [[ -f /etc/pisugar-server/config.json ]] \
     && ! grep -q battery_curve /etc/pisugar-server/config.json; then
   bash "$SCRIPT_DIR/power.sh" curve && echo "    applied calibrated battery curve" \
-    || echo "    battery curve not applied (see: sudo tapbox-power curve)"
+    || echo "    battery curve not applied (see: sudo vibb-power curve)"
 fi
 
 # pisugar-server logs 2 INFO lines per TCP connect and a WARN for every
@@ -758,7 +799,7 @@ for t in apt-daily.timer apt-daily-upgrade.timer; do
   fi
 done
 
-# (power save at boot is enabled further down, after tapbox-power is
+# (power save at boot is enabled further down, after vibb-power is
 # installed — the unit's ExecStart must point at the installed copy)
 
 # PiSugar RTC: the Zero has no real-time clock, so an offline boot starts
@@ -767,31 +808,31 @@ done
 # 3 has a battery-backed RTC; load it into the system clock at boot, and
 # write the NTP-corrected time back periodically so it stays accurate.
 if [[ -f /etc/pisugar-server/config.json ]]; then
-  write_if_changed /etc/systemd/system/tapbox-rtc.service <<'EOF' && RTC_CHANGED=1
+  write_if_changed /etc/systemd/system/vibb-rtc.service <<'EOF' && RTC_CHANGED=1
 [Unit]
-Description=TapBox: load system clock from the PiSugar RTC
+Description=Vibb: load system clock from the PiSugar RTC
 After=pisugar-server.service
 Wants=pisugar-server.service
 Before=time-sync.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/tapbox-power rtc-load
+ExecStart=/usr/local/bin/vibb-power rtc-load
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  write_if_changed /etc/systemd/system/tapbox-rtc-save.service <<'EOF' && RTC_CHANGED=1
+  write_if_changed /etc/systemd/system/vibb-rtc-save.service <<'EOF' && RTC_CHANGED=1
 [Unit]
-Description=TapBox: write the NTP-corrected time back to the PiSugar RTC
+Description=Vibb: write the NTP-corrected time back to the PiSugar RTC
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/tapbox-power rtc-save
+ExecStart=/usr/local/bin/vibb-power rtc-save
 EOF
-  write_if_changed /etc/systemd/system/tapbox-rtc-save.timer <<'EOF' && RTC_CHANGED=1
+  write_if_changed /etc/systemd/system/vibb-rtc-save.timer <<'EOF' && RTC_CHANGED=1
 [Unit]
-Description=TapBox: periodically refresh the PiSugar RTC from the system clock
+Description=Vibb: periodically refresh the PiSugar RTC from the system clock
 
 [Timer]
 OnBootSec=3min
@@ -803,30 +844,30 @@ OnUnitActiveSec=6h
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now tapbox-rtc.service >/dev/null 2>&1 || true
-  systemctl enable --now tapbox-rtc-save.timer >/dev/null 2>&1 || true
+  systemctl enable --now vibb-rtc.service >/dev/null 2>&1 || true
+  systemctl enable --now vibb-rtc-save.timer >/dev/null 2>&1 || true
   [[ ${RTC_CHANGED:-0} -eq 1 ]] && echo "    PiSugar RTC clock sync installed (offline boots get a sane time)"
 fi
 
 # Captive portal DNS: while the setup hotspot runs (NetworkManager shared
 # mode), resolve every hostname to the box so phone connectivity probes hit
-# tapboxd's :80 redirect and pop the portal. Inert outside hotspot mode.
-write_if_changed /etc/NetworkManager/dnsmasq-shared.d/tapbox-captive.conf <<'EOF' || true
+# vibbd's :80 redirect and pop the portal. Inert outside hotspot mode.
+write_if_changed /etc/NetworkManager/dnsmasq-shared.d/vibb-captive.conf <<'EOF' || true
 address=/#/10.42.0.1
 EOF
 
-# Parent PWA (served by tapbox-daemon at http://tapbox.local:3679)
-mkdir -p /usr/share/tapbox/web
+# Parent PWA (served by vibb-daemon at http://vibb.local:3679)
+mkdir -p /usr/share/vibb/web
 for f in "$SCRIPT_DIR"/web/*; do
-  install_if_changed 644 "$f" "/usr/share/tapbox/web/$(basename "$f")" || true
+  install_if_changed 644 "$f" "/usr/share/vibb/web/$(basename "$f")" || true
 done
 
 # Screen daemon service (Pirate Audio HAT). Installed but NOT enabled —
-# enable it when the screen is mounted:  sudo systemctl enable --now tapbox-ui
-write_if_changed /etc/systemd/system/tapbox-ui.service <<'EOF' || true
+# enable it when the screen is mounted:  sudo systemctl enable --now vibb-ui
+write_if_changed /etc/systemd/system/vibb-ui.service <<'EOF' || true
 [Unit]
-Description=TapBox screen UI (Pirate Audio)
-# Early start: the splash handles a not-yet-ready tapboxd, and waiting
+Description=Vibb screen UI (Pirate Audio)
+# Early start: the splash handles a not-yet-ready vibbd, and waiting
 # behind the daemon (which waits behind the network) left the screen
 # frozen on its last image for ~35s of every boot
 DefaultDependencies=no
@@ -835,28 +876,28 @@ Before=shutdown.target
 Conflicts=shutdown.target
 
 [Service]
-ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-ui
+ExecStart=/opt/vibb/venv/bin/python3 /usr/local/bin/vibb-ui
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/tapbox-power || true
+install_if_changed 755 "$SCRIPT_DIR/power.sh" /usr/local/bin/vibb-power || true
 # Charger-follow: the CPU governor tracks the power plug (ondemand on
-# charger, powersave on battery — tapbox-power _followloop). Standalone
+# charger, powersave on battery — vibb-power _followloop). Standalone
 # by design: it reads pisugar-server directly and must never depend on
 # the OPT-IN battery logger. Meaningless without a PiSugar, hence the
 # config-file condition.
-write_if_changed /etc/systemd/system/tapbox-chargefollow.service <<'EOF' && CHARGE_CHANGED=1
+write_if_changed /etc/systemd/system/vibb-chargefollow.service <<'EOF' && CHARGE_CHANGED=1
 [Unit]
-Description=TapBox charger-follow (CPU governor tracks the power plug)
+Description=Vibb charger-follow (CPU governor tracks the power plug)
 After=pisugar-server.service
 Wants=pisugar-server.service
 ConditionPathExists=/etc/pisugar-server/config.json
 
 [Service]
-ExecStart=/usr/local/bin/tapbox-power _followloop
+ExecStart=/usr/local/bin/vibb-power _followloop
 Restart=always
 RestartSec=30
 
@@ -867,19 +908,19 @@ EOF
 # RAM ring so the next `hci0: hardware error 0x00` can be attributed to the
 # right layer — the kernel synthesizes that exact event on a dead UART link
 # (hci_reset_dev), so dmesg alone can't tell chip-fault from link-fault.
-# Enable during a crash hunt: sudo systemctl enable --now tapbox-btsnoop
-install_if_changed 755 "$SCRIPT_DIR/btsnoop.sh" /usr/local/bin/tapbox-btsnoop || true
+# Enable during a crash hunt: sudo systemctl enable --now vibb-btsnoop
+install_if_changed 755 "$SCRIPT_DIR/btsnoop.sh" /usr/local/bin/vibb-btsnoop || true
 # ...and the analysis half: per-crash control-plane digest of a captured
 # ring segment (what was on the air before each Hardware Error):
-#   tapbox-snoop-digest ~/20260727-200749.snoop
-install_if_changed 755 "$SCRIPT_DIR/snoopdigest.py" /usr/local/bin/tapbox-snoop-digest || true
-write_if_changed /etc/systemd/system/tapbox-btsnoop.service <<'EOF' || true
+#   vibb-snoop-digest ~/20260727-200749.snoop
+install_if_changed 755 "$SCRIPT_DIR/snoopdigest.py" /usr/local/bin/vibb-snoop-digest || true
+write_if_changed /etc/systemd/system/vibb-btsnoop.service <<'EOF' || true
 [Unit]
-Description=TapBox btsnoop ring (BT crash diagnosis, RAM-only)
+Description=Vibb btsnoop ring (BT crash diagnosis, RAM-only)
 After=bluetooth.service
 
 [Service]
-ExecStart=/usr/local/bin/tapbox-btsnoop
+ExecStart=/usr/local/bin/vibb-btsnoop
 Restart=always
 RestartSec=30
 
@@ -887,38 +928,38 @@ RestartSec=30
 WantedBy=multi-user.target
 EOF
 # Power save at boot: governor powersave + LEDs/HDMI off + wifi power save
-# (tapbox-power save) applied automatically at every boot. Runs after
+# (vibb-power save) applied automatically at every boot. Runs after
 # multi-user so it never slows the boot itself. Invoked via the INSTALLED
 # copy so the generated unit's ExecStart points at /usr/local/bin.
-# NOTE: 'tapbox-power boot-off' removes the unit, but a later install.sh
-# run re-adds it (power save at boot is the tapbox default).
+# NOTE: 'vibb-power boot-off' removes the unit, but a later install.sh
+# run re-adds it (power save at boot is the vibb default).
 # Migration: the first version ordered this After=multi-user.target,
 # which waits for network-online — a struggling wifi then kept the HDMI
 # signal on and the CPU unparked for the whole wait (field 2026-08-04).
 # Rewrite that unit; 'boot-off' users keep their choice (no unit file).
-if [[ ! -f /etc/systemd/system/tapbox-power.service ]]; then
-  /usr/local/bin/tapbox-power boot-on >/dev/null \
-    && echo "    power save applied at every boot (tapbox-power boot-on)"
-elif grep -q '^After=multi-user.target' /etc/systemd/system/tapbox-power.service; then
-  /usr/local/bin/tapbox-power boot-on >/dev/null \
+if [[ ! -f /etc/systemd/system/vibb-power.service ]]; then
+  /usr/local/bin/vibb-power boot-on >/dev/null \
+    && echo "    power save applied at every boot (vibb-power boot-on)"
+elif grep -q '^After=multi-user.target' /etc/systemd/system/vibb-power.service; then
+  /usr/local/bin/vibb-power boot-on >/dev/null \
     && echo "    power save at boot no longer waits for the network"
 fi
-# The battery CSV logger (tapbox-power log-on) stays OPT-IN: it's a
+# The battery CSV logger (vibb-power log-on) stays OPT-IN: it's a
 # calibration tool that writes the SD card every 60s forever — enable it
 # only while measuring a discharge curve.
 IDLE_CHANGED=0
-install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/tapbox-idle  && IDLE_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/idle.py"  /usr/local/bin/vibb-idle  && IDLE_CHANGED=1
 # Idle auto-shutdown: enabled by default — the PWA setting
 # (idle_shutdown_min, 0 = never) is the actual on/off knob and idle.py
 # re-reads it live. Previously this service was opt-in via
-# 'tapbox-power idle-on', which made the PWA setting a silent no-op.
-write_if_changed /etc/systemd/system/tapbox-idle.service <<'EOF2' && IDLE_CHANGED=1
+# 'vibb-power idle-on', which made the PWA setting a silent no-op.
+write_if_changed /etc/systemd/system/vibb-idle.service <<'EOF2' && IDLE_CHANGED=1
 [Unit]
-Description=TapBox idle auto-shutdown
-After=tapbox-daemon.service
+Description=Vibb idle auto-shutdown
+After=vibb-daemon.service
 
 [Service]
-ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-idle
+ExecStart=/opt/vibb/venv/bin/python3 /usr/local/bin/vibb-idle
 Restart=always
 RestartSec=30
 
@@ -927,17 +968,17 @@ WantedBy=multi-user.target
 EOF2
 
 SONOS_CHANGED=$PKG_CHANGED
-install_if_changed 755 "$SCRIPT_DIR/sonosd.py" /usr/local/bin/tapbox-sonos && SONOS_CHANGED=1
-write_if_changed /etc/systemd/system/tapbox-sonos.service <<'EOF2' && SONOS_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/sonosd.py" /usr/local/bin/vibb-sonos && SONOS_CHANGED=1
+write_if_changed /etc/systemd/system/vibb-sonos.service <<'EOF2' && SONOS_CHANGED=1
 [Unit]
-Description=TapBox Sonos sidecar (UPnP via SoCo, 127.0.0.1 only)
-# After basic.target like tapboxd, NOT network-online: soco imports
+Description=Vibb Sonos sidecar (UPnP via SoCo, 127.0.0.1 only)
+# After basic.target like vibbd, NOT network-online: soco imports
 # lazily and the speaker cache addresses by stored IP, so startup needs
 # no network (ordering behind the network cost ~18s of boot elsewhere).
 After=basic.target
 
 [Service]
-ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-sonos
+ExecStart=/opt/vibb/venv/bin/python3 /usr/local/bin/vibb-sonos
 Restart=always
 RestartSec=5
 
@@ -946,13 +987,13 @@ WantedBy=multi-user.target
 EOF2
 
 DAEMON_CHANGED=$PKG_CHANGED
-install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/tapbox-daemon && DAEMON_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/daemon.py" /usr/local/bin/vibb-daemon && DAEMON_CHANGED=1
 # Pairing over D-Bus (B2, PLAN-bt-b2-pairing.md): opt in per box until the
-# rig matrix passes —  systemctl edit tapbox-daemon  ->
-#   [Service] Environment=TAPBOX_BT_PAIR=dbus
-write_if_changed /etc/systemd/system/tapbox-daemon.service <<EOF && DAEMON_CHANGED=1
+# rig matrix passes —  systemctl edit vibb-daemon  ->
+#   [Service] Environment=VIBB_BT_PAIR=dbus
+write_if_changed /etc/systemd/system/vibb-daemon.service <<EOF && DAEMON_CHANGED=1
 [Unit]
-Description=TapBox orchestration daemon (playback state + API)
+Description=Vibb orchestration daemon (playback state + API)
 # Deliberately NOT ordered After=go-librespot / network-online: the daemon
 # resumes cached podcasts and serves the PWA with no network, and it
 # already waits INTERNALLY for whatever a target needs (go-librespot login
@@ -962,8 +1003,8 @@ Description=TapBox orchestration daemon (playback state + API)
 # (systemd-analyze rig 2026-07-18: multi-user waited on network-online).
 
 [Service]
-Environment=TAPBOX_GO_CONFIG=$CONF_DIR/config.yml
-ExecStart=/usr/bin/python3 /usr/local/bin/tapbox-daemon
+Environment=VIBB_GO_CONFIG=$CONF_DIR/config.yml
+ExecStart=/usr/bin/python3 /usr/local/bin/vibb-daemon
 Restart=always
 RestartSec=5
 
@@ -972,14 +1013,14 @@ WantedBy=multi-user.target
 EOF
 
 BTN_CHANGED=$PKG_CHANGED
-install_if_changed 755 "$SCRIPT_DIR/buttons.py" /usr/local/bin/tapbox-buttons && BTN_CHANGED=1
-write_if_changed /etc/systemd/system/tapbox-buttons.service <<'EOF' && BTN_CHANGED=1
+install_if_changed 755 "$SCRIPT_DIR/buttons.py" /usr/local/bin/vibb-buttons && BTN_CHANGED=1
+write_if_changed /etc/systemd/system/vibb-buttons.service <<'EOF' && BTN_CHANGED=1
 [Unit]
-Description=TapBox media button daemon (AVRCP etc.)
+Description=Vibb media button daemon (AVRCP etc.)
 After=bluetooth.service
 
 [Service]
-ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-buttons
+ExecStart=/opt/vibb/venv/bin/python3 /usr/local/bin/vibb-buttons
 Restart=always
 RestartSec=10
 
@@ -988,15 +1029,15 @@ WantedBy=multi-user.target
 EOF
 
 # RFID daemon service (PN532). Installed but NOT enabled — enable it when
-# the reader is wired:  sudo systemctl enable --now tapbox-rfid
-write_if_changed /etc/systemd/system/tapbox-rfid.service <<'EOF' && RFID_CHANGED=1
+# the reader is wired:  sudo systemctl enable --now vibb-rfid
+write_if_changed /etc/systemd/system/vibb-rfid.service <<'EOF' && RFID_CHANGED=1
 [Unit]
-Description=TapBox RFID daemon
+Description=Vibb RFID daemon
 After=go-librespot.service
 
 [Service]
-EnvironmentFile=-/etc/tapbox/rfid.conf
-ExecStart=/opt/tapbox/venv/bin/python3 /usr/local/bin/tapbox-rfid
+EnvironmentFile=-/etc/vibb/rfid.conf
+ExecStart=/opt/vibb/venv/bin/python3 /usr/local/bin/vibb-rfid
 Restart=always
 RestartSec=10
 
@@ -1006,17 +1047,17 @@ EOF
 
 # RFID config: poll mode by default; slot mode (card slot + detector switch)
 # is enabled by editing this file. Written only if missing.
-if [[ -f /etc/tapbox/rfid.conf ]]; then
-  echo "    keeping existing /etc/tapbox/rfid.conf"
+if [[ -f /etc/vibb/rfid.conf ]]; then
+  echo "    keeping existing /etc/vibb/rfid.conf"
 else
-  mkdir -p /etc/tapbox
-  cat > /etc/tapbox/rfid.conf <<'EOF'
-# TapBox RFID daemon config (systemd EnvironmentFile).
+  mkdir -p /etc/vibb
+  cat > /etc/vibb/rfid.conf <<'EOF'
+# Vibb RFID daemon config (systemd EnvironmentFile).
 # Default (everything commented out) = PN532 poll mode.
 #
 # Slot mode: a detector switch in the card slot senses the card; the PN532
 # is only powered/read once per insertion. Card in = play, card out = pause.
-# Apply changes with: sudo systemctl restart tapbox-rfid
+# Apply changes with: sudo systemctl restart vibb-rfid
 #
 #SLOT_GPIO=17          # BCM pin of the slot switch (other pole to GND)
 #SLOT_PRESENT=low      # 'low' = switch closes to GND when card is in (default)
@@ -1026,27 +1067,27 @@ else
 #SLOT_GPIO=file:/tmp/card   # `touch /tmp/card` = insert, `rm` = remove
 #FAKE_UID=cafebabe          # UID to pretend when no PN532 answers
 EOF
-  echo "    wrote /etc/tapbox/rfid.conf (poll mode; edit it to enable slot mode)"
+  echo "    wrote /etc/vibb/rfid.conf (poll mode; edit it to enable slot mode)"
 fi
 
 # Spotify Web API credentials (optional): lets a library section follow a
 # Spotify profile's PUBLIC playlists. One free app registered at
 # https://developer.spotify.com/dashboard serves every box in the household
 # (client credentials read public data only — no user login involved).
-# Provide via TAPBOX_SPOTIFY_ID/TAPBOX_SPOTIFY_SECRET env or the one-time
+# Provide via VIBB_SPOTIFY_ID/VIBB_SPOTIFY_SECRET env or the one-time
 # prompt. Re-runs keep the existing file; delete it to be asked again.
-SPOTIFY_API_FILE=/etc/tapbox/spotify-api.json
+SPOTIFY_API_FILE=/etc/vibb/spotify-api.json
 if [[ -f $SPOTIFY_API_FILE ]]; then
   echo "    keeping existing $SPOTIFY_API_FILE"
 else
-  SP_ID="${TAPBOX_SPOTIFY_ID:-}"
-  SP_SECRET="${TAPBOX_SPOTIFY_SECRET:-}"
+  SP_ID="${VIBB_SPOTIFY_ID:-}"
+  SP_SECRET="${VIBB_SPOTIFY_SECRET:-}"
   if [[ -z $SP_ID && -t 0 ]]; then
     read -r -p "Spotify API client id (blank = skip profile-follow): " SP_ID || true
     [[ -n $SP_ID ]] && read -r -p "Spotify API client secret: " SP_SECRET || true
   fi
   if [[ -n $SP_ID && -n $SP_SECRET ]]; then
-    mkdir -p /etc/tapbox
+    mkdir -p /etc/vibb
     printf '{"client_id": "%s", "client_secret": "%s"}\n' \
       "$SP_ID" "$SP_SECRET" > "$SPOTIFY_API_FILE"
     chmod 600 "$SPOTIFY_API_FILE"
@@ -1061,44 +1102,44 @@ fi
 # one. Keep-existing: re-running install.sh must NOT rotate it, or every
 # linked phone in the house silently stops working. token.ensure() is the
 # single generator — the daemon calls the same function at boot to heal a
-# deleted file, and `tapbox-token` reads it back on demand. Deliberately
+# deleted file, and `vibb-token` reads it back on demand. Deliberately
 # NOT printed here: the secret should only appear when someone asks.
-/usr/bin/python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/tapbox-py"); from tapbox import token; token.ensure()' 2>/dev/null \
+/usr/bin/python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/vibb-py"); from vibb import token; token.ensure()' 2>/dev/null \
   || echo "    WARNING: could not create the API token — privileged endpoints will refuse requests"
 
 echo "==> [6/8] Enabling services (restarting only what changed)..."
 # Normalize modes on units written by older installs (mktemp made them 600
 # and unchanged files are never rewritten) — silences systemd's
 # 'world-inaccessible' warning on every daemon-reload.
-chmod 644 /etc/systemd/system/tapbox-*.service \
+chmod 644 /etc/systemd/system/vibb-*.service \
   /etc/systemd/system/go-librespot.service 2>/dev/null || true
 systemctl daemon-reload
-systemctl enable --now go-librespot.service tapbox-bt-reconnect.service tapbox-mpris.service \
-  tapbox-buttons.service tapbox-daemon.service tapbox-idle.service \
-  tapbox-chargefollow.service tapbox-sonos.service
-# One-time migration: earlier installs enabled tapbox-rfid before the PN532
-# existed. Switch it to the same opt-in contract as tapbox-ui — but only
+systemctl enable --now go-librespot.service vibb-bt-reconnect.service vibb-mpris.service \
+  vibb-buttons.service vibb-daemon.service vibb-idle.service \
+  vibb-chargefollow.service vibb-sonos.service
+# One-time migration: earlier installs enabled vibb-rfid before the PN532
+# existed. Switch it to the same opt-in contract as vibb-ui — but only
 # once, so an enable after wiring the reader sticks across installs.
-if [[ ! -f /var/lib/tapbox/.rfid-opt-in ]]; then
-  mkdir -p /var/lib/tapbox && touch /var/lib/tapbox/.rfid-opt-in
-  if systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null; then
-    systemctl disable --now tapbox-rfid.service
-    echo "    tapbox-rfid disabled (no reader yet) — enable when the PN532 is wired:"
-    echo "      sudo systemctl enable --now tapbox-rfid"
+if [[ ! -f /var/lib/vibb/.rfid-opt-in ]]; then
+  mkdir -p /var/lib/vibb && touch /var/lib/vibb/.rfid-opt-in
+  if systemctl is-enabled --quiet vibb-rfid.service 2>/dev/null; then
+    systemctl disable --now vibb-rfid.service
+    echo "    vibb-rfid disabled (no reader yet) — enable when the PN532 is wired:"
+    echo "      sudo systemctl enable --now vibb-rfid"
   fi
 fi
 [[ $GO_CHANGED -eq 1 || ${GO_RESTART_NEEDED:-0} -eq 1 ]] && { echo "    go-librespot changed — restarting"; systemctl restart go-librespot.service; }
-[[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart tapbox-bt-reconnect.service; }
-[[ ${MPRIS_CHANGED:-0} -eq 1 ]] && { echo "    mpris bridge changed — restarting"; systemctl restart tapbox-mpris.service; }
-[[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart tapbox-idle.service; }
-[[ ${SONOS_CHANGED:-0} -eq 1 ]] && { echo "    sonos sidecar changed — restarting"; systemctl restart tapbox-sonos.service; }
-[[ ${CHARGE_CHANGED:-0} -eq 1 ]] && { echo "    charger-follow changed — restarting"; systemctl restart tapbox-chargefollow.service; }
-[[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet tapbox-rfid.service 2>/dev/null \
-  && { echo "    rfid daemon changed — restarting"; systemctl restart tapbox-rfid.service; }
-[[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart tapbox-buttons.service; }
-[[ $DAEMON_CHANGED -eq 1 ]] && { echo "    orchestration daemon changed — restarting"; systemctl restart tapbox-daemon.service; }
-[[ ${UI_CHANGED:-0} -eq 1 ]] && systemctl is-active --quiet tapbox-ui.service 2>/dev/null \
-  && { echo "    screen ui changed — restarting"; systemctl restart tapbox-ui.service; }
+[[ $RECON_CHANGED -eq 1 ]] && { echo "    bt-reconnect changed — restarting"; systemctl restart vibb-bt-reconnect.service; }
+[[ ${MPRIS_CHANGED:-0} -eq 1 ]] && { echo "    mpris bridge changed — restarting"; systemctl restart vibb-mpris.service; }
+[[ $IDLE_CHANGED  -eq 1 ]] && { echo "    idle daemon changed — restarting"; systemctl restart vibb-idle.service; }
+[[ ${SONOS_CHANGED:-0} -eq 1 ]] && { echo "    sonos sidecar changed — restarting"; systemctl restart vibb-sonos.service; }
+[[ ${CHARGE_CHANGED:-0} -eq 1 ]] && { echo "    charger-follow changed — restarting"; systemctl restart vibb-chargefollow.service; }
+[[ $RFID_CHANGED  -eq 1 ]] && systemctl is-enabled --quiet vibb-rfid.service 2>/dev/null \
+  && { echo "    rfid daemon changed — restarting"; systemctl restart vibb-rfid.service; }
+[[ $BTN_CHANGED   -eq 1 ]] && { echo "    button daemon changed — restarting"; systemctl restart vibb-buttons.service; }
+[[ $DAEMON_CHANGED -eq 1 ]] && { echo "    orchestration daemon changed — restarting"; systemctl restart vibb-daemon.service; }
+[[ ${UI_CHANGED:-0} -eq 1 ]] && systemctl is-active --quiet vibb-ui.service 2>/dev/null \
+  && { echo "    screen ui changed — restarting"; systemctl restart vibb-ui.service; }
 
 # --- 7. API + login ----------------------------------------------------------
 

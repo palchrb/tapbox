@@ -15,10 +15,10 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
@@ -30,7 +30,7 @@ orch._mpv_alive = lambda: False
 orch.target, orch.source = None, None
 
 # a speaker IS configured (so the icon path is in play at all)
-daemon._bt.MAC_FILE = os.path.join(os.environ["TAPBOX_RUN"], "bt-mac")
+daemon._bt.MAC_FILE = os.path.join(os.environ["VIBB_RUN"], "bt-mac")
 with open(daemon._bt.MAC_FILE, "w") as f:
     f.write("2C:FD:B3:FA:DA:04")
 

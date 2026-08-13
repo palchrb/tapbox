@@ -35,7 +35,7 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n)
         SEEN.append({"path": self.path,
-                     "token": self.headers.get("X-TapBox-Token"),
+                     "token": self.headers.get("X-Vibb-Token"),
                      "ctype": self.headers.get("Content-Type"),
                      "body": json.loads(body or b"{}")})
         out = b'{"ok": true, "source": "spotify"}'
@@ -63,8 +63,8 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
 def run(args, token_file=TOKEN_FILE):
-    env = dict(os.environ, TAPBOX_DAEMON=f"http://127.0.0.1:{port}",
-               TAPBOX_TOKEN_FILE=token_file)
+    env = dict(os.environ, VIBB_DAEMON=f"http://127.0.0.1:{port}",
+               VIBB_TOKEN_FILE=token_file)
     return subprocess.run(["bash", PLAY, *args], env=env,
                           capture_output=True, text=True, timeout=60)
 
@@ -112,7 +112,7 @@ run(["pause"])
 assert SEEN and SEEN[-1]["token"] == TOKEN, SEEN
 print("3. transport verbs carry the token too OK")
 
-# 4. NO token file (a box where /etc/tapbox is unreadable, or a non-root
+# 4. NO token file (a box where /etc/vibb is unreadable, or a non-root
 #    caller): the script must still RUN — it just gets a clean 401 from
 #    the daemon rather than dying on a missing file
 SEEN.clear()

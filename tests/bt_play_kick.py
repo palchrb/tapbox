@@ -12,9 +12,9 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", tempfile.mkdtemp())
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ.setdefault("VIBB_CACHE", tempfile.mkdtemp())
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -405,7 +405,7 @@ daemon._note_go_restart()          # the output retarget just restarted it
 daemon._go_output_rebuild()        # blip rebuild moments later -> skip
 assert REST == [], f"rebuild within cooldown must NOT restart again: {REST}"
 daemon._GO_REBUILD["at"] = time.monotonic() - daemon.GO_REBUILD_COOLDOWN_S - 1
-from tapbox import paths as _paths  # noqa: E402
+from vibb import paths as _paths  # noqa: E402
 try:
     os.remove(_paths.GO_RESTART_FILE)  # the cross-process restart aged out too
 except OSError:
@@ -417,17 +417,17 @@ print("22. go-librespot restarts collapse to one per reconnect OK")
 
 # 23. resume after an output-switch-to-bt must land on the HEADSET, not
 # the built-in speaker. The deferred switch left go-librespot's config on
-# tapbox_local (it was playing there); the rebuild must RETARGET to the
+# vibb_local (it was playing there); the rebuild must RETARGET to the
 # current output's pcm, or it resumes on the built-in one and needs a
 # manual bt/local toggle to move (field 2026-07-17).
 with open(daemon.OUT_FILE, "w") as f:
-    json.dump({"output": "bt", "pcm": "tapbox_bt"}, f)
+    json.dump({"output": "bt", "pcm": "vibb_bt"}, f)
 RETARGET = []
 daemon._retarget_go_librespot = lambda pcm: (RETARGET.append(pcm) is None
                                              and True)
 daemon._GO_REBUILD["at"] = time.monotonic()   # even 'fresh', retarget wins
 daemon._go_output_rebuild()
-assert RETARGET == ["tapbox_bt"], \
+assert RETARGET == ["vibb_bt"], \
     f"rebuild must retarget to the current output: {RETARGET}"
 print("23. rebuild retargets go-librespot to the current output device OK")
 

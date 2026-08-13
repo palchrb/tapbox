@@ -11,14 +11,14 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import player  # noqa: E402
 
 cmd = player.mpv_command(["/cache/show/e1.mp3", "https://x/e2.mp3"],
-                         40, "/run/tapbox-mpv.sock", "tapbox_bt")
+                         40, "/run/vibb-mpv.sock", "vibb_bt")
 
 # 1. the two flags that keep audiobooks audible over BT are present
 assert "--audio-samplerate=44100" in cmd, "44.1kHz resample flag missing"
@@ -26,9 +26,9 @@ assert "--audio-channels=stereo" in cmd, "stereo resample flag missing"
 print("1. the 44.1kHz/stereo resample flags are present OK")
 
 # 2. output routing + volume + ipc + the queue all make it through
-assert "--audio-device=alsa/tapbox_bt" in cmd, "output pcm not routed"
+assert "--audio-device=alsa/vibb_bt" in cmd, "output pcm not routed"
 assert "--volume=40" in cmd, "box volume not applied"
-assert "--input-ipc-server=/run/tapbox-mpv.sock" in cmd, "ipc socket missing"
+assert "--input-ipc-server=/run/vibb-mpv.sock" in cmd, "ipc socket missing"
 assert cmd[-2:] == ["/cache/show/e1.mp3", "https://x/e2.mp3"], "queue lost"
 print("2. output pcm, volume, ipc socket and the queue are all passed OK")
 
@@ -53,7 +53,7 @@ print("4. 0.5s audio buffer flag present OK")
 # (next at the end, double-prev) re-enter slot 0 and a --start group
 # would re-apply the stale bookmark mid-playthrough.
 paused_cmd = player.mpv_command(["/cache/show/e1.mp3"], 40,
-                                "/run/tapbox-mpv.sock", "tapbox_bt",
+                                "/run/vibb-mpv.sock", "vibb_bt",
                                 paused=True)
 assert "--pause" in paused_cmd, "bookmark resume must load silent"
 assert paused_cmd.index("--pause") < paused_cmd.index("/cache/show/e1.mp3"), \

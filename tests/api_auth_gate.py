@@ -4,7 +4,7 @@
 The design is DEFAULT DENY: SAFE lists what works without the box token,
 everything else needs it. These tests pin the properties that make that
 claim true — especially that a forgotten or newly added endpoint fails
-CLOSED, and that the playback controls (the "Hey Siri, pause TapBox"
+CLOSED, and that the playback controls (the "Hey Siri, pause Vibb"
 shortcut) keep working with no setup at all."""
 import json
 import os
@@ -17,15 +17,15 @@ from http.server import ThreadingHTTPServer
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "api-token")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import token  # noqa: E402
+from vibb import token  # noqa: E402
 
 TOKEN = token.ensure()
 FIRED = []
@@ -48,7 +48,7 @@ def call(path, method="POST", body=None, tok=None, ctype="application/json"):
     if ctype:
         req.add_header("Content-Type", ctype)
     if tok:
-        req.add_header("X-TapBox-Token", tok)
+        req.add_header("X-Vibb-Token", tok)
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, r.read().decode()

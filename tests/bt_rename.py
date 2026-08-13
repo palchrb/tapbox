@@ -13,15 +13,15 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_BT_BACKEND"] = "cli"   # force the no-bus path here
+os.environ["VIBB_BT_BACKEND"] = "cli"   # force the no-bus path here
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import bt, btbus  # noqa: E402
+from vibb import bt, btbus  # noqa: E402
 
 MAC = "2C:FD:B3:FA:DA:04"
 
@@ -74,7 +74,7 @@ print("5. daemon passes the sanitized name (blank clears) to bt_action OK")
 
 # --- optional: the real dbus Alias write, only where a bus + gi exist ----
 try:
-    os.environ["TAPBOX_BT_BACKEND"] = "dbus"
+    os.environ["VIBB_BT_BACKEND"] = "dbus"
     import importlib
     importlib.reload(btbus)
     btbus._BACKEND = None

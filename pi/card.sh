@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
-# Manage TapBox card mappings (installed as tapbox-card).
-#   sudo tapbox-card map <link-or-path>   next tapped card plays this
-#   sudo tapbox-card list                 show all mappings
-#   sudo tapbox-card forget <uid>         remove one mapping
-#   sudo tapbox-card cancel               abort a pending map
+# Manage Vibb card mappings (installed as vibb-card).
+#   sudo vibb-card map <link-or-path>   next tapped card plays this
+#   sudo vibb-card list                 show all mappings
+#   sudo vibb-card forget <uid>         remove one mapping
+#   sudo vibb-card cancel               abort a pending map
 #
 # Targets: Spotify links, NRK links (radio.nrk.no serie/podkast), RSS feed
 # URLs, direct stream URLs, or local file paths.
 
 set -euo pipefail
 
-CARDS=/etc/tapbox/cards.json
-PENDING=/etc/tapbox/pending-map
+CARDS=/etc/vibb/cards.json
+PENDING=/etc/vibb/pending-map
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run with sudo: sudo $0 $*" >&2
@@ -22,7 +22,7 @@ fi
 case "${1:-}" in
   map)
     [[ $# -ge 2 ]] || { echo "usage: sudo $0 map <link-or-path>" >&2; exit 1; }
-    mkdir -p /etc/tapbox
+    mkdir -p /etc/vibb
     printf '%s\n' "$2" > "$PENDING"
     echo "Tap a card on the reader now — it will be mapped to:"
     echo "  $2"

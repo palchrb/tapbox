@@ -23,11 +23,11 @@ import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_EMPTY_RECHECK"] = "0.05"  # fast transient-empty recheck
+os.environ["VIBB_EMPTY_RECHECK"] = "0.05"  # fast transient-empty recheck
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402

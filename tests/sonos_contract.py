@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The tapboxd <-> tapbox-sonos contract, as an EXECUTABLE fixture.
+"""The vibbd <-> vibb-sonos contract, as an EXECUTABLE fixture.
 
 Both test rigs import this file: the fake sidecar GENERATES its answers
 from these shapes and 400s any request that fails check_play(); the
@@ -13,7 +13,7 @@ Run standalone to self-check the canonical examples.
 
 KINDS = ("url", "nrk_program", "spotify_sharelink")
 
-# closed set: tapboxd maps anything NOT in this set to the conservative
+# closed set: vibbd maps anything NOT in this set to the conservative
 # branch (freeze position, no local fallback, no retry)
 TRANSPORTS = ("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "TRANSITIONING",
               "UNREACHABLE")
@@ -111,7 +111,7 @@ STATE_LOST = dict(STATE_PLAYING, transport="STOPPED", rel_s=0.0,
 STATE_IDLE = {"armed": False, "uid": None, "kind": None,
               "seq": 1, "stale_s": None, "retried_at": None}
 
-# v2 (tapbox owns the spotify LOGIC; the speaker holds the queue):
+# v2 (vibb owns the spotify LOGIC; the speaker holds the queue):
 # track_spotify_uri is the inbound authority (decoded from TrackURI);
 # track_no is 1-based raw Track (cross-check only — 0 for an armed
 # sharelink session is a contract violation); /queue_play {index} is

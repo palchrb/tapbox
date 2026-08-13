@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v2: tapbox owns the spotify queue — the Sonos merely holds it.
+"""v2: vibb owns the spotify queue — the Sonos merely holds it.
 Pins the two 2026-08-09 field bugs: (a) transfer restarted the playlist
 from the TOP (the sharelink /play never read the context bookmark);
 (b) the card was fed from the speaker's DIDL instead of our list."""
@@ -13,13 +13,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-for k in ("TAPBOX_RUN", "TAPBOX_STATE", "TAPBOX_CACHE"):
+for k in ("VIBB_RUN", "VIBB_STATE", "VIBB_CACHE"):
     os.environ[k] = TMP
-os.environ["TAPBOX_SETTINGS"] = os.path.join(TMP, "settings.json")
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
-os.environ["TAPBOX_BT_KICK"] = os.path.join(TMP, "kick")
-os.environ["TAPBOX_BT_QUIET"] = os.path.join(TMP, "quiet")
+os.environ["VIBB_SETTINGS"] = os.path.join(TMP, "settings.json")
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
+os.environ["VIBB_BT_KICK"] = os.path.join(TMP, "kick")
+os.environ["VIBB_BT_QUIET"] = os.path.join(TMP, "quiet")
 
 sys.path.insert(0, os.path.join(REPO, "tests"))
 import sonos_contract  # noqa: E402
@@ -68,10 +68,10 @@ class FakeSidecar(BaseHTTPRequestHandler):
 
 srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeSidecar)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
-os.environ["TAPBOX_SONOS_API"] = f"http://127.0.0.1:{srv.server_port}"
+os.environ["VIBB_SONOS_API"] = f"http://127.0.0.1:{srv.server_port}"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 import daemon  # noqa: E402
-from tapbox import renderer  # noqa: E402
+from vibb import renderer  # noqa: E402
 
 PL = "https://open.spotify.com/playlist/PPP"
 CTX = "spotify:playlist:PPP"
@@ -181,5 +181,5 @@ r = orch.sonos_start_target("spotify:user:kid:collection")
 assert r.get("error") == "unsupported-on-sonos", r
 print("6. Liked Songs/shows refuse with a named error OK")
 
-print("\nSONOS SPOTIFY QUEUE OK — tapbox owns the logic, the speaker "
+print("\nSONOS SPOTIFY QUEUE OK — vibb owns the logic, the speaker "
       "holds the queue, and the bookmark survives every path.")

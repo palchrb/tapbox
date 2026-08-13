@@ -13,7 +13,7 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")  # no SPI in tests
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")  # no SPI in tests
 
 import ui  # noqa: E402
 
@@ -33,7 +33,7 @@ def fake_get(path, timeout=10):
 def fake_post(path, body=None, timeout=15):
     POSTS.append((path, body))
     if path == "/wifi/hotspot" and body.get("enabled"):
-        return {"ok": True, "ssid": "TapBox-zero2", "password": "tapbox123"}
+        return {"ok": True, "ssid": "Vibb-zero2", "password": "vibb123"}
     return {"ok": True}
 
 
@@ -70,7 +70,7 @@ print("1. settings menu: Setup hotspot row after Wi-Fi OK")
 app.sel = labels.index("Setup hotspot")
 app.select_setting()
 assert POSTS == [("/wifi/hotspot", {"enabled": True})], POSTS
-assert any("TapBox-zero2" in m and "tapbox123" in m for m in MSGS), MSGS
+assert any("Vibb-zero2" in m and "vibb123" in m for m in MSGS), MSGS
 assert app.last_system == 0.0, "state row must refresh after the toggle"
 print("2. select -> starts the hotspot, shows SSID + password OK")
 

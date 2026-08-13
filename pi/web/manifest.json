@@ -1,7 +1,7 @@
 {
-  "name": "TapBox",
-  "short_name": "TapBox",
-  "description": "Parent controls for the TapBox kids' music box",
+  "name": "Vibb",
+  "short_name": "Vibb",
+  "description": "Parent controls for the Vibb kids' music box",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0c0c14",

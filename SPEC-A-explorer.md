@@ -1,4 +1,4 @@
-# tapbox Concept A — Screen Navigator ("Explorer")
+# vibb Concept A — Screen Navigator ("Explorer")
 
 **Version:** 0.1 (draft)
 **Last updated:** 2026-07-05
@@ -26,7 +26,7 @@ player uses the same screen.
 ## 2. Library model — IMPLEMENTED (2026-07-06)
 
 **Architecture decision: local-first.** The library lives in
-`/etc/tapbox/library.json` on the box — menus must render (and cached
+`/etc/vibb/library.json` on the box — menus must render (and cached
 content must play) with zero internet (the flight/cabin scenario). A future
 parent cloud service is a *sync mirror* of this file for remote admin (v2
 cloud-relay), never the source of truth.
@@ -61,13 +61,13 @@ series/folders oldest first, RSS as the feed lists), explicit values
 override when a service guesses wrong (e.g. an RSS audiobook listed
 newest-first).
 
-**tapboxd API (implemented + tested):** `GET /library`, `PUT /library`
+**vibbd API (implemented + tested):** `GET /library`, `PUT /library`
 (validated, atomic), `GET /expand?id=<entry>|target=<url>` → titled episode
 list with per-episode `cached` flags (offline-aware menus; Spotify entries
 return `kind: "spotify"` = leaf), and `POST /play {"id"|"target",
 "episode", "fresh"}` — episode picks rotate the queue there (bookmarked
 episode continues at its position, others start from the top; the bookmark
-follows). Pre-PWA management CLI: `tapbox-lib add/list/rm/order`.
+follows). Pre-PWA management CLI: `vibb-lib add/list/rm/order`.
 
 Screen navigation:
 
@@ -100,7 +100,7 @@ the easiest button because it is the most urgent action; "back" is the
 rarest mid-playback action and lives on hold-A. Volume sits behind a
 mode (X shows a small speaker hint on screen) so a kid can't nudge it
 accidentally; the card auto-closes after 3s. Hold A+B = settings
-(parental lock). Everything routes through tapboxd. Also built: ▶ marker
+(parental lock). Everything routes through vibbd. Also built: ▶ marker
 on the playing episode in the episode list, and Bluetooth pages in
 settings (pair nearest / scan-and-pick / switch between known speakers,
 over the /bt endpoints).
@@ -112,7 +112,7 @@ over the /bt endpoints).
 - **Fallback/local:** the Pirate Audio mini speaker (I2S, ALSA `hifiberry-dac`
   overlay device) — always works, no pairing, good enough for a nightstand.
 - Switching (menu item + PWA toggle): mpv takes `--audio-device` per spawn
-  (trivial); go-librespot's `audio_device` is startup config, so tapboxd
+  (trivial); go-librespot's `audio_device` is startup config, so vibbd
   rewrites the config and restarts go-librespot on switch (a few seconds,
   acceptable). New daemon endpoint: `POST /output {"device": "bt"|"local"}`.
 - Volume works identically on both outputs (mpv softvol / Spotify volume via
@@ -134,21 +134,21 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
 
 ## 6. New software (the only real work)
 
-1. **`tapbox-ui` daemon:** ST7789 driver (Pimoroni `st7789` lib) + menu
+1. **`vibb-ui` daemon:** ST7789 driver (Pimoroni `st7789` lib) + menu
    renderer + button handling (gpio-keys overlay or gpiozero) + now-playing
    screen (title/position from `GET /status`, battery % from PiSugar).
    Backlight off after N seconds idle (power).
-2. **tapboxd additions: ALL DONE (2026-07-06).** `/library` + `/expand` +
+2. **vibbd additions: ALL DONE (2026-07-06).** `/library` + `/expand` +
    episode play (§2), `/volume`, and `GET/POST /output` — mpv retargets
    live over IPC, go-librespot via config rewrite + service restart;
-   "local" maps to ALSA pcm `tapbox_local` (define in asound.conf when
-   the HAT arrives; `TAPBOX_LOCAL_PCM` overrides). `/status` carries
+   "local" maps to ALSA pcm `vibb_local` (define in asound.conf when
+   the HAT arrives; `VIBB_LOCAL_PCM` overrides). `/status` carries
    title/artwork/position/duration/episode_id/output. Also implemented:
    offline-aware queue (player.py skips dead stream URLs when offline —
-   cached episodes play cleanly; `TAPBOX_OFFLINE=1` forces it).
+   cached episodes play cleanly; `VIBB_OFFLINE=1` forces it).
    The screen UI is now a pure consumer.
-3. **PWA — phase 1 BUILT (2026-07-06):** served by tapboxd itself at
-   `http://tapbox.local:3679` (LAN binding, static files from `pi/web/`,
+3. **PWA — phase 1 BUILT (2026-07-06):** served by vibbd itself at
+   `http://vibb.local:3679` (LAN binding, static files from `pi/web/`,
    buildless vanilla JS — no node toolchain; `/artwork` proxy restricted
    to cache dirs + library folder targets). Pages: Spiller (status poll,
    controls, volume slider with cap feedback, output toggle), Bibliotek
@@ -157,7 +157,7 @@ No conflicts; I2C is a shared bus (PiSugar 0x57/0x68, PN532 0x24).
    confirm). Security note: auth-less on the home LAN by design — PIN
    gate is a product-phase addition; never expose :3679 to the internet.
    Phase 2 BUILT (2026-07-06): /bt endpoints (GET /bt, POST /bt/pair via
-   play.sh's validated flow — installed as tapbox-play with new use/forget
+   play.sh's validated flow — installed as vibb-play with new use/forget
    commands — /bt/connect, /bt/forget; mac-validated, serialized with 409)
    + the PWA speaker card. Remaining: wifi join via nmcli (3), AP-mode
    captive-portal onboarding (4), PIN/TLS/installability (later); the
@@ -174,8 +174,8 @@ important idea here). Contents:
 
 | Setting | Values | Consumed by |
 |---|---|---|
-| Screen timeout | 15 / 30 / 60 s / always; **always-on while charging**; any button wakes (the waking press does nothing) | tapbox-ui reads /settings |
-| Volume cap (child safety) | 50-100% | tapboxd clamps every /volume path (buttons, AVRCP, phone) |
+| Screen timeout | 15 / 30 / 60 s / always; **always-on while charging**; any button wakes (the waking press does nothing) | vibb-ui reads /settings |
+| Volume cap (child safety) | 50-100% | vibbd clamps every /volume path (buttons, AVRCP, phone) |
 | Idle auto-shutdown | 15 / 30 / 60 min / off | idle.py re-reads /settings each cycle (no restart) |
 | Bluetooth | pair new (auto-pair strongest — validated flow), known-devices list, connect/forget | new /bt endpoints |
 | WiFi | on/off + show SSID/IP (the IP doubles as the PWA URL) | /system endpoints |
@@ -183,17 +183,17 @@ important idea here). Contents:
 | Battery | % + charging + **estimated playtime left** (the calibrated curve is literally remaining-playtime — show "~2.5 h igjen") | GET /system |
 | Power | shutdown / restart | POST /system/shutdown |
 | Later | backlight dimming (PWM on BCM13), language NO/EN, About page | |
-| Later | **box name** (onboarding + settings): one name sets avahi host-name (`emmas-boks.local`), Spotify Connect device_name and the hotspot SSID. Needed for multi-box homes — bare `tapbox.local` collides and avahi's auto-rename (`tapbox-2.local`) is boot-order-dependent | |
+| Later | **box name** (onboarding + settings): one name sets avahi host-name (`emmas-boks.local`), Spotify Connect device_name and the hotspot SSID. Needed for multi-box homes — bare `vibb.local` collides and avahi's auto-rename (`vibb-2.local`) is boot-order-dependent | |
 
 **Status:** 1-3 implemented and tested (2026-07-06): `GET /system`,
 `POST /system/wifi`, `POST /system/shutdown`, `GET/PUT /settings` (volume
 cap enforced in every /volume path; idle.py re-reads live). The screen
-daemon **tapbox-ui is built** (`pi/ui.py`, installed as a disabled service
-— `systemctl enable --now tapbox-ui` when the HAT is mounted): full menu
+daemon **vibb-ui is built** (`pi/ui.py`, installed as a disabled service
+— `systemctl enable --now vibb-ui` when the HAT is mounted): full menu
 flow, now-playing with artwork/progress/volume overlay, battery pill on
 every view, screen timeout with always-on-while-charging and swallowed
 waking press, settings behind hold-A+B. Dev mode without hardware:
-`TAPBOX_UI_PNG=/tmp/frame.png TAPBOX_UI_INPUT=/tmp/fifo tapbox-ui`.
+`VIBB_UI_PNG=/tmp/frame.png VIBB_UI_INPUT=/tmp/fifo vibb-ui`.
 Remaining: **4. `/bt` endpoints** + the BT settings pages (pair/known/forget).
 
 ## 8. Open questions
@@ -208,7 +208,7 @@ Remaining: **4. `/bt` endpoints** + the BT settings pages (pair/known/forget).
   another ~1-2mA of panel-controller power. Both need the physical screen
   to validate, so they wait for the HAT.
 - **Earlier boot visuals (product polish):** the app splash appears when
-  systemd starts tapbox-ui (~10-15s after power-on); the first ~8-12s are
+  systemd starts vibb-ui (~10-15s after power-on); the first ~8-12s are
   dark by physics (firmware + kernel before SPI exists). A kernel-level
   panel driver (`panel-mipi-dbi` overlay with an ST7789 firmware blob)
   could paint a logo at ~5-8s — but then the KERNEL owns the display and

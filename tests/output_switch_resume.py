@@ -14,9 +14,9 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
@@ -49,7 +49,7 @@ def set_out(device, **kw):
     # current output = the opposite, so the switch is a real transition
     cur = "local" if device == "bt" else "bt"
     with open(daemon.OUT_FILE, "w") as f:
-        json.dump({"output": cur, "pcm": f"tapbox_{cur}"}, f)
+        json.dump({"output": cur, "pcm": f"vibb_{cur}"}, f)
     return orch.set_output(device, **kw)
 
 

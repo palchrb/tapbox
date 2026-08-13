@@ -16,19 +16,19 @@ import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = os.path.join(TMP, "state")
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", os.path.join(TMP, "cache"))
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ["TAPBOX_BIND"] = "127.0.0.1"
+os.environ["VIBB_STATE"] = os.path.join(TMP, "state")
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ.setdefault("VIBB_CACHE", os.path.join(TMP, "cache"))
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_BIND"] = "127.0.0.1"
 # pick a free port for the API; portal on an ephemeral one (0 is fine —
 # it must only not collide with a privileged-bind failure loop)
 _s = socket.socket()
 _s.bind(("127.0.0.1", 0))
 PORT = _s.getsockname()[1]
 _s.close()
-os.environ["TAPBOX_PORT"] = str(PORT)
-os.environ["TAPBOX_PORTAL_PORT"] = "0"
+os.environ["VIBB_PORT"] = str(PORT)
+os.environ["VIBB_PORTAL_PORT"] = "0"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402

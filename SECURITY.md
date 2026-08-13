@@ -1,4 +1,4 @@
-# TapBox security notes & TODOs
+# Vibb security notes & TODOs
 
 Living document for the security posture of the existing Pi Zero 2 W box
 (the `pi/` tree). Not a disclosure policy — a working list of what the
@@ -29,8 +29,8 @@ open control API without breaking the physical-first UX.
 
 | Listener | Bind | Auth | Risk |
 |---|---|---|---|
-| `tapboxd` API + PWA | `0.0.0.0:3679` | **token on privileged; open on playback/reads** | the main surface — gated since 2026-07-25 |
-| `tapboxd` captive portal | `0.0.0.0:80` (`daemon.py:2903`) | none | redirect only; low |
+| `vibbd` API + PWA | `0.0.0.0:3679` | **token on privileged; open on playback/reads** | the main surface — gated since 2026-07-25 |
+| `vibbd` captive portal | `0.0.0.0:80` (`daemon.py:2903`) | none | redirect only; low |
 | `go-librespot` API | `localhost:3678` (`install.sh:197`) | none | not LAN-exposed ✓ |
 | `pisugar-server` | `127.0.0.1` | n/a | not LAN-exposed ✓ |
 | `sshd` | `0.0.0.0:22` | password (distro default) | full compromise — **owner-managed hardening** |
@@ -39,7 +39,7 @@ open control API without breaking the physical-first UX.
 
 Notes:
 - **No CORS headers** are sent and there is no `do_OPTIONS`. That is what
-  makes the `X-TapBox-Token` header CSRF-proof (a cross-origin page can't
+  makes the `X-Vibb-Token` header CSRF-proof (a cross-origin page can't
   attach it without a preflight the box never grants) — and it is why
   adding either would silently undo the protection.
 - Device control, config and destructive endpoints (`/system/shutdown`,
@@ -51,7 +51,7 @@ Notes:
 ## Endpoint classification (the basis for the split below)
 
 **Safe / annoyance-tier** — worst case is a LAN prankster pausing the
-kid's music. Keep these open so the zero-setup "Hey Siri, pause TapBox"
+kid's music. Keep these open so the zero-setup "Hey Siri, pause Vibb"
 shortcut keeps working:
 - `GET /status`, `/system`, `/settings`, `/library`, `/artwork`
 - `POST /playpause`, `/next`, `/prev`, `/pause`, `/volume`, `/shuffle`,
@@ -73,10 +73,10 @@ like the rest; btwatchd authenticates through `boxapi`.)
 
 - **2026-07-25 — the API gate is LIVE (Model A+B, 5 commits).** Privileged
   endpoints require the box token; playback and reads stay open so the
-  phone shortcut ("Hey Siri, pause TapBox") needs no setup. Provisioned
+  phone shortcut ("Hey Siri, pause Vibb") needs no setup. Provisioned
   by scanning a QR on the box screen (Settings → Link phone); the token
   rides in the URL fragment so it never reaches a server log. Recovery:
-  the same screen re-displays and rotates it, and `sudo tapbox-token`
+  the same screen re-displays and rotates it, and `sudo vibb-token`
   (show / `rotate` / `path`) is the SSH fallback. install.sh deliberately
   does NOT print the secret — only a pointer — so it can't end up in an
   install log or a pasted scrollback. `/play` is split
@@ -106,8 +106,8 @@ like the rest; btwatchd authenticates through `boxapi`.)
 2. **SSH hardening** — key-only auth, ideally LAN-restricted. The only
    full-compromise path. *Owner-managed (handled outside this repo).*
 3. **Per-box hotspot PSK.** `HOTSPOT_PSK` defaults to the shipped
-   constant `"tapbox123"` (`pi/tapbox/netmgmt.py:108`). Generate a
-   per-box secret at install (`TAPBOX_HOTSPOT_PSK`) and show it on the
+   constant `"vibb123"` (`pi/vibb/netmgmt.py:108`). Generate a
+   per-box secret at install (`VIBB_HOTSPOT_PSK`) and show it on the
    screen when the hotspot is up.
 4. ~~**Gate `/bt/lost` and other internal-only endpoints**~~ — done via
    the token gate (btwatchd authenticates through `boxapi`).
@@ -138,10 +138,10 @@ Low effort, and it's the foundation for A+B/A+C.
 
 ### Model B — Shared per-box token, provisioned from the screen (recommended)
 
-- Box generates a random token at first boot, stored `/etc/tapbox/
+- Box generates a random token at first boot, stored `/etc/vibb/
   api-token` (mode 0600, root/daemon only).
 - Privileged endpoints require it in a **custom header**
-  (`X-TapBox-Token: …`). Custom header, not a cookie: a cookie would need
+  (`X-Vibb-Token: …`). Custom header, not a cookie: a cookie would need
   `SameSite` to resist CSRF, whereas a custom header can't be set
   cross-origin without a CORS preflight the box never grants — so this
   defeats CSRF for free.
@@ -219,12 +219,12 @@ Owner decisions:
 - **QR on the box screen is the primary provisioning route.** Every box
   in the fleet now has a screen, so the "headless box has no way in"
   problem is out of scope by construction.
-- **Fallback is SSH:** `sudo tapbox-token` prints the token and a ready
+- **Fallback is SSH:** `sudo vibb-token` prints the token and a ready
   pairing link (`rotate` issues a new one, `path` prints the file). It is
   a separate command on purpose: the secret appears only when asked for,
   never in an install log. install.sh just points at it.
 - QR encodes the box's **stable `<name>.local`**
-  (`http://tapbox.local:3679/#t=<TOKEN>`), not its IP. The browser keeps
+  (`http://vibb.local:3679/#t=<TOKEN>`), not its IP. The browser keeps
   the token per ORIGIN, so an IP-based link dies the moment DHCP moves
   the box or it comes up as its own hotspot — you'd re-scan every time.
   The name resolves in BOTH modes: mDNS on the LAN, and in hotspot the
@@ -241,7 +241,7 @@ Blocking items from the QA review — all **done**:
 1. ~~Require `Content-Type: application/json`~~ — done (see Done).
 2. ~~`install.sh` prints the token + link; document the SSH fallback~~ —
    done, but inverted on purpose: install.sh prints only a pointer and
-   `tapbox-token` prints the secret on demand.
+   `vibb-token` prints the secret on demand.
 3. ~~**Fail-closed token rules:** unreadable/missing token file ⇒ deny;
    **empty or short token ⇒ deny** (`hmac.compare_digest("", "")` is
    `True`, so a truncated file would authorize everyone); `ensure()`
@@ -292,7 +292,7 @@ approval) only if the box starts living on untrusted networks; add
 
 ## Extras (owner launch scripts) — screen-only by design
 
-`/etc/tapbox/extras/` holds owner-dropped scripts (docs/extras.md) that
+`/etc/vibb/extras/` holds owner-dropped scripts (docs/extras.md) that
 the screen's X+Y chord can launch as root — the maximal handoff. The
 containment is structural, and tests pin it:
 

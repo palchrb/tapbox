@@ -25,17 +25,17 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ["TAPBOX_SETTINGS"] = os.path.join(STATE, "settings.json")
-os.environ.setdefault("TAPBOX_CACHE", tempfile.mkdtemp())
-os.environ["TAPBOX_WIFI_WATCHDOG_DELAY"] = "0"
-os.environ["TAPBOX_WIFI_PROBE_INTERVAL"] = "1"
-os.environ["TAPBOX_WIFI_PROBE_WINDOW"] = "1"
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ["VIBB_SETTINGS"] = os.path.join(STATE, "settings.json")
+os.environ.setdefault("VIBB_CACHE", tempfile.mkdtemp())
+os.environ["VIBB_WIFI_WATCHDOG_DELAY"] = "0"
+os.environ["VIBB_WIFI_PROBE_INTERVAL"] = "1"
+os.environ["VIBB_WIFI_PROBE_WINDOW"] = "1"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import netmgmt  # noqa: E402
+from vibb import netmgmt  # noqa: E402
 
 
 def wait_for(what, pred, timeout=5):
@@ -48,14 +48,14 @@ def wait_for(what, pred, timeout=5):
 
 
 def set_setting(key, value):
-    with open(os.environ["TAPBOX_SETTINGS"], "w") as f:
+    with open(os.environ["VIBB_SETTINGS"], "w") as f:
         json.dump({key: value}, f)
 
 
-# 1. tapboxd wires its playback check into netmgmt at import
+# 1. vibbd wires its playback check into netmgmt at import
 assert netmgmt.probe_hold[0] is daemon._bt_playback_active, \
     "daemon must install _bt_playback_active as the probe hold"
-print("1. tapboxd installs the probe-hold hook OK")
+print("1. vibbd installs the probe-hold hook OK")
 
 
 # --- _bt_playback_active's verdicts (direct calls, no threads) --------------

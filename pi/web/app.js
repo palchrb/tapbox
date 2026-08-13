@@ -1,4 +1,4 @@
-/* TapBox parent PWA — a thin client of the tapboxd API (same origin). */
+/* Vibb parent PWA — a thin client of the vibbd API (same origin). */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -8,7 +8,7 @@ const $ = (sel) => document.querySelector(sel);
    still controls the music. Provisioned by scanning the QR on the box
    screen — see SECURITY.md. Stored per ORIGIN, so a box reached by a new
    IP (or via the setup hotspot) needs one more scan. */
-const TOKEN_KEY = "tapbox.token";
+const TOKEN_KEY = "vibb.token";
 
 /* localStorage can be absent or throw (Safari private browsing, storage
    disabled). Degrade to a session-only token rather than breaking the
@@ -64,7 +64,7 @@ async function api(path, opts = {}) {
   // Sent on every request: SAFE endpoints ignore it, and one branch
   // beats keeping a copy of the box's endpoint classification here
   // (which would drift the first time the box adds a route).
-  if (TOKEN) headers["X-TapBox-Token"] = TOKEN;
+  if (TOKEN) headers["X-Vibb-Token"] = TOKEN;
   const r = await fetch(path, {
     ...opts,
     headers: { ...headers, ...(opts.headers || {}) },
@@ -1231,7 +1231,7 @@ function uploadOne(collection, file, onProgress) {
     // octet-stream (not multipart) is what keeps the CSRF guard intact —
     // a form can send multipart, but not this.
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    if (TOKEN) xhr.setRequestHeader("X-TapBox-Token", TOKEN);
+    if (TOKEN) xhr.setRequestHeader("X-Vibb-Token", TOKEN);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };

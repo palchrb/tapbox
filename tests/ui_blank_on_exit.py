@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Gate that tapbox-ui leaves the panel DARK when it stops.
+"""Gate that vibb-ui leaves the panel DARK when it stops.
 
 The ST7789 holds its last frame indefinitely and the backlight is ours
-to drive (BCM13 via PWM), so simply exiting left a frozen TapBox menu
+to drive (BCM13 via PWM), so simply exiting left a frozen Vibb menu
 lit on the box — field 2026-08-04: it sat there through a whole
 RetroPie session, wasting power and looking broken. Every stop reason
 (extras handoff, service restart, shutdown) arrives as SIGTERM, so the
@@ -12,8 +12,8 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import ui  # noqa: E402

@@ -5,7 +5,7 @@ landed (btbus agent + `_dbus_pair` + `pairing_window`, fake_bluezd
 growth, tests/bt_pair_dbus.py + tests/bt_visible.py, `bt.py visible`,
 `POST /bt/visible`, PWA "Pair from car", docs). The dbus-gated test
 sections SKIP on dev machines and must be run ON THE RIG; task 8 (flip
-`TAPBOX_BT_PAIR` default) stays gated on §6. Window clamp ended up
+`VIBB_BT_PAIR` default) stays gated on §6. Window clamp ended up
 10–300s (floor lowered from 30 for testability). Drafted 2026-07-16 by
 three parallel review passes (architect / implementer / QA), then
 reconciled. Parent plan: [PLAN-bt-dbus.md](./PLAN-bt-dbus.md) (phases
@@ -58,15 +58,15 @@ outgrows ~250 lines.)
 | bt.py CLI `use`/`connect`/`ensure` | yes, non-default | inside `btbus.pair()` only: register → async Pair → loop → unregister |
 | bt.py CLI `visible` | yes, **default** (`RequestDefaultAgent`) | the window; auto-unregistered by bluez if the process dies (registration dies with the bus connection) |
 | btwatchd | **never** | amendment to parent plan §5, see §9 |
-| tapboxd | never | forks bt.py for radio work, as always |
+| vibbd | never | forks bt.py for radio work, as always |
 
-**D3 — Kill switch: `TAPBOX_BT_PAIR=cli|dbus`, default `cli`,** read
+**D3 — Kill switch: `VIBB_BT_PAIR=cli|dbus`, default `cli`,** read
 per-call inside `pair()` (not cached — testable, and a `systemctl edit`
 needs only a restart). dbus pair runs only when `backend()=="dbus"`
-AND `TAPBOX_BT_PAIR=dbus`; any infrastructure exception (bus gone, gi
+AND `VIBB_BT_PAIR=dbus`; any infrastructure exception (bus gone, gi
 missing, registration failed) degrades per-call to the cli fork with
 the standard one-line log — identical shape to `connect_device()`.
-Separate from `TAPBOX_BT_BACKEND` because "reads/actions dbus, pair
+Separate from `VIBB_BT_BACKEND` because "reads/actions dbus, pair
 cli" must stay expressible. Flipping the shipped default is a one-line
 change gated on the rig matrix (§8); the env var remains the permanent
 per-box escape hatch. `visible` is NOT gated by this switch: it has no
@@ -131,8 +131,8 @@ gets no service authorization without an agent.
 
 ## 3. File-by-file changes
 
-### pi/tapbox/btbus.py (the bulk)
-- Constants `_AGENT_PATH = "/org/tapbox/agent"`, capability
+### pi/vibb/btbus.py (the bulk)
+- Constants `_AGENT_PATH = "/org/vibb/agent"`, capability
   `"NoInputNoOutput"`.
 - `_map_pair_error(name, msg)` — pure classifier next to
   `_map_connect_error` (unit-testable, no bus):
@@ -142,7 +142,7 @@ gets no service authorization without an agent.
   `.Failed`/`NoReply`/other→PAIR_ERROR (keep `f"{name}: {msg}"` for
   the log).
 - `_agent_bus()` — private connection with per-connection mainloop;
-  honors `TAPBOX_DBUS_ADDRESS`/`DBUS_SYSTEM_BUS_ADDRESS` like `_bus()`.
+  honors `VIBB_DBUS_ADDRESS`/`DBUS_SYSTEM_BUS_ADDRESS` like `_bus()`.
 - `_make_agent(bus, on_event=None)` — factory (class defined inside to
   keep dbus.service import lazy). Full Agent1 repertoire: `Release`/
   `Cancel` no-op, `RequestPinCode`→"0000", `RequestPasskey`→UInt32(0),
@@ -169,10 +169,10 @@ gets no service authorization without an agent.
   `remove_from_connection()`, `bus.close()`. Raises RuntimeError with
   a human message when dbus/gi are missing. Returns `[{mac, name}]`.
 - Test enabler: `populate_cache` seconds in `bt.connect()` become
-  `TAPBOX_BT_CACHE_SECS`-overridable (defaults unchanged) — the
+  `VIBB_BT_CACHE_SECS`-overridable (defaults unchanged) — the
   stale-key test otherwise sleeps ~25s.
 
-### pi/tapbox/bt.py
+### pi/vibb/bt.py
 - `visible(secs=120, adopt=False)` flow verb: `bt_up()` → log "Box is
   visible — start pairing from the car now" → `btbus.pairing_window`
   → log each `==> Paired: Name (MAC)` → report-only by default;
@@ -201,8 +201,8 @@ gets no service authorization without an agent.
 ### pi/install.sh + README.md
 - Deps verified: python3-dbus + python3-gi already installed; bt.py/
   daemon/web already restart-tracked. Only docs: kill-switch comment in
-  the tapbox-daemon unit heredoc (`Environment=TAPBOX_BT_PAIR=dbus`),
-  README paragraph for `TAPBOX_BT_PAIR` + "Pair from car".
+  the vibb-daemon unit heredoc (`Environment=VIBB_BT_PAIR=dbus`),
+  README paragraph for `VIBB_BT_PAIR` + "Pair from car".
 
 ## 4. Test plan
 
@@ -268,7 +268,7 @@ gets no service authorization without an agent.
     event log still ends with Unregister (finally-path).
 
 ### tests/bt_visible.py
-1. (no dbus needed) POST /bt/visible plumbing with `TAPBOX_PLAY` fake
+1. (no dbus needed) POST /bt/visible plumbing with `VIBB_PLAY` fake
    CLI: 200 + argv `visible <secs>`; 409 while BT_LOCK held; the
    handler quiesces/resumes like /bt/pair.
 2. Happy window `visible 3`: exit code, Discoverable true during +
@@ -319,12 +319,12 @@ kill-switch drift (10); no-bus hang (11); partial adoption (visible
 | 5 | daemon `/bt/visible` | low | endpoint test (visible 1) |
 | 6 | PWA button + busyMs | low | node --check + stub-server manual check |
 | 7 | README + unit comment (docs) | nil | proofread |
-| 8 | *(post-rig, separate)* flip `TAPBOX_BT_PAIR` default to dbus | gated | rig matrix §6 |
+| 8 | *(post-rig, separate)* flip `VIBB_BT_PAIR` default to dbus | gated | rig matrix §6 |
 
 ## 6. Rig checklist (manual, hardware)
 
 **Outgoing dbus pair (gate for flipping the default):**
-1. Factory-reset JBL GO, `TAPBOX_BT_PAIR=dbus bt.py connect` → paired +
+1. Factory-reset JBL GO, `VIBB_BT_PAIR=dbus bt.py connect` → paired +
    transport-ready <25s; journal shows zero bluetoothctl pair forks.
 2. **Bond survives speaker power cycle** — the non-bonding `pairable`
    gotcha is invisible to the fake; this is the "works today, dead
@@ -337,12 +337,12 @@ kill-switch drift (10); no-bus hang (11); partial adoption (visible
    heal <40s, next pair succeeds, `busctl` shows no leftover agent.
 6. `gdbus monitor --system --dest org.bluez` during one pair → every
    real error name seen is in the classification table.
-7. One full day on `TAPBOX_BT_PAIR=cli` (rollback stays real).
+7. One full day on `VIBB_BT_PAIR=cli` (rollback stays real).
 
 **Incoming (the car):**
 1. Box playing to a speaker; PWA "Pair from car" → window opens,
    playback quiesced, btwatchd journal quiet (flock deference).
-2. Head unit: scan → "tapbox" appears → pair from the car → completes
+2. Head unit: scan → "vibb" appears → pair from the car → completes
    with no interaction on the box. Note which SSP dance the unit used;
    if the box does NOT appear in the car's list → run the Class of
    Device experiment (main.conf `Class=`, deferred item).
@@ -400,7 +400,7 @@ switch flipped on one box before install.sh changes the default.
    rfkill before any bus traffic).
 9. Retry paths re-export the agent — safe only because every call
    builds a fresh private connection; never cache the agent connection.
-10. `bt_cli()` runs under tapboxd's /usr/bin/python3 (dbus present);
+10. `bt_cli()` runs under vibbd's /usr/bin/python3 (dbus present);
     venv callers degrade: pair → cli fork, visible → exit 2 + message.
 
 ## 9. Amendments to PLAN-bt-dbus.md §5 (flagged, applied by this plan)
@@ -416,4 +416,4 @@ switch flipped on one box before install.sh changes the default.
 3. **Note:** outgoing dbus pair timeout is 60s while the cli path uses
    45s — intentional, keep 60 per §2's table.
 4. Confirmed unchanged: NoInputNoOutput, callback repertoire,
-   `/org/tapbox/agent`, AlreadyExists re-register tolerance.
+   `/org/vibb/agent`, AlreadyExists re-register tolerance.

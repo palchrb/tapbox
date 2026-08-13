@@ -10,12 +10,12 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import content  # noqa: E402
+from vibb import content  # noqa: E402
 
-CACHE = os.environ["TAPBOX_CACHE"]
+CACHE = os.environ["VIBB_CACHE"]
 TARGET = "https://feeds.acast.com/public/shows/deadbeef"
 KEY = content.feed_key(TARGET)
 A, B = "http://cdn/a.mp3", "http://cdn/b.mp3"

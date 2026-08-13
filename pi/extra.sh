@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# tapbox-extra — hand the box to an owner script; guarantee the return.
+# vibb-extra — hand the box to an owner script; guarantee the return.
 #
 # Launched by the screen UI (hold X+Y -> Extras -> confirm) as a
 # TRANSIENT systemd unit:
 #
-#   systemd-run --unit=tapbox-extra --collect --property=Restart=no \
-#     --property='ExecStopPost=/usr/local/bin/tapbox-extra --restore' \
-#     /usr/local/bin/tapbox-extra --run <script>
+#   systemd-run --unit=vibb-extra --collect --property=Restart=no \
+#     --property='ExecStopPost=/usr/local/bin/vibb-extra --restore' \
+#     /usr/local/bin/vibb-extra --run <script>
 #
 # ExecStopPost is the return guarantee: systemd runs it however the
 # main process dies — clean exit, crash, OOM, even SIGKILL of this
@@ -14,45 +14,45 @@
 #
 # Contract with the owner script (docs/extras.md): it owns the display,
 # the buttons and the audio device until it EXITS. It may stop MORE
-# tapbox services itself (never disable/mask them) — the restore set
+# vibb services itself (never disable/mask them) — the restore set
 # below starts everything back deterministically, including units the
-# wrapper never stopped, so a script that stopped tapbox-daemon for RAM
+# wrapper never stopped, so a script that stopped vibb-daemon for RAM
 # still returns to a whole box.
 set -u
 
-SYSTEMCTL="${TAPBOX_SYSTEMCTL:-systemctl}"
-RFKILL="${TAPBOX_RFKILL:-rfkill}"
-IW="${TAPBOX_IW:-iw}"
-API="${TAPBOX_DAEMON:-http://127.0.0.1:3679}"
+SYSTEMCTL="${VIBB_SYSTEMCTL:-systemctl}"
+RFKILL="${VIBB_RFKILL:-rfkill}"
+IW="${VIBB_IW:-iw}"
+API="${VIBB_DAEMON:-http://127.0.0.1:3679}"
 
 # Stopped on handoff: the display/button owner, the auto-power-off (a
 # game session has neither playback nor box-button activity and must
 # not be shut down under the player), and the media-key grabber (a USB
 # gamepad must not be half-eaten). go-librespot holds the ALSA device.
-# tapbox-daemon deliberately STAYS UP: it holds no hardware, and its
+# vibb-daemon deliberately STAYS UP: it holds no hardware, and its
 # API is the remote escape hatch (battery, POST /system/shutdown from
 # a linked phone) while the extra runs. Low-battery poweroff (PiSugar)
 # is untouched.
-HANDOFF="tapbox-idle tapbox-buttons tapbox-ui"
+HANDOFF="vibb-idle vibb-buttons vibb-ui"
 # The restore set is the whole audio chain, not just what --run stopped:
 # a script may stop bluetooth/bluealsa to use the radio itself, and the
 # box must still come back whole. Anything OUTSIDE this set that a
 # script stops is the script's own business.
-RESTORE="bluetooth bluealsa go-librespot tapbox-daemon tapbox-mpris
-         tapbox-bt-reconnect tapbox-buttons tapbox-idle tapbox-ui"
+RESTORE="bluetooth bluealsa go-librespot vibb-daemon vibb-mpris
+         vibb-bt-reconnect vibb-buttons vibb-idle vibb-ui"
 
-CPUS="${TAPBOX_CPUFREQ:-/sys/devices/system/cpu}"
-GOV_STATE="${TAPBOX_RUN:-/run}/tapbox-extra-governor"
-# One human line for the box screen: tapbox-ui shows-and-deletes this on
+CPUS="${VIBB_CPUFREQ:-/sys/devices/system/cpu}"
+GOV_STATE="${VIBB_RUN:-/run}/vibb-extra-governor"
+# One human line for the box screen: vibb-ui shows-and-deletes this on
 # its next start (docs/extras.md). Scripts write their own reason;
 # --restore fills in a generic one when the unit failed silently.
-MSG_FILE="${TAPBOX_RUN:-/run}/tapbox-extra.msg"
+MSG_FILE="${VIBB_RUN:-/run}/vibb-extra.msg"
 
 case "${1:-}" in
   --run)
-    script="${2:?usage: tapbox-extra --run <script>}"
+    script="${2:?usage: vibb-extra --run <script>}"
     rm -f "$MSG_FILE" 2>/dev/null || true  # no stale note from last time
-    # Unpark the CPU: boot runs 'tapbox-power save', which pins the
+    # Unpark the CPU: boot runs 'vibb-power save', which pins the
     # governor to powersave (= 600 MHz flat on the Zero 2 W) — great
     # for podcasts, hopeless for an emulator. Snapshot whatever mode
     # the box was in, lift to ondemand for the extra; --restore puts
@@ -77,13 +77,13 @@ case "${1:-}" in
     # hands ExecStopPost the unit's outcome — if the script died
     # without leaving its own message, write a generic one.
     if [ "${SERVICE_RESULT:-success}" != success ] && [ ! -s "$MSG_FILE" ]; then
-      echo "Extra failed (${EXIT_STATUS:-?}) — see journalctl -u tapbox-extra" \
+      echo "Extra failed (${EXIT_STATUS:-?}) — see journalctl -u vibb-extra" \
         > "$MSG_FILE" 2>/dev/null || true
     fi
     # Radios FIRST — everything below may pull network-online, and
     # starting go-librespot with wifi still rfkill-blocked stalled the
     # whole synchronous start queue 60s on NM-wait-online, with
-    # tapbox-ui stuck BEHIND it (field 2026-07-29: ~90s of black
+    # vibb-ui stuck BEHIND it (field 2026-07-29: ~90s of black
     # screen, box unreachable over ssh). systemd-rfkill also PERSISTS
     # a block across reboots, so this line is what saves a crashed
     # script from leaving the box offline for good. txpower likewise
@@ -94,7 +94,7 @@ case "${1:-}" in
     # unmask+enable ran four daemon-reloads (~2s each on a Zero 2) to
     # heal units that needed nothing. Scripts still must never
     # disable/mask — this belt is now free when unneeded.
-    # (tapbox-btsnoop is deliberately outside the set: it ships
+    # (vibb-btsnoop is deliberately outside the set: it ships
     # disabled/opt-in and must stay whatever the owner chose.)
     for u in $RESTORE; do
       case "$($SYSTEMCTL is-enabled "$u" 2>/dev/null || true)" in
@@ -109,8 +109,8 @@ case "${1:-}" in
     # moment the extra ends), network-independent audio plumbing next,
     # and go-librespot ASYNC last: its unit pulls network-online, and
     # nobody needs to wait for a Spotify login to see the menu.
-    for u in tapbox-ui tapbox-idle tapbox-buttons tapbox-daemon \
-             tapbox-mpris tapbox-bt-reconnect bluetooth bluealsa; do
+    for u in vibb-ui vibb-idle vibb-buttons vibb-daemon \
+             vibb-mpris vibb-bt-reconnect bluetooth bluealsa; do
       $SYSTEMCTL start "$u" 2>/dev/null || true
     done
     $SYSTEMCTL start --no-block go-librespot 2>/dev/null || true
@@ -124,10 +124,10 @@ case "${1:-}" in
     # anything that later probes the unit makes systemd re-attempt
     # loading the deleted transient file and log 'Failed to open ...'
     # (field 2026-07-29: twice a minute, forever).
-    $SYSTEMCTL reset-failed tapbox-extra >/dev/null 2>&1 || true
+    $SYSTEMCTL reset-failed vibb-extra >/dev/null 2>&1 || true
     ;;
   *)
-    echo "usage: tapbox-extra --run <script> | --restore" >&2
+    echo "usage: vibb-extra --run <script> | --restore" >&2
     exit 2
     ;;
 esac

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""tapbox-ui — the screen daemon for the Pirate Audio HAT (240x240 ST7789,
-four buttons). A pure consumer of the tapboxd API (:3679).
+"""vibb-ui — the screen daemon for the Pirate Audio HAT (240x240 ST7789,
+four buttons). A pure consumer of the vibbd API (:3679).
 
 Views:  Home (sections) -> Entries -> Episodes -> Now Playing
         Browse mode (settings.simple_nav): 0 = the text hierarchy above.
@@ -28,8 +28,8 @@ waking button press is swallowed. Brightness is settings.screen_
 brightness (% backlight via PWM on BCM13).
 
 Dev mode (no HAT needed):
-  TAPBOX_UI_PNG=/tmp/frame.png   render frames to a PNG instead of SPI
-  TAPBOX_UI_INPUT=/tmp/ui-fifo   read button events from a fifo: one char
+  VIBB_UI_PNG=/tmp/frame.png   render frames to a PNG instead of SPI
+  VIBB_UI_INPUT=/tmp/ui-fifo   read button events from a fifo: one char
                                  per event: a/b/x/y = press, l = long-B,
                                  s = settings
 """
@@ -49,15 +49,15 @@ import urllib.request
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (_HERE, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_HERE, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import boxapi  # noqa: E402
-from tapbox import paths as _paths  # noqa: E402 — idle activity marker
-from tapbox import radio as _radio  # noqa: E402 — artwork yields to audio
-from tapbox import netmgmt as _netmgmt  # noqa: E402 — the box's .local name
+from vibb import boxapi  # noqa: E402
+from vibb import paths as _paths  # noqa: E402 — idle activity marker
+from vibb import radio as _radio  # noqa: E402 — artwork yields to audio
+from vibb import netmgmt as _netmgmt  # noqa: E402 — the box's .local name
 
 # --- screen-safe text ------------------------------------------------------
 # DejaVuSans (the only font install.sh ships) draws .notdef tofu for the
@@ -132,7 +132,7 @@ def _screen_safe(obj):
     With the emoji sprite path healthy the payload flows RAW — the
     drawer renders the emoji, and scrubbing here would kill them
     before it ever sees them. With it off (no font, failed self-test,
-    TAPBOX_EMOJI=0) this is byte-for-byte the shipped 1a2b642 path."""
+    VIBB_EMOJI=0) this is byte-for-byte the shipped 1a2b642 path."""
     if emoji_active():
         return obj
     if isinstance(obj, str):
@@ -178,7 +178,7 @@ def api_put(*a, **kw):
 #   through the cache as black-box PNGs). Render a guaranteed-absent
 #   codepoint and byte-compare; require non-empty alpha separately
 #   (that half catches a COLR-only font, which renders silently blank).
-# TAPBOX_EMOJI=0 kills the whole path: the box then runs the scrub
+# VIBB_EMOJI=0 kills the whole path: the box then runs the scrub
 # pipeline byte-for-byte as shipped in 1a2b642.
 
 _EMOJI_FONT_PATHS = (
@@ -187,7 +187,7 @@ _EMOJI_FONT_PATHS = (
 )
 _EMOJI_STRIKES = (109, 128, 136, 160)  # CBDT builds seen in the wild
 UI_EMOJI_DIR = os.path.join(
-    os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache"), "ui-emoji")
+    os.environ.get("VIBB_CACHE", "/var/lib/vibb/cache"), "ui-emoji")
 _emoji = {"state": None, "font": None, "asc": 0, "em_h": 0}
 _emoji_lock = threading.Lock()  # probe may be reached from the poller
 _sprites = {}       # (cluster, lh) -> Image | None (failures remembered)
@@ -197,7 +197,7 @@ _SPRITES_MAX = 64   # a 113px tile sprite is ~68KB — cap the RAM side
 def _probe_emoji():
     """Open the color font and prove it renders REAL glyphs. Any
     failure leaves state 'off' and the scrub pipeline in charge."""
-    if os.environ.get("TAPBOX_EMOJI", "1") == "0":
+    if os.environ.get("VIBB_EMOJI", "1") == "0":
         _emoji["state"] = "off"
         return
     f = None
@@ -449,14 +449,14 @@ def _draw(img):
 
 
 W = H = 240
-PNG_PATH = os.environ.get("TAPBOX_UI_PNG")
+PNG_PATH = os.environ.get("VIBB_UI_PNG")
 
 # playful-ui: the carousel shelf slide. Force-off under the PNG dev
 # backend so every existing test stays byte- AND call-count-stable (QA
 # review 2026-08-12 — the gate must key on the env, not the display
-# type: most tests pair TAPBOX_UI_PNG with a hand-rolled FakeDisplay).
-# TAPBOX_UI_ANIM=0 kills it on the box too.
-UI_ANIM = (not PNG_PATH) and os.environ.get("TAPBOX_UI_ANIM", "1") != "0"
+# type: most tests pair VIBB_UI_PNG with a hand-rolled FakeDisplay).
+# VIBB_UI_ANIM=0 kills it on the box too.
+UI_ANIM = (not PNG_PATH) and os.environ.get("VIBB_UI_ANIM", "1") != "0"
 SLIDE_MS = 0.150          # wall-clock cap for one glide
 # (scheduled time, ease-out offset) — the two END frames are cut on
 # purpose: p=0 is just "label pops out" and the landing is painted by
@@ -469,14 +469,14 @@ SLIDE_TRAVEL = 208        # 176px cover + 32px shelf gap = full clearance
 # from disk across track changes, UI restarts and reboots. Capped by
 # _art_disk_save's pruning; content.py's prune_cache leaves the dir alone.
 UI_ART_DIR = os.path.join(
-    os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache"), "ui-art")
+    os.environ.get("VIBB_CACHE", "/var/lib/vibb/cache"), "ui-art")
 # Sized to CONVERGE for the real library: a 212-episode show with
 # per-episode art touches 2-3 sizes each (56 rows / 128 / 176), so 400
 # thrashed — every save evicted a thumb that the next browse re-decoded
 # and re-saved, forever (field 2026-08-12: Snipp Snapp Snute fast-skip
 # felt slow while Hallo Bablo, whose episodes share one cover, flew).
 # Thumbs are 5-15KB; 1600 is <=25MB against a 20GB cache partition.
-UI_ART_MAX_FILES = int(os.environ.get("TAPBOX_UI_ART_MAX", "1600"))
+UI_ART_MAX_FILES = int(os.environ.get("VIBB_UI_ART_MAX", "1600"))
 _art_saves = [0]  # cap check amortized: a listdir per save was a tax
 
 
@@ -526,7 +526,7 @@ def _art_disk_save(img, path):
                     os.remove(p)
     except OSError:
         pass
-FIFO_PATH = os.environ.get("TAPBOX_UI_INPUT")
+FIFO_PATH = os.environ.get("VIBB_UI_INPUT")
 TICK_S = 0.2
 STATUS_POLL_S = 1.0
 SESSION_WAIT_TICKS = 16  # x0.5s: how long the splash waits for the
@@ -552,13 +552,13 @@ PP_RECONCILE_S = 2.0  # after an optimistic play/pause flip, hold the local
 # frame, never a dead screen.
 RENDER_HTTP_TIMEOUT = 2.0
 # Belt-and-suspenders: if the render loop ever wedges for real (a stuck
-# SPI push, a runaway decode), nothing restarts tapbox-ui until the
-# 60-min idle shutdown — every OTHER TapBox component self-heals. A
+# SPI push, a runaway decode), nothing restarts vibb-ui until the
+# 60-min idle shutdown — every OTHER Vibb component self-heals. A
 # heartbeat the loop stamps each pass; if it goes stale past this, exit
 # so systemd (Restart=always) brings the screen back in seconds. Set
 # above the longest legit inline block (a 130s BT pair) so it never
 # false-fires; 0 disables.
-UI_WATCHDOG_S = float(os.environ.get("TAPBOX_UI_WATCHDOG", "180"))
+UI_WATCHDOG_S = float(os.environ.get("VIBB_UI_WATCHDOG", "180"))
 NOW_RETURN_S = 10     # idle this long in a browse menu while music plays ->
                       # snap back to now-playing (once you left it, the only
                       # way back was re-tapping the same episode)
@@ -572,7 +572,7 @@ WARN = (230, 80, 80)
 
 
 def log(msg):
-    print(f"tapbox-ui: {msg}", flush=True)
+    print(f"vibb-ui: {msg}", flush=True)
 
 
 def font(size):
@@ -592,7 +592,7 @@ F_BIG, F_MED, F_SMALL = font(22), font(17), font(13)
 # Bounded, though: it holds a SECRET, and leaving it lit forever would
 # both drain the battery and park the token on a screen in the living
 # room. After this it auto-returns to settings and normal sleep resumes.
-LINK_AWAKE_S = float(os.environ.get("TAPBOX_LINK_AWAKE_S", "180"))
+LINK_AWAKE_S = float(os.environ.get("VIBB_LINK_AWAKE_S", "180"))
 
 
 # --- display backends -----------------------------------------------------------
@@ -600,14 +600,14 @@ LINK_AWAKE_S = float(os.environ.get("TAPBOX_LINK_AWAKE_S", "180"))
 BACKLIGHT_PIN = 13  # Pirate Audio backlight (BCM13, PWM1-capable)
 # Owner-dropped launch scripts (docs/extras.md) — SSH is the only way in.
 # Deliberately OUTSIDE every upload/media root; the API has no route.
-EXTRAS_DIR = os.environ.get("TAPBOX_EXTRAS", "/etc/tapbox/extras")
-EXTRA_WRAPPER = "/usr/local/bin/tapbox-extra"
+EXTRAS_DIR = os.environ.get("VIBB_EXTRAS", "/etc/vibb/extras")
+EXTRA_WRAPPER = "/usr/local/bin/vibb-extra"
 # The extras message contract: a script (or the wrapper's restore, for
 # generic failures) writes ONE human line here; the UI shows it on its
 # next startup and deletes it. Without this, a failing extra just
 # bounced back to the home screen with the reason buried in journalctl
 # (owner 2026-07-29: 'no TV on HDMI' deserved to be ON the screen).
-EXTRA_MSG_FILE = os.path.join(_paths.RUN_DIR, "tapbox-extra.msg")
+EXTRA_MSG_FILE = os.path.join(_paths.RUN_DIR, "vibb-extra.msg")
 EXTRA_MSG_FRESH_S = 300  # older = a stale leftover, delete unshown
 
 
@@ -672,7 +672,7 @@ class St7789Display:
             backlight=None, spi_speed_hz=80 * 1000 * 1000)
         self.on = True
         self.brightness = 100
-        self._fast = os.environ.get("TAPBOX_FAST_PUSH", "1") != "0"
+        self._fast = os.environ.get("VIBB_FAST_PUSH", "1") != "0"
         self._bl = None
         try:
             from gpiozero import PWMLED
@@ -1576,7 +1576,7 @@ class App:
             # retrying — and the sync skips it forever because it exists.
             # Delete it so the next sweep refetches; scoped to CACHE_DIR
             # only (PWA-uploaded logos etc. must never be auto-deleted).
-            cache_root = os.path.dirname(UI_ART_DIR)  # TAPBOX_CACHE root
+            cache_root = os.path.dirname(UI_ART_DIR)  # VIBB_CACHE root
             if (not ref.startswith("http") and os.path.exists(ref)
                     and os.path.abspath(ref).startswith(cache_root + os.sep)):
                 try:
@@ -2078,7 +2078,7 @@ class App:
         """Hold X. No Sonos known -> today's two-way toggle, unchanged.
         Sonos rooms known -> a three-way menu instead (owner 2026-08-09:
         the row only exists when speakers actually do). The list read is
-        the sidecar's CACHE via tapboxd — instant, never a scan."""
+        the sidecar's CACHE via vibbd — instant, never a scan."""
         try:
             self.sonos = api_get("/sonos")
         except OSError:
@@ -2270,7 +2270,7 @@ class App:
                 self.draw_message("New token? Every linked phone must be\n"
                                   "linked again.  (A confirms, B cancels)")
                 if self.confirm():
-                    from tapbox import token as _tok
+                    from vibb import token as _tok
                     _tok.rotate()
                     log("api token rotated from the box screen")
                 self.dirty = True
@@ -2398,7 +2398,7 @@ class App:
         regular executable owned by OUR uid (root on the box) and not
         writable by group/other — anything else is skipped, because a
         kid-writable file in this dir would be one A-press from root.
-        Display name from a '# tapbox-name:' header, else the
+        Display name from a '# vibb-name:' header, else the
         filename."""
         out = []
         try:
@@ -2421,7 +2421,7 @@ class App:
                     for i, line in enumerate(f):
                         if i >= 15:
                             break
-                        if line.lower().startswith("# tapbox-name:"):
+                        if line.lower().startswith("# vibb-name:"):
                             name = line.split(":", 1)[1].strip()
                             break
             except OSError:
@@ -2435,15 +2435,15 @@ class App:
 
     def select_extra(self):
         """Hand the whole box to an owner script. The wrapper runs as a
-        TRANSIENT systemd unit (survives tapbox-ui exiting — we hold
+        TRANSIENT systemd unit (survives vibb-ui exiting — we hold
         the SPI display and the buttons, so we must die for the extra
-        to live) whose ExecStopPost restores tapbox no matter how the
+        to live) whose ExecStopPost restores vibb no matter how the
         extra or the wrapper ends — clean exit, crash, even SIGKILL."""
         items = self.extras()
         if not items or self.sel >= len(items):
             return
         ex = items[self.sel]
-        self.draw_message(f"Start {ex['name']}?\nTapBox stops while it "
+        self.draw_message(f"Start {ex['name']}?\nVibb stops while it "
                           "runs.\n(A confirms, B cancels)")
         if not self.confirm():
             self.dirty = True
@@ -2452,7 +2452,7 @@ class App:
         self.draw_message(f"Starting {ex['name']} ...\n"
                           "(first run can take a minute)")
         p = subprocess.Popen([
-            "systemd-run", "--unit=tapbox-extra", "--collect",
+            "systemd-run", "--unit=vibb-extra", "--collect",
             "--property=Restart=no",
             f"--property=ExecStopPost={EXTRA_WRAPPER} --restore",
             EXTRA_WRAPPER, "--run", ex["path"]])
@@ -2462,7 +2462,7 @@ class App:
             rc = 0
         if rc:
             self.draw_message("Could not start — see journalctl "
-                              "-u tapbox-extra")
+                              "-u vibb-extra")
             time.sleep(4)
             self.dirty = True
             return
@@ -2473,7 +2473,7 @@ class App:
         # (2026-07-29). The ceiling is only the escape hatch for a
         # launch that silently never stops us.
         end = time.monotonic() + float(
-            os.environ.get("TAPBOX_EXTRA_HOLD_S", "90"))
+            os.environ.get("VIBB_EXTRA_HOLD_S", "90"))
         while time.monotonic() < end:
             time.sleep(0.5)
         self.dirty = True
@@ -2557,10 +2557,10 @@ class App:
 
     def splash(self, sub="starting"):
         """Boot screen: drawn the moment the process starts, long before
-        tapboxd (and the rest of the boot) is ready."""
+        vibbd (and the rest of the boot) is ready."""
         img = Image.new("RGB", (W, H), BG)
         d = _draw(img)
-        d.text((W // 2, H // 2 - 16), "TapBox", font=F_BIG, fill=HILITE,
+        d.text((W // 2, H // 2 - 16), "Vibb", font=F_BIG, fill=HILITE,
                anchor="mm")
         d.text((W // 2, H // 2 + 18), sub, font=F_SMALL, fill=DIM, anchor="mm")
         self.display.show(img)
@@ -2586,7 +2586,7 @@ class App:
         rolls = False  # a too-long selected label is sliding -> keep painting
         if self.view == "home":
             art = self.section_art()  # uploaded category logo (PWA)
-            rolls = draw_list(d, "TapBox", self.current_items(), self.sel,
+            rolls = draw_list(d, "Vibb", self.current_items(), self.sel,
                               self.system,
                               hint="A: select   hold A+B: settings",
                               maxlen=17 if art else 24,
@@ -2676,7 +2676,7 @@ class App:
         the recovery path when a phone was never linked. If the qrcode
         lib is missing (an install where pip failed), the text alone
         still provisions a phone — so the import is lazy and optional."""
-        from tapbox import token as _tok
+        from vibb import token as _tok
         d.rectangle([0, 0, W, H], fill=(255, 255, 255))  # scan contrast
         value = ""
         try:
@@ -2686,7 +2686,7 @@ class App:
         if not value:
             d.text((10, 100), "No token on the box.", font=F_MED,
                    fill=(0, 0, 0))
-            d.text((10, 124), "Restart tapboxd to make one.", font=F_SMALL,
+            d.text((10, 124), "Restart vibbd to make one.", font=F_SMALL,
                    fill=(90, 90, 90))
             return
         host = _netmgmt.mdns_host()
@@ -3187,7 +3187,7 @@ class App:
                 if ev:
                     self._pending.extend(ev)
                     break                # abort: the finger is ahead
-        if os.environ.get("TAPBOX_UI_ANIM_LOG") == "1":
+        if os.environ.get("VIBB_UI_ANIM_LOG") == "1":
             # the rig verdict both reviews demanded: how many of the 4
             # scheduled frames the box actually managed, and in what time
             n = max(shown, 1)
@@ -3302,7 +3302,7 @@ class App:
         return time.monotonic() - since if since else 0.0
 
     def _render_watchdog(self):
-        """Restart tapbox-ui if the single render loop wedges. The loop
+        """Restart vibb-ui if the single render loop wedges. The loop
         stamps _loop_beat every pass; if it goes stale past UI_WATCHDOG_S
         the loop is stuck (a hung SPI push, a runaway decode) and no
         button will ever register again — so exit and let systemd
@@ -3361,7 +3361,7 @@ class App:
             self.view = "now"
 
     def run(self):
-        # Show the splash immediately, then wait for tapboxd — during boot
+        # Show the splash immediately, then wait for vibbd — during boot
         # it is usually a few seconds behind us.
         ticks = 0
         while True:
@@ -3448,7 +3448,7 @@ class App:
             if events:
                 woke = not self.display.on
                 self.last_input = time.monotonic()
-                _paths.touch_activity()  # tapbox-idle: hands-on counts
+                _paths.touch_activity()  # vibb-idle: hands-on counts
                 if woke:
                     self.display.set_backlight(True)
                     self.last_system = 0.0   # refetch battery/system now
@@ -3522,7 +3522,7 @@ def _boot_splash(display):
     try:
         img = Image.new("RGB", (W, H), BG)
         d = _draw(img)
-        d.text((W // 2, H // 2 - 16), "TapBox", font=F_BIG, fill=HILITE,
+        d.text((W // 2, H // 2 - 16), "Vibb", font=F_BIG, fill=HILITE,
                anchor="mm")
         d.text((W // 2, H // 2 + 18), "starting", font=F_SMALL, fill=DIM,
                anchor="mm")
@@ -3533,7 +3533,7 @@ def _boot_splash(display):
 
 def blank_screen(display):
     """Leave the panel DARK. The ST7789 holds its last frame forever and
-    the backlight is ours to drive, so a plain exit left a frozen TapBox
+    the backlight is ours to drive, so a plain exit left a frozen Vibb
     picture lit for the whole handoff — field 2026-08-04: the screen sat
     on the last menu through an entire RetroPie session. Backlight off
     FIRST (instant), then black pixels so nothing stale can flash if

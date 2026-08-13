@@ -2,10 +2,10 @@
 """pipod UI + wheel router — DRAFT (untested).
 
 An iPod-style scrolling-list front-end for the click wheel. It is a pure
-consumer of the TapBox daemon API (:3679) via `tapbox.boxapi`, plus a UDP
+consumer of the Vibb daemon API (:3679) via `vibb.boxapi`, plus a UDP
 listener for wheel events from clickwheel/click.c.
 
-Why new (not TapBox's ui.py): ui.py is a 4-discrete-button, 240x240 model.
+Why new (not Vibb's ui.py): ui.py is a 4-discrete-button, 240x240 model.
 A wheel wants scroll-to-navigate + center-select + menu-back, and an iPod
 screen is 320x240. This file is the wheel paradigm; it deliberately reuses
 ui.py's album-art disk cache + marquee ideas (copy them in when you flesh
@@ -32,13 +32,13 @@ import socket
 import sys
 import time
 
-# Reuse the TapBox python package (boxapi etc.) exactly like pi/buttons.py.
+# Reuse the Vibb python package (boxapi etc.) exactly like pi/buttons.py.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (os.path.join(_HERE, "..", "..", "pi"), "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (os.path.join(_HERE, "..", "..", "pi"), "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         sys.path.insert(0, os.path.abspath(_p))
         break
-from tapbox import boxapi  # noqa: E402
+from vibb import boxapi  # noqa: E402
 
 UDP_PORT = 9090
 LOCK_FILE = os.environ.get("PIPOD_LOCK", "/run/pipod-hold.lock")

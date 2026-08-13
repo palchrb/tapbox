@@ -14,20 +14,20 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
 
 # fake sysfs: <TMP>/serial/drivers/hci_uart_bcm/{serial0-0,unbind,bind}
 DRV = os.path.join(TMP, "serial", "drivers", "hci_uart_bcm")
 os.makedirs(os.path.join(DRV, "serial0-0"))
 open(os.path.join(DRV, "unbind"), "w").close()
 open(os.path.join(DRV, "bind"), "w").close()
-os.environ["TAPBOX_SERDEV_BASES"] = os.path.join(TMP, "serial", "drivers")
+os.environ["VIBB_SERDEV_BASES"] = os.path.join(TMP, "serial", "drivers")
 
 sys.path.insert(0, os.path.join(REPO, "pi"))
-from tapbox import bt  # noqa: E402
+from vibb import bt  # noqa: E402
 
 bt.time.sleep = lambda s: None
 calls = []
@@ -43,7 +43,7 @@ with open(os.path.join(DRV, "bind")) as f:
 print("1. re-attach unbinds+binds serial0-0 via the 'serial' bus path OK")
 
 # 2. no serdev dirs at all -> honest False (the caller escalates)
-os.environ["TAPBOX_SERDEV_BASES"] = os.path.join(TMP, "missing")
+os.environ["VIBB_SERDEV_BASES"] = os.path.join(TMP, "missing")
 import importlib  # noqa: E402
 importlib.reload(bt)
 bt.time.sleep = lambda s: None

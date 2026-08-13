@@ -14,14 +14,14 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 # seconds, not minutes: grace 0.2s, tick 0.05s, popup window 2s
-os.environ["TAPBOX_BOOT_GRACE"] = "0.2"
-os.environ["TAPBOX_BOOT_TICK"] = "0.05"
-os.environ["TAPBOX_BT_WAIT_S"] = "2"
+os.environ["VIBB_BOOT_GRACE"] = "0.2"
+os.environ["VIBB_BOOT_TICK"] = "0.05"
+os.environ["VIBB_BT_WAIT_S"] = "2"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -84,7 +84,7 @@ def write_last():
 
 def set_output(device):
     with open(daemon.OUT_FILE, "w") as f:
-        json.dump({"output": device, "pcm": f"tapbox_{device}"}, f)
+        json.dump({"output": device, "pcm": f"vibb_{device}"}, f)
 
 
 daemon.load_settings = lambda: {"resume_window_h": -1}   # always
@@ -176,7 +176,7 @@ print("8. audio never up: gives up; one attempt per shutdown OK")
 #    consumes its arm-bit and plays nothing — the box wakes up in the
 #    menu instead of three days inside an album. The clock must be
 #    trustworthy to conclude that, so mark it as the RTC load does.
-from tapbox import paths as _paths  # noqa: E402
+from vibb import paths as _paths  # noqa: E402
 
 daemon.load_settings = lambda: {"resume_window_h": 6}
 _paths.note_clock_ok()

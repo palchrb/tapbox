@@ -1,12 +1,12 @@
 # pipod — software plan
 
-pipod runs the **whole TapBox backend unchanged** and adds three small
+pipod runs the **whole Vibb backend unchanged** and adds three small
 front-end pieces for the wheel, the screen, and the Hold switch. Nothing in
 `../pi/` is modified — pipod layers on top.
 
-## What comes for free from TapBox
+## What comes for free from Vibb
 
-| Capability | TapBox component | pipod change |
+| Capability | Vibb component | pipod change |
 |---|---|---|
 | Spotify Connect + on-disk cache | go-librespot fork, `spotify.py` | none |
 | Podcasts / RSS / local, offline cache, resume | mpv, `content.py`, `library.py`, `radio.py` | none |
@@ -35,7 +35,7 @@ frame, and emits events over **UDP `127.0.0.1:9090`** as 3 bytes:
   RESEARCH §1). Starter is written for the Cypress `0x35`-header frame.
 
 ### 2. `src/podui.py` — iPod-style UI + input router (Python)
-A new front-end because TapBox's `ui.py` is a **4-discrete-button, 240×240**
+A new front-end because Vibb's `ui.py` is a **4-discrete-button, 240×240**
 model — the wrong paradigm for a wheel. podui:
 - Listens on UDP `:9090` for wheel events.
 - **Scroll → move selection**; accelerates with scroll speed. **Center =
@@ -72,7 +72,7 @@ Runs as `pipod-hold.service`.
 ## Install flow (`install-pipod.sh`, additive)
 
 ```
-# 1. Base TapBox install (unchanged)
+# 1. Base Vibb install (unchanged)
 sudo ../pi/install.sh
 
 # 2. pipod audio overlay (hifiberry-dac WITHOUT gpio=25; enables SPI)
@@ -88,13 +88,13 @@ sudo ./install-pipod.sh services
 sudo reboot
 ```
 
-`install-pipod.sh` deliberately **does not** call `tapbox-power
+`install-pipod.sh` deliberately **does not** call `vibb-power
 hat-audio-on` (that adds `gpio=25=op,dh`, which would fight the wheel's Data
 pin). It writes the pipod variant of the overlay instead.
 
 ## Milestones (suggested order)
 
-1. **Backend on the bench** — flash Pi, run TapBox install, confirm Spotify
+1. **Backend on the bench** — flash Pi, run Vibb install, confirm Spotify
    + a podcast play out a **USB DAC** (proves software before wiring I²S).
 2. **I²S jack** — wire PCM5102, `dtoverlay=hifiberry-dac`, switch `output`
    to `local`, confirm the jack plays. BT still switchable.
@@ -103,7 +103,7 @@ pin). It writes the pipod variant of the overlay instead.
 4. **podui** — scrolling menu on the TFT, wheel drives it, center plays.
 5. **Hold switch** — lock + safe shutdown.
 6. **Integration** — everything inside the shell; haptics; battery curve
-   (`tapbox-power curve`), idle shutdown, PiSugar taps as extra transport.
+   (`vibb-power curve`), idle shutdown, PiSugar taps as extra transport.
 
 ## Files in this folder
 ```

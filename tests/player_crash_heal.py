@@ -18,10 +18,10 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", tempfile.mkdtemp())
-os.environ["TAPBOX_STALL_POLL"] = "3600"  # park the import-time watchdog
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ.setdefault("VIBB_CACHE", tempfile.mkdtemp())
+os.environ["VIBB_STALL_POLL"] = "3600"  # park the import-time watchdog
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402

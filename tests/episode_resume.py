@@ -7,14 +7,14 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-import player  # noqa: E402  (reads TAPBOX_STATE at import)
+import player  # noqa: E402  (reads VIBB_STATE at import)
 
 KEY = "feed-abc"
 A, B = "http://x/a.mp3", "http://x/b.mp3"      # stream URLs
-A_LOCAL = "/var/lib/tapbox/cache/feed-abc/ida.mp3"  # cached form of A
+A_LOCAL = "/var/lib/vibb/cache/feed-abc/ida.mp3"  # cached form of A
 IDA, IDB = "ida", "idb"
 
 # listen into episode A, then into episode B
@@ -49,7 +49,7 @@ assert player.episode_pos(old, IDA, A) == 0.0
 print("5. legacy single-bookmark state still resumes OK")
 
 # per-entry 'from start': the library accepts the flag and defaults to resume
-from tapbox import library  # noqa: E402
+from vibb import library  # noqa: E402
 lib = {"sections": [{"name": "S", "entries": [
     {"name": "Songs", "target": "https://ex.com/rss", "resume": False},
     {"name": "Story", "target": "https://radio.nrk.no/podkast/foo"}]}]}

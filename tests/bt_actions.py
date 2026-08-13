@@ -22,7 +22,7 @@ GO = "30:C0:1B:BD:13:B2"
 
 def unit_map_tests():
     sys.path.insert(0, os.path.join(REPO, "pi"))
-    from tapbox import btbus
+    from vibb import btbus
     ok, d = btbus._map_connect_error("org.bluez.Error.AlreadyConnected", "x")
     assert ok is True, d
     ok, d = btbus._map_connect_error("org.bluez.Error.Failed",
@@ -51,7 +51,7 @@ def run_snippet(env, code):
 SNIPPET = f"""
 import json, sys
 sys.path.insert(0, {json.dumps(os.path.join(REPO, "pi"))})
-from tapbox import btbus
+from vibb import btbus
 out = {{
   "backend": btbus.backend(),
   "connect_ok": btbus.connect_device({json.dumps(GO)}),
@@ -101,10 +101,10 @@ exit 0
 
 
 def env_for(tmp, backend):
-    env = dict(os.environ, TAPBOX_BT_BACKEND=backend,
-               TAPBOX_BT_FILE=os.path.join(tmp, "bt-mac"),
-               TAPBOX_BT_LOCKFILE=os.path.join(tmp, "bt.lock"),
-               TAPBOX_ASOUND=os.path.join(tmp, "asound.conf"))
+    env = dict(os.environ, VIBB_BT_BACKEND=backend,
+               VIBB_BT_FILE=os.path.join(tmp, "bt-mac"),
+               VIBB_BT_LOCKFILE=os.path.join(tmp, "bt.lock"),
+               VIBB_ASOUND=os.path.join(tmp, "asound.conf"))
     return env
 
 
@@ -136,8 +136,8 @@ def main():
         env=fake_env, stdout=subprocess.PIPE, text=True)
     assert "ready" in fake.stdout.readline()
     call = ["dbus-send", "--bus=" + addr, "--print-reply",
-            "--dest=org.bluez", "--type=method_call", "/org/tapbox/mock"]
-    subprocess.run(call + ["org.tapbox.Mock.AddDevice", f"string:{GO}",
+            "--dest=org.bluez", "--type=method_call", "/org/vibb/mock"]
+    subprocess.run(call + ["org.vibb.Mock.AddDevice", f"string:{GO}",
                            "string:JBL GO", "boolean:true", "boolean:false",
                            "int16:0"], check=True, capture_output=True)
     try:
@@ -153,19 +153,19 @@ def main():
             return 1
 
         # the error repertoire, dbus side only (cli can't fake these)
-        subprocess.run(call + ["org.tapbox.Mock.SetConnectResult",
+        subprocess.run(call + ["org.vibb.Mock.SetConnectResult",
                                f"string:{GO}", "string:already-connected"],
                        check=True, capture_output=True)
         snap2 = run_snippet(env_dbus, f"""
 import json, sys
 sys.path.insert(0, {json.dumps(os.path.join(REPO, "pi"))})
-from tapbox import btbus
+from vibb import btbus
 ok, detail = btbus.connect_device({json.dumps(GO)})
 t = btbus.trust({json.dumps(GO)})
 print(json.dumps({{"already": ok, "detail": detail}}))
 """)
         assert snap2["already"] is True, snap2
-        r = subprocess.run(call + ["org.tapbox.Mock.GetTrusted",
+        r = subprocess.run(call + ["org.vibb.Mock.GetTrusted",
                                    f"string:{GO}"], check=True,
                            capture_output=True, text=True)
         assert "true" in r.stdout, r.stdout

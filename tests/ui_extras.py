@@ -15,9 +15,9 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
 EXTRAS = os.path.join(TMP, "extras")
-os.environ["TAPBOX_EXTRAS"] = EXTRAS
-os.environ["TAPBOX_RUN"] = TMP
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["VIBB_EXTRAS"] = EXTRAS
+os.environ["VIBB_RUN"] = TMP
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import ui  # noqa: E402
@@ -54,7 +54,7 @@ def drop(name, body="#!/bin/sh\ntrue\n", mode=0o755):
 
 # 2. the scan's security filter: non-executables, group/world-writable
 #    files and wrong-owner files are INVISIBLE
-drop("retropie.sh", "#!/bin/sh\n# tapbox-name: RetroPie\ntrue\n")
+drop("retropie.sh", "#!/bin/sh\n# vibb-name: RetroPie\ntrue\n")
 drop("not-exec.sh", mode=0o644)
 drop("loose.sh", mode=0o777)          # world-writable = plantable
 drop("group-write.sh", mode=0o775)    # group-writable too
@@ -68,7 +68,7 @@ print("2. scan filter: only clean root-owned executables show OK")
 drop("night_light-mode.sh")
 names = [e["name"] for e in ui.App.extras(a)]
 assert names == ["Night Light Mode", "RetroPie"], names
-print("3. tapbox-name header + filename fallback OK")
+print("3. vibb-name header + filename fallback OK")
 
 # 4. the chord now opens the menu, rows match the scan
 a.handle("extras")
@@ -92,7 +92,7 @@ class FakeProc:
 
 ui.subprocess = type("S", (), {"Popen": staticmethod(
     lambda argv, **k: (LAUNCHED.append(argv), FakeProc())[1])})()
-os.environ["TAPBOX_EXTRA_HOLD_S"] = "0"  # no 90s hold in the gate
+os.environ["VIBB_EXTRA_HOLD_S"] = "0"  # no 90s hold in the gate
 MSGS = []
 a.draw_message = lambda text, *k, **kw: MSGS.append(text)
 a.sel = 1  # RetroPie
@@ -104,7 +104,7 @@ a.select()
 assert len(LAUNCHED) == 1, LAUNCHED
 argv = LAUNCHED[0]
 assert argv[0] == "systemd-run" and "--collect" in argv
-assert "--unit=tapbox-extra" in argv
+assert "--unit=vibb-extra" in argv
 assert "--property=Restart=no" in argv, \
     "a crash-looping extra must not respawn"
 assert any(p.startswith("--property=ExecStopPost=") and "--restore" in p

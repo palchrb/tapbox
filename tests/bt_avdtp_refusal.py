@@ -26,12 +26,12 @@ import types
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
 os.environ.update(
-    TAPBOX_RUN=TMP, TAPBOX_STATE=TMP,
-    TAPBOX_BT_FILE=os.path.join(TMP, "mac"),
-    TAPBOX_BT_LOCKFILE=os.path.join(TMP, "lock"),
-    TAPBOX_BT_KICK=os.path.join(TMP, "kick"),
-    TAPBOX_BT_QUIET=os.path.join(TMP, "quiet"))
-open(os.environ["TAPBOX_BT_FILE"], "w").write("B4:EC:02:4F:36:7C\n")
+    VIBB_RUN=TMP, VIBB_STATE=TMP,
+    VIBB_BT_FILE=os.path.join(TMP, "mac"),
+    VIBB_BT_LOCKFILE=os.path.join(TMP, "lock"),
+    VIBB_BT_KICK=os.path.join(TMP, "kick"),
+    VIBB_BT_QUIET=os.path.join(TMP, "quiet"))
+open(os.environ["VIBB_BT_FILE"], "w").write("B4:EC:02:4F:36:7C\n")
 
 
 def _install_stubs():
@@ -89,7 +89,7 @@ spec.loader.exec_module(bw)
 posts = []
 bw.boxapi.post = lambda path, body, timeout=5: (posts.append((path, body)),
                                                 {})[1]
-from tapbox import btbus  # noqa: E402
+from vibb import btbus  # noqa: E402
 
 pcm = {"v": False}
 btbus.a2dp_pcm_present = lambda mac: pcm["v"]
@@ -235,7 +235,7 @@ print("6. slow PCM within the wait window is success OK")
 #    fresh bluez deserve a fresh window)
 r.refusals = 3
 r.backoff = 160.0
-open(os.environ["TAPBOX_BT_FILE"], "w").write("2C:FD:B3:FA:DA:04\n")
+open(os.environ["VIBB_BT_FILE"], "w").write("2C:FD:B3:FA:DA:04\n")
 r._mac_file_changed()
 assert r.refusals == 0, "retarget must clear the refusal count"
 r.refusals = 3

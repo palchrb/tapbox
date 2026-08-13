@@ -23,12 +23,12 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-for k in ("TAPBOX_RUN", "TAPBOX_STATE", "TAPBOX_CACHE"):
+for k in ("VIBB_RUN", "VIBB_STATE", "VIBB_CACHE"):
     os.environ[k] = TMP
-os.environ["TAPBOX_SETTINGS"] = os.path.join(TMP, "settings.json")
+os.environ["VIBB_SETTINGS"] = os.path.join(TMP, "settings.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import paths, sysinfo  # noqa: E402
+from vibb import paths, sysinfo  # noqa: E402
 
 NOW = 1_760_000_000.0
 HOUR = 3600.0
@@ -61,7 +61,7 @@ assert paths.clock_trusted() is False
 print("2. clock trust marker (tmpfs, per boot) OK")
 
 # ---- 3. session_verdict waits for the clock, then freezes ----
-json.dump({"resume_window_h": 6}, open(os.environ["TAPBOX_SETTINGS"], "w"))
+json.dump({"resume_window_h": 6}, open(os.environ["VIBB_SETTINGS"], "w"))
 daemon.ORCH.boot_stopped_at = NOW - 99 * HOUR   # switched off days ago
 daemon._SESSION.update(verdict=None, live=True)
 daemon.BOOT_TICK_S = 0.05
@@ -95,7 +95,7 @@ assert daemon.session_verdict() == "fresh", "the verdict itself stands"
 print("5. first tap ends the session; the verdict is unchanged OK")
 
 # ---- 6. settings: the boolean becomes hours, without demoting anyone ----
-S = os.environ["TAPBOX_SETTINGS"]
+S = os.environ["VIBB_SETTINGS"]
 json.dump({"resume_on_boot": True}, open(S, "w"))
 assert sysinfo.load_settings()["resume_window_h"] == -1, \
     "an upgraded box must keep 'always', not silently become 1 hour"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TapBox player — THE entrypoint for playing any link.
+"""Vibb player — THE entrypoint for playing any link.
 
 Usage: player.py [--fresh] [--reverse] [--episode <id>] [--cache <n>]
                  <target> [url...]
@@ -25,7 +25,7 @@ run with the same <target> rotates the queue to the remembered episode
 and seeks to the remembered position — so a BT dropout, Ctrl+C, power
 cut or a re-tapped card continues instead of starting over.
 
-State lives in /var/lib/tapbox/state/<key>.json, keyed on the podcast
+State lives in /var/lib/vibb/state/<key>.json, keyed on the podcast
 slug when <target> is an NRK podcast link, else a hash of the target.
 State is cleared when the whole queue finishes naturally.
 """
@@ -42,14 +42,14 @@ import threading
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (_HERE, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_HERE, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import content, mpv as _mpv, radio, spotify  # noqa: E402
-from tapbox.output import audio_ready  # noqa: E402
-from tapbox.paths import STATE_DIR  # noqa: E402
+from vibb import content, mpv as _mpv, radio, spotify  # noqa: E402
+from vibb.output import audio_ready  # noqa: E402
+from vibb.paths import STATE_DIR  # noqa: E402
 
 is_spotify = spotify.is_spotify
 POLL_S = 3
@@ -59,11 +59,11 @@ def log(msg):
     print(f"player: {msg}", file=sys.stderr, flush=True)
 
 
-from tapbox.library import state_key  # noqa: E402  (shared with tapboxd)
-# Bookmarks live in tapbox/bookmarks.py since the Sonos renderer — tapboxd
+from vibb.library import state_key  # noqa: E402  (shared with vibbd)
+# Bookmarks live in vibb/bookmarks.py since the Sonos renderer — vibbd
 # writes positions with no player process alive. Re-exported here so every
 # existing caller (and test) keeps its player.* name.
-from tapbox.bookmarks import (RESUME_MIN_S, clear_state,  # noqa: E402,F401
+from vibb.bookmarks import (RESUME_MIN_S, clear_state,  # noqa: E402,F401
                               episode_pos, load_state, rotate_to_bookmark,
                               save_state, state_path)
 
@@ -80,13 +80,13 @@ def ipc_get(sock_path, prop):
 
 
 def output_pcm():
-    """The ALSA pcm playback goes to — set via tapboxd POST /output
+    """The ALSA pcm playback goes to — set via vibbd POST /output
     (bt = the paired speaker, local = the built-in/HAT speaker)."""
     try:
         with open(os.path.join(STATE_DIR, "output.json")) as f:
             return json.load(f)["pcm"]
     except (OSError, ValueError, KeyError):
-        return "tapbox_bt"
+        return "vibb_bt"
 
 
 _sync_child = None  # the per-play background sync (content.py) subprocess
@@ -147,11 +147,11 @@ def mpv_command(urls, volume, sock, pcm, paused=False):
 
 
 def online(timeout=2):
-    """Quick connectivity probe. TAPBOX_OFFLINE=1 forces offline mode
+    """Quick connectivity probe. VIBB_OFFLINE=1 forces offline mode
     (manual travel switch / tests). Plain IP:port — no DNS to hang on. A
     healthy link connects in well under 1s, so the caller can pass a short
     timeout when this probe is on the tap->audio path."""
-    if os.environ.get("TAPBOX_OFFLINE"):
+    if os.environ.get("VIBB_OFFLINE"):
         return False
     return radio.internet_up(timeout)
 
@@ -205,7 +205,7 @@ def accept_spot_bookmark(bm, uri, exact=False):
 
 
 # first /player/play timeout: see the retry comment in play_spotify
-PLAY_TIMEOUT_S = float(os.environ.get("TAPBOX_SPOT_PLAY_TIMEOUT", "8"))
+PLAY_TIMEOUT_S = float(os.environ.get("VIBB_SPOT_PLAY_TIMEOUT", "8"))
 
 
 def play_spotify(target, fresh=False, exact=False, start_uri=None):
@@ -217,11 +217,11 @@ def play_spotify(target, fresh=False, exact=False, start_uri=None):
     # Shared 2.4GHz radio: claim it for the CDN-heavy session start, but
     # let an in-flight BT page finish first (bounded). BUSY before the
     # PAGING wait — the order stops btwatchd slipping a fresh page into
-    # the gap. See tapbox/radio.py.
+    # the gap. See vibb/radio.py.
     radio.touch_busy()
     radio.wait_paging_clear()
 
-    # Exact resume: tapboxd bookkeeps track+position while Spotify plays
+    # Exact resume: vibbd bookkeeps track+position while Spotify plays
     # (its cloud only resumes for Spotify's own clients). Same context ->
     # play {uri, skip_to_uri, position} keeps the queue intact and lands
     # exactly where we left off in ONE atomic call (fork v0.0.5).
@@ -333,7 +333,7 @@ def main():
     args = sys.argv[1:]
     fresh = False
     reverse = False  # flip the expanded queue (library 'order' override)
-    episode = None   # explicit episode pick from the menu (tapboxd /play)
+    episode = None   # explicit episode pick from the menu (vibbd /play)
     cache_n = None   # library entry cache setting; None = legacy behaviour
     no_resume = False  # library 'from start' setting: never remember position
     exact = False    # output-switch resume: honor even a sub-threshold pos
@@ -452,12 +452,12 @@ def main():
             log(f"continuing at '{titles.get(urls[0]) or urls[0]}' "
                 "(from its start)")
 
-    # Publish the FIRST item before mpv even starts: tapboxd's /status
+    # Publish the FIRST item before mpv even starts: vibbd's /status
     # then serves the right episode name + artwork from the first frame,
     # instead of flashing a raw .mp3 filename and the show cover while
     # mpv loads and the poll loop gets around to its first write.
     # The WHOLE queue map (url -> id/title/image) goes out too: with it,
-    # tapboxd resolves mpv's live path itself, so a track change shows
+    # vibbd resolves mpv's live path itself, so a track change shows
     # the new name the same second the audio changes — no 3s poll gap.
     os.makedirs(STATE_DIR, exist_ok=True)
     now_file = os.path.join(STATE_DIR, "now-playing.json")
@@ -469,7 +469,7 @@ def main():
                            "image": images.get(urls[0]),
                            "paused": False, "duration": None,
                            # where mpv is HEADED: it loads at 0 and only
-                           # then seeks here, so tapboxd holds the display
+                           # then seeks here, so vibbd holds the display
                            # steady at the bookmark until the seek lands
                            # instead of flashing 0:00 -> bookmark on every
                            # start and every reconnect respawn
@@ -487,15 +487,15 @@ def main():
         except OSError:
             pass
 
-    # Fixed socket path so the button daemon (tapbox-buttons) can find us
+    # Fixed socket path so the button daemon (vibb-buttons) can find us
     sock_dir = "/run" if os.access("/run", os.W_OK) else "/tmp"
-    sock = os.environ.get("TAPBOX_MPV_SOCK",
-                          os.path.join(sock_dir, "tapbox-mpv.sock"))
+    sock = os.environ.get("VIBB_MPV_SOCK",
+                          os.path.join(sock_dir, "vibb-mpv.sock"))
     try:
         os.remove(sock)
     except OSError:
         pass
-    # Start at the box volume last set through tapboxd (POST /volume)
+    # Start at the box volume last set through vibbd (POST /volume)
     try:
         with open(os.path.join(STATE_DIR, "volume.json")) as f:
             volume = max(0, min(100, round(json.load(f)["volume"])))
@@ -513,7 +513,7 @@ def main():
         terminated.append(True)
         proc.terminate()
         # A TERM'd mpv blocked in a write to a dead BT transport never
-        # exits — and the poll loop below waits for it, eating tapboxd's
+        # exits — and the poll loop below waits for it, eating vibbd's
         # 10s patience until only this python parent got SIGKILLed and
         # the mpv survived as an orphan HOLDING the bluealsa PCM (field
         # 2026-08-03: 'Device or resource busy' for every later spawn).
@@ -529,7 +529,7 @@ def main():
     signal.signal(signal.SIGTERM, _stop)
 
     # Background episode caching. A library entry's cache setting (--cache N,
-    # passed by tapboxd) decides: 0 = never sync, N = keep the newest N,
+    # passed by vibbd) decides: 0 = never sync, N = keep the newest N,
     # -1 = keep every episode. Without the flag (cards with raw links, CLI)
     # the legacy behaviour stands: NRK podcasts/series sync their newest 50.
     kind = None
@@ -610,7 +610,7 @@ def main():
                     f"{int(spos)}s")
             except OSError:
                 pass
-        from tapbox import bt as _bt
+        from vibb import bt as _bt
         healed = False
         for i in range(120):  # give the output <=10 min to return
             if audio_ready():
@@ -660,7 +660,7 @@ def main():
     # pause state changes, or BM_FLUSH_S has passed; the skipped writes
     # park in bm_pending and flush once when mpv exits, so a clean
     # stop/reboot loses nothing and a yanked battery loses <=30s.
-    bm_flush_s = float(os.environ.get("TAPBOX_BOOKMARK_FLUSH", "30"))
+    bm_flush_s = float(os.environ.get("VIBB_BOOKMARK_FLUSH", "30"))
     bm_last = [0.0, None, None]  # wall clock of last write, path, paused
     bm_pending = None
     while proc.poll() is None:
@@ -698,7 +698,7 @@ def main():
                             log(f"resuming this episode at {int(saved)}s")
                         except OSError:
                             pass
-            # Publish which episode is playing + the pause state (tapboxd
+            # Publish which episode is playing + the pause state (vibbd
             # reads the FILE at shutdown — IPC would race mpv's death);
             # written when the track or pause state changes.
             if path and (path, paused) != last_np:

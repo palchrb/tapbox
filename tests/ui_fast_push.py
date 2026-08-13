@@ -13,9 +13,9 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
-os.environ["TAPBOX_EMOJI"] = "0"
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
+os.environ["VIBB_EMOJI"] = "0"
 
 import ui  # noqa: E402
 from PIL import Image  # noqa: E402
@@ -125,10 +125,10 @@ assert d.disp.windows == 1, "fallback must be permanent, not per-frame"
 assert len(d.disp.displayed) == 2
 print("4. fallback paints the frame and sticks OK")
 
-# 5. TAPBOX_FAST_PUSH=0 is the kill switch (mirrors _fast init)
+# 5. VIBB_FAST_PUSH=0 is the kill switch (mirrors _fast init)
 d2 = object.__new__(ui.St7789Display)
 d2.disp = FakeDisp(FakeSpi())
-d2._fast = False           # what __init__ does under TAPBOX_FAST_PUSH=0
+d2._fast = False           # what __init__ does under VIBB_FAST_PUSH=0
 d2.show(im)
 assert d2.disp.windows == 0 and len(d2.disp.displayed) == 1
 print("5. kill switch goes straight to library display() OK")

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""tapbox-sonos — the Sonos sidecar (UPnP via SoCo, venv python).
+"""vibb-sonos — the Sonos sidecar (UPnP via SoCo, venv python).
 
-tapboxd is stdlib-only on system python; SoCo lives in /opt/tapbox/venv.
-This process bridges the two: a small JSON API on 127.0.0.1 that tapboxd
-drives, same shape as the tapboxd <-> go-librespot split.
+vibbd is stdlib-only on system python; SoCo lives in /opt/vibb/venv.
+This process bridges the two: a small JSON API on 127.0.0.1 that vibbd
+drives, same shape as the vibbd <-> go-librespot split.
 
 Design (three-agent review 2026-08-08/09):
 - THE POLLER LIVES HERE. /state is a memory read of the last snapshot —
   never a live SOAP call. Stall/takeover detection needs a SEQUENCE of
   samples (a cached sample re-served must be tellable from a fresh one),
-  hence the monotonic `seq`. tapboxd's /status must never wait on a
+  hence the monotonic `seq`. vibbd's /status must never wait on a
   sleeping speaker over PS-throttled wifi.
 - ONE session, not per-uid: the box is a single sequencer and renderer.
   /play means "become the session"; other verbs take an optional if_uid
@@ -18,7 +18,7 @@ Design (three-agent review 2026-08-08/09):
   restarted) WITHOUT issuing transport commands — /play would restart
   the episode over music that never stopped.
 - Success/error shapes are a closed set (tests/sonos_contract.py). An
-  unknown condition must land in the conservative branch on the tapboxd
+  unknown condition must land in the conservative branch on the vibbd
   side, so unknown things are never invented here.
 - uid -> ip persists in STATE_DIR/sonos.json: SSDP costs seconds and
   multicast-over-wifi drops; direct SoCo(ip) is the owner's own proven
@@ -51,25 +51,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from xml.sax.saxutils import escape
 
 _here = os.path.dirname(os.path.abspath(__file__))
-for _p in (_here, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_here, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
 
-from tapbox.paths import STATE_DIR  # noqa: E402
+from vibb.paths import STATE_DIR  # noqa: E402
 
-PORT = int(os.environ.get("TAPBOX_SONOS_PORT", "3681"))
+PORT = int(os.environ.get("VIBB_SONOS_PORT", "3681"))
 CACHE_FILE = os.path.join(STATE_DIR, "sonos.json")
-POLL_S = float(os.environ.get("TAPBOX_SONOS_POLL", "5"))
-POLL_PAUSED_S = float(os.environ.get("TAPBOX_SONOS_POLL_PAUSED", "15"))
-POLL_STOPPED_S = float(os.environ.get("TAPBOX_SONOS_POLL_STOPPED", "60"))
+POLL_S = float(os.environ.get("VIBB_SONOS_POLL", "5"))
+POLL_PAUSED_S = float(os.environ.get("VIBB_SONOS_POLL_PAUSED", "15"))
+POLL_STOPPED_S = float(os.environ.get("VIBB_SONOS_POLL_STOPPED", "60"))
 # Mid-track PLAYING cadence (RF audit 2026-08-10 #3): the daemon
 # extrapolates the bar and compensates measurement age, bookmarks are
 # throttled to 25s, and every verb wakes the loop — nothing consumes 5s
 # resolution mid-track. 5s survives only near the track end (boundary
 # detection) and for a settle window after verbs.
-POLL_CRUISE_S = float(os.environ.get("TAPBOX_SONOS_POLL_CRUISE", "15"))
+POLL_CRUISE_S = float(os.environ.get("VIBB_SONOS_POLL_CRUISE", "15"))
 TAIL_FAST_S = 45   # within this many s of track end -> fast cadence
 VERB_FAST_S = 30   # after a verb/arm -> fast cadence (settle machinery)
 AUX_EVERY = 12     # polls between GetVolume/GetZoneGroupState refreshes
@@ -77,7 +77,7 @@ AUX_EVERY = 12     # polls between GetVolume/GetZoneGroupState refreshes
 # the radio doze. Only /play (or /adopt) arms again. Without this, a
 # bedtime story that ended at 21:00 kept the full cadence all night
 # (RF power audit 2026-08-10 #1: ~23k SOAP calls before morning).
-DISARM_AFTER_S = float(os.environ.get("TAPBOX_SONOS_DISARM", "600"))
+DISARM_AFTER_S = float(os.environ.get("VIBB_SONOS_DISARM", "600"))
 # NRK Radio's Sonos service id; its service type = sid*256 + 7
 NRK_SID = 277
 NRK_SVCTYPE = NRK_SID * 256 + 7
@@ -224,7 +224,7 @@ def didl(uri, title, artist=None, album=None, art=None, duration_s=None,
     &amp;amp; you will see on the wire is CORRECT)."""
     proto = protocol or f"http-get:*:{_mime_for(uri)}:*"
     dur = f' duration="{_hms(duration_s)}"' if duration_s else ""
-    tags = [f"<dc:title>{escape(title or 'TapBox')}</dc:title>"]
+    tags = [f"<dc:title>{escape(title or 'Vibb')}</dc:title>"]
     if artist:
         # both forms: different Sonos controller versions read different
         # ones — emitting both ends the guessing
@@ -246,7 +246,7 @@ def didl(uri, title, artist=None, album=None, art=None, duration_s=None,
                     f"{escape(desc)}</desc>")
     tags.append(f'<res protocolInfo="{proto}"{dur}>{escape(uri)}</res>')
     return (f"<DIDL-Lite {DIDL_NS}>"
-            '<item id="tapbox-1" parentID="-1" restricted="true">'
+            '<item id="vibb-1" parentID="-1" restricted="true">'
             + "".join(tags) + "</item></DIDL-Lite>")
 
 
@@ -517,7 +517,7 @@ class Session:
             #                          now that GetVolume rides the slow
             #                          sub-cadence
         elif name == "queue_play":
-            # tapbox owns the logic for EVERY kind now (v2) — this jumps
+            # vibb owns the logic for EVERY kind now (v2) — this jumps
             # the speaker's queue to an absolute 0-based position and
             # optionally seeks. The old delegated next/prev died with v1.
             pos = int(body["index"])
@@ -541,7 +541,7 @@ class Session:
     # -- the poller --
 
     def _classify(self, spk):
-        """One poll -> the fields tapboxd's policy dispatch needs. One
+        """One poll -> the fields vibbd's policy dispatch needs. One
         GetPositionInfo + one GetTransportInfo; volume and group
         topology ride the AUX_EVERY sub-cadence below."""
         pos = spk.avTransport.GetPositionInfo([("InstanceID", 0)])
@@ -852,7 +852,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "bad-request", "detail": str(e)})
         except Exception as e:
             # a SoCoUPnPException lands here too: the speaker said no.
-            # 502 = "speaker problem", never a crash — tapboxd's policy
+            # 502 = "speaker problem", never a crash — vibbd's policy
             # maps it to the conservative branch.
             self._send(502, {"error": "speaker",
                              "detail": f"{e.__class__.__name__}: {e}"})

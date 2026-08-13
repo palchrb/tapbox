@@ -24,7 +24,7 @@ Exports:
                         regression: a blocking Pair never answers and
                         fails via the fake's 15s agent timeout)
   /org/bluealsa         ObjectManager exposing org.bluealsa.PCM1 objects
-  /org/tapbox/mock      control interface (org.tapbox.Mock):
+  /org/vibb/mock      control interface (org.vibb.Mock):
                         AddDevice(mac, name, paired, connected, rssi)
                         SetConnected(mac, bool)  SetPcm(mac, bool)
                         DropDevice(mac)  SetConnectResult(mac, s)
@@ -354,7 +354,7 @@ class BluealsaRoot(dbus.service.Object):
 
 
 class Mock(dbus.service.Object):
-    @dbus.service.method("org.tapbox.Mock", in_signature="ssbbn")
+    @dbus.service.method("org.vibb.Mock", in_signature="ssbbn")
     def AddDevice(self, mac, name, paired, connected, rssi):
         mac = str(mac).upper()
         DEVICES[mac] = {"name": str(name), "paired": bool(paired),
@@ -365,64 +365,64 @@ class Mock(dbus.service.Object):
         ROOT[0].InterfacesAdded(dbus.ObjectPath(dev_path(mac)),
                                 {"org.bluez.Device1": device_props(mac)})
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="sb")
+    @dbus.service.method("org.vibb.Mock", in_signature="sb")
     def SetConnected(self, mac, connected):
         # state change + PropertiesChanged, like real bluez
         DEVICE_OBJS[str(mac).upper()].set_connected(bool(connected))
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="sb")
+    @dbus.service.method("org.vibb.Mock", in_signature="sb")
     def SetPcm(self, mac, present):
         PCMS[str(mac).upper()] = bool(present)
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s")
+    @dbus.service.method("org.vibb.Mock", in_signature="s")
     def DropDevice(self, mac):
         DEVICES.pop(str(mac).upper(), None)
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="ss")
+    @dbus.service.method("org.vibb.Mock", in_signature="ss")
     def SetConnectResult(self, mac, result):
         # 'ok' | 'already-connected' | 'failed'
         DEVICES[str(mac).upper()]["connect_result"] = str(result)
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="ss")
+    @dbus.service.method("org.vibb.Mock", in_signature="ss")
     def SetUuids(self, mac, uuids):
         # space-separated profile UUIDs (adopt checks for Audio Sink)
         DEVICES[str(mac).upper()]["uuids"] = str(uuids).split()
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+    @dbus.service.method("org.vibb.Mock", in_signature="s",
                          out_signature="b")
     def GetTrusted(self, mac):
         return bool(DEVICES[str(mac).upper()].get("trusted", False))
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+    @dbus.service.method("org.vibb.Mock", in_signature="s",
                          out_signature="b")
     def GetConnected(self, mac):
         return bool(DEVICES[str(mac).upper()]["connected"])
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+    @dbus.service.method("org.vibb.Mock", in_signature="s",
                          out_signature="i")
     def GetConnectCount(self, mac):
         return int(DEVICES[str(mac).upper()].get("connects", 0))
 
     # --- phase B controls (PLAN-bt-b2-pairing.md §4) -------------------------
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="ss")
+    @dbus.service.method("org.vibb.Mock", in_signature="ss")
     def SetPairResult(self, mac, results):
         # space-separated queue, one verdict per Pair() call; exhausted
         # queue means "ok" — so "auth-failed ok" IS the stale-key story
         DEVICES[str(mac).upper()]["pair_results"] = str(results).split()
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="ss")
+    @dbus.service.method("org.vibb.Mock", in_signature="ss")
     def SetPairFlow(self, mac, flow):
         # 'just-works' | 'confirm' | 'pin'
         DEVICES[str(mac).upper()]["pair_flow"] = str(flow)
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="sb")
+    @dbus.service.method("org.vibb.Mock", in_signature="sb")
     def SetPairingMode(self, mac, on):
         mac = str(mac).upper()
         tgt = DEVICES.get(mac) or REMOVED.get(mac)
         tgt["pairing_mode"] = bool(on)
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+    @dbus.service.method("org.vibb.Mock", in_signature="s",
                          out_signature="s",
                          async_callbacks=("ok_cb", "err_cb"))
     def SimulateIncomingPair(self, mac, ok_cb=None, err_cb=None):
@@ -471,27 +471,27 @@ class Mock(dbus.service.Object):
         else:
             authorize()
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+    @dbus.service.method("org.vibb.Mock", in_signature="s",
                          out_signature="i")
     def GetPairCount(self, mac):
         mac = str(mac).upper()
         d = DEVICES.get(mac) or REMOVED.get(mac) or {}
         return int(d.get("pairs", 0))
 
-    @dbus.service.method("org.tapbox.Mock", in_signature="s",
+    @dbus.service.method("org.vibb.Mock", in_signature="s",
                          out_signature="i")
     def GetRemoveCount(self, mac):
         return int(REMOVES.get(str(mac).upper(), 0))
 
-    @dbus.service.method("org.tapbox.Mock", out_signature="b")
+    @dbus.service.method("org.vibb.Mock", out_signature="b")
     def GetDiscoverable(self):
         return bool(ADAPTER["Discoverable"])
 
-    @dbus.service.method("org.tapbox.Mock", out_signature="u")
+    @dbus.service.method("org.vibb.Mock", out_signature="u")
     def GetDiscoverableTimeout(self):
         return int(ADAPTER["DiscoverableTimeout"])
 
-    @dbus.service.method("org.tapbox.Mock", out_signature="as")
+    @dbus.service.method("org.vibb.Mock", out_signature="as")
     def GetAgentEvents(self):
         return EVENTS
 
@@ -518,7 +518,7 @@ def main():
     Adapter(BUS, "/org/bluez/hci0")
     AgentManager(BUS, "/org/bluez")  # real bluez: AgentManager1 here
     BluealsaRoot(BUS, "/org/bluealsa")
-    Mock(BUS, "/org/tapbox/mock")
+    Mock(BUS, "/org/vibb/mock")
     BUS.add_signal_receiver(_owner_changed, signal_name="NameOwnerChanged",
                             dbus_interface="org.freedesktop.DBus")
     print("fake-bluezd ready", flush=True)

@@ -21,10 +21,10 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "api-token")
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import ui  # noqa: E402
@@ -96,7 +96,7 @@ print("5. device rows connect the right device (offset survives) OK")
 
 # 6. the screen authenticates as the box: boxapi must attach the token,
 #    or every one of the above becomes a 401 on a real box
-from tapbox import boxapi, token  # noqa: E402
+from vibb import boxapi, token  # noqa: E402
 
 token.ensure()
 sent = {}
@@ -121,7 +121,7 @@ def _fake_urlopen(req, timeout=None):
 boxapi.urllib.request.urlopen = _fake_urlopen
 boxapi.post("/bt/pair", {})
 hdr = {k.lower(): v for k, v in sent.items()}
-assert hdr.get("X-tapbox-token".lower()) == token.read(), \
+assert hdr.get("X-vibb-token".lower()) == token.read(), \
     f"the screen must authenticate to its own API: {sent}"
 print("6. the UI's API calls carry the box token OK")
 

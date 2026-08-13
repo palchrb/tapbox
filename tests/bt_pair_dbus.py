@@ -2,7 +2,7 @@
 """B2 gate (PLAN-bt-b2-pairing.md §4): pairing over D-Bus with our own
 Agent1 must classify identically to the bluetoothctl path, must never
 deadlock on agent callbacks (the legacy-PIN trap, parent plan §9.1),
-must stay OFF by default (TAPBOX_BT_PAIR kill switch), and must never
+must stay OFF by default (VIBB_BT_PAIR kill switch), and must never
 leak the agent registration.
 
 Run ON THE RIG:   python3 tests/bt_pair_dbus.py
@@ -24,7 +24,7 @@ GO = "30:C0:1B:BD:13:B2"
 GHOST = "AA:AA:AA:AA:AA:AA"
 
 sys.path.insert(0, os.path.join(REPO, "pi"))
-from tapbox import btbus  # noqa: E402
+from vibb import btbus  # noqa: E402
 
 # one expectation table drives BOTH the unit rows and the bus matrix —
 # the fixtures cannot drift apart silently
@@ -89,7 +89,7 @@ def run_snippet(env, code, timeout=120):
 PAIR_SNIPPET = f"""
 import json, sys
 sys.path.insert(0, {json.dumps(os.path.join(REPO, "pi"))})
-from tapbox import btbus
+from vibb import btbus
 v, detail = btbus.pair({json.dumps(GO)})
 print(json.dumps({{"verdict": v, "detail": detail,
                    "backend": btbus.backend()}}))
@@ -99,9 +99,9 @@ CLI_EXPECT = {"ok": btbus.PAIR_OK, "already": btbus.PAIR_ALREADY,
               "auth": btbus.PAIR_AUTH_FAILED,
               "notavail": btbus.PAIR_NOT_AVAILABLE,
               "failed": btbus.PAIR_ERROR}
-env_cli = dict(os.environ, TAPBOX_BT_BACKEND="cli",
+env_cli = dict(os.environ, VIBB_BT_BACKEND="cli",
                PATH=BIN + ":" + os.environ["PATH"])
-env_cli.pop("TAPBOX_BT_PAIR", None)
+env_cli.pop("VIBB_BT_PAIR", None)
 for mode, want in CLI_EXPECT.items():
     with open(MODE, "w") as f:
         f.write(mode)
@@ -115,7 +115,7 @@ with open(MODE, "w") as f:
     f.write("ok")
 snap, _out = run_snippet(env_cli, PAIR_SNIPPET)
 assert "pair" in open(CTL_LOG).read(), "cli fork did not run"
-print("3. TAPBOX_BT_PAIR unset -> bluetoothctl path used OK")
+print("3. VIBB_BT_PAIR unset -> bluetoothctl path used OK")
 
 
 # --- the dbus matrix (private bus + fake_bluezd) -----------------------------
@@ -138,11 +138,11 @@ fake = subprocess.Popen(
     stdout=subprocess.PIPE, text=True)
 assert "ready" in fake.stdout.readline()
 CALL = ["dbus-send", "--bus=" + addr, "--print-reply",
-        "--dest=org.bluez", "--type=method_call", "/org/tapbox/mock"]
+        "--dest=org.bluez", "--type=method_call", "/org/vibb/mock"]
 
 
 def mock(method, *args, parse=None):
-    r = subprocess.run(CALL + [f"org.tapbox.Mock.{method}", *args],
+    r = subprocess.run(CALL + [f"org.vibb.Mock.{method}", *args],
                        check=True, capture_output=True, text=True)
     if parse == "int":
         return int(re.search(r"int32 (-?\d+)", r.stdout).group(1))
@@ -162,12 +162,12 @@ def events():
 
 
 def env_dbus(**extra):
-    env = dict(os.environ, TAPBOX_BT_BACKEND="dbus",
-               DBUS_SYSTEM_BUS_ADDRESS=addr, TAPBOX_BT_PAIR="dbus",
-               TAPBOX_BT_FILE=os.path.join(TMP, "bt-mac"),
-               TAPBOX_BT_LOCKFILE=os.path.join(TMP, "bt.lock"),
-               TAPBOX_ASOUND=os.path.join(TMP, "asound.conf"),
-               TAPBOX_BT_CACHE_SECS="1", TAPBOX_SCAN_SECS="1",
+    env = dict(os.environ, VIBB_BT_BACKEND="dbus",
+               DBUS_SYSTEM_BUS_ADDRESS=addr, VIBB_BT_PAIR="dbus",
+               VIBB_BT_FILE=os.path.join(TMP, "bt-mac"),
+               VIBB_BT_LOCKFILE=os.path.join(TMP, "bt.lock"),
+               VIBB_ASOUND=os.path.join(TMP, "asound.conf"),
+               VIBB_BT_CACHE_SECS="1", VIBB_SCAN_SECS="1",
                PATH=BIN + ":" + os.environ["PATH"])
     env.update(extra)
     return env
@@ -232,7 +232,7 @@ try:
          "boolean:false", "int16:0")
     mock("SetPairResult", f"string:{GO}", "string:already")
     mock("SetPcm", f"string:{GO}", "boolean:true")
-    r = subprocess.run([sys.executable, os.path.join(REPO, "pi", "tapbox",
+    r = subprocess.run([sys.executable, os.path.join(REPO, "pi", "vibb",
                                                      "bt.py"), "use", GO],
                        env=env_dbus(), capture_output=True, text=True,
                        timeout=120)
@@ -251,7 +251,7 @@ try:
     mock("SetPairingMode", f"string:{GO}", "boolean:true")
     mock("SetPairResult", f"string:{GO}", "string:auth-failed ok")
     removes0 = mock("GetRemoveCount", f"string:{GO}", parse="int")
-    r = subprocess.run([sys.executable, os.path.join(REPO, "pi", "tapbox",
+    r = subprocess.run([sys.executable, os.path.join(REPO, "pi", "vibb",
                                                      "bt.py"), "use", GO],
                        env=env_dbus(), capture_output=True, text=True,
                        timeout=120)
@@ -263,7 +263,7 @@ try:
     print("10. stale-key clear-and-retry runs exactly once OK")
 
     # 11. never-seen device: no bond cleared, guidance printed
-    r = subprocess.run([sys.executable, os.path.join(REPO, "pi", "tapbox",
+    r = subprocess.run([sys.executable, os.path.join(REPO, "pi", "vibb",
                                                      "bt.py"), "use", GHOST],
                        env=env_dbus(), capture_output=True, text=True,
                        timeout=120)
@@ -280,7 +280,7 @@ try:
         f.write("ok")
     pairs_before = mock("GetPairCount", f"string:{GO}", parse="int")
     env_off = env_dbus()
-    env_off.pop("TAPBOX_BT_PAIR")
+    env_off.pop("VIBB_BT_PAIR")
     snap, _out = run_snippet(env_off, PAIR_SNIPPET)
     assert snap["verdict"] == btbus.PAIR_OK, snap
     assert "pair" in open(CTL_LOG).read(), "expected the bluetoothctl fork"
@@ -291,7 +291,7 @@ try:
     # 13. bus-down degrade: dbus pair falls back to cli, loudly
     open(CTL_LOG, "w").close()
     env_dead = env_dbus(DBUS_SYSTEM_BUS_ADDRESS="unix:path=/nonexistent",
-                        TAPBOX_DBUS_ADDRESS="unix:path=/nonexistent")
+                        VIBB_DBUS_ADDRESS="unix:path=/nonexistent")
     snap, out = run_snippet(env_dead, PAIR_SNIPPET)
     assert snap["verdict"] == btbus.PAIR_OK, snap
     assert "cli fallback" in out, out

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# pipod installer — DRAFT, additive on top of TapBox (../pi/install.sh).
-# Does NOT modify anything in ../pi. Run the base TapBox install first.
+# pipod installer — DRAFT, additive on top of Vibb (../pi/install.sh).
+# Does NOT modify anything in ../pi. Run the base Vibb install first.
 #
 #   sudo ./install-pipod.sh audio      write the pipod I2S+SPI config.txt
 #                                       block (hifiberry-dac WITHOUT gpio=25,
@@ -27,7 +27,7 @@ do_audio() {
     cat >> "$boot" <<'EOF'
 
 # pipod audio: I2S DAC (PCM5102, XSMT tied high => NO gpio=25 enable line,
-# so BCM25 remains the click wheel Data pin). Same overlay TapBox output.py
+# so BCM25 remains the click wheel Data pin). Same overlay Vibb output.py
 # expects for the "local" pcm.
 dtparam=i2s=on
 dtoverlay=hifiberry-dac
@@ -35,7 +35,7 @@ dtoverlay=hifiberry-dac
 dtparam=spi=on
 EOF
     echo "wrote pipod audio+spi block to $boot (reboot to apply)"
-    echo "NOTE: leave dtparam=audio=on OFF; do NOT run 'tapbox-power hat-audio-on'"
+    echo "NOTE: leave dtparam=audio=on OFF; do NOT run 'vibb-power hat-audio-on'"
     echo "      (it adds gpio=25=op,dh which collides with the wheel Data pin)."
   fi
 }
@@ -62,7 +62,7 @@ EOF
   cat > /etc/systemd/system/pipod-ui.service <<EOF
 [Unit]
 Description=pipod screen UI + wheel router
-After=pipod-wheel.service tapbox-daemon.service
+After=pipod-wheel.service vibb-daemon.service
 Wants=pipod-wheel.service
 [Service]
 ExecStart=/usr/bin/python3 $HERE/src/podui.py

@@ -1,19 +1,19 @@
 # pipod
 
-A **real Apple iPod** reborn as a TapBox player: gut a 4th-gen/Photo iPod,
+A **real Apple iPod** reborn as a Vibb player: gut a 4th-gen/Photo iPod,
 drop in a **Pi Zero 2 W + PiSugar 3**, keep the **original click wheel** as
 the controller, fit a small **TFT** with an iPod-style scrolling UI, and
-play out a **3.5 mm jack *or* Bluetooth** — running TapBox's existing
+play out a **3.5 mm jack *or* Bluetooth** — running Vibb's existing
 Spotify/podcast backend.
 
-Think of pipod as a **TapBox variant**, not a rewrite: the whole backend
-(go-librespot fork, mpv, the `tapbox` package, PiSugar tooling in
+Think of pipod as a **Vibb variant**, not a rewrite: the whole backend
+(go-librespot fork, mpv, the `vibb` package, PiSugar tooling in
 `../pi/`) is reused unchanged. pipod only adds a wheel reader, an
 iPod-style UI, and a Hold-switch daemon. **Nothing in `../pi` is modified.**
 
 Inspired by Guy Dupont's "sPot"
 ([dupontgu/retro-ipod-spotify-client](https://github.com/dupontgu/retro-ipod-spotify-client)),
-but backed by TapBox and with a wired jack + BT + Hold-as-power.
+but backed by Vibb and with a wired jack + BT + Hold-as-power.
 
 ## Status
 
@@ -26,7 +26,7 @@ but backed by TapBox and with a wired jack + BT + Hold-as-power.
    protocol, which iPod to buy, fitting the boards, audio-out options, and
    the Hold switch. Start here — §0 is the decision that drives everything.
 2. **[HARDWARE.md](./HARDWARE.md)** — BOM, GPIO pin map, wiring, boot config.
-3. **[SOFTWARE.md](./SOFTWARE.md)** — what's reused from TapBox vs. built
+3. **[SOFTWARE.md](./SOFTWARE.md)** — what's reused from Vibb vs. built
    new, the install flow, and build milestones.
 
 ## The three decisions baked in
@@ -36,9 +36,9 @@ but backed by TapBox and with a wired jack + BT + Hold-as-power.
   6G/7G (those are 14-pin, no turnkey driver — RESEARCH §0/§1). With the
   bare-LiPo power path a thin shell is fine; only the PiSugar alt forces a
   thick shell (e.g. Photo 60 GB).
-- **Jack *and* BT, switchable.** TapBox's `output.py` already models exactly
+- **Jack *and* BT, switchable.** Vibb's `output.py` already models exactly
   `local` (I²S jack) + `bt` — so this is mostly free (RESEARCH §3, SOFTWARE).
-- **TFT + wheel navigation.** New scrolling UI (`src/podui.py`); TapBox's
+- **TFT + wheel navigation.** New scrolling UI (`src/podui.py`); Vibb's
   4-button `ui.py` is the wrong paradigm but donates its art-cache/marquee.
 - **Power: bare LiPo + PowerBoost 1000C + MAX17048 gauge** (primary) — bigger
   battery, thinner fit, latching Hold→`EN` = clean on/off, battery % over
@@ -66,7 +66,7 @@ pipod/
 ## Quick start (once you have the parts)
 
 ```
-sudo ../pi/install.sh            # base TapBox backend (unchanged)
+sudo ../pi/install.sh            # base Vibb backend (unchanged)
 sudo ./install-pipod.sh all      # pipod overlay + wheel/ui/hold services
 sudo reboot
 # then: PWA → Player → Audio out → Built-in   (routes to the jack)

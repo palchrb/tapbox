@@ -2,7 +2,7 @@
 """Gate the bookmark SD-write throttle: the 5s Spotify bookmarker tick
 used to json+rename onto the SD card every tick — 720 write bursts per
 listening hour (energy audit 2026-07-20 #2). Now: write on track
-change, every TAPBOX_BOOKMARK_FLUSH seconds otherwise, and the moment
+change, every VIBB_BOOKMARK_FLUSH seconds otherwise, and the moment
 the session stops yielding bookmarks (pause/stop/phone takeover) the
 last throttled position flushes — pausing still bookmarks the pause
 point, and only a hard power cut can lose <=30s of position."""
@@ -12,10 +12,10 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -41,7 +41,7 @@ def st(uri, pos=1000, paused=False):
 
 
 def run_bm(states, flush="30"):
-    os.environ["TAPBOX_BOOKMARK_FLUSH"] = flush
+    os.environ["VIBB_BOOKMARK_FLUSH"] = flush
     SAVES.clear()
     ticks = list(states)
 

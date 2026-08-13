@@ -12,12 +12,12 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
-os.environ["TAPBOX_BT_KICK"] = os.path.join(TMP, "bt-kick")
-os.environ["TAPBOX_BT_QUIET"] = os.path.join(TMP, "bt-quiet")
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
+os.environ["VIBB_BT_KICK"] = os.path.join(TMP, "bt-kick")
+os.environ["VIBB_BT_QUIET"] = os.path.join(TMP, "bt-quiet")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 # stub dbus/gi (same shim as bt_quiet_park.py)

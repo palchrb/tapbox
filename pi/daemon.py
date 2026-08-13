@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tapboxd — TapBox orchestration daemon: one authority for playback.
+"""vibbd — Vibb orchestration daemon: one authority for playback.
 
 Owns the answer to "what is playing / what played last" and routes all
 commands, so cards, buttons, the CLI and (later) the parent PWA behave
@@ -43,7 +43,7 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /spotify/logout   forget the Spotify login (drop credentials +
                          restart go-librespot) — the new account then picks
                          the box under Devices in the Spotify app
-  POST /wifi/hotspot  {"enabled": bool} — the setup hotspot (TapBox-<host>).
+  POST /wifi/hotspot  {"enabled": bool} — the setup hotspot (Vibb-<host>).
                       Also auto-starts on fresh boxes: no saved wifi network
                       and nothing connected. A :80 redirect server + wildcard
                       DNS (dnsmasq-shared.d) pops the phone's captive portal
@@ -69,7 +69,7 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /bt/rename  {"mac", "name"} — custom display name (blank resets);
                    shows in the PWA + on the screen (BlueZ Device1.Alias)
 
-The library lives in /etc/tapbox/library.json ON THE BOX — menus must
+The library lives in /etc/vibb/library.json ON THE BOX — menus must
 render (and cached content must play) with no internet at all. A future
 parent cloud service is a sync mirror of this file, never the source.
 
@@ -104,21 +104,21 @@ import urllib.error
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# The tapbox package sits next to this script in the repo, or under
-# /usr/local/lib/tapbox-py when installed. Repo wins; exactly one is used.
+# The vibb package sits next to this script in the repo, or under
+# /usr/local/lib/vibb-py when installed. Repo wins; exactly one is used.
 _here = os.path.dirname(os.path.abspath(__file__))
-for _p in (_here, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_here, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import content, mpv as _mpv, spotify as _spotify  # noqa: E402
-from tapbox import renderer as _renderer  # noqa: E402 — sonos axis+client
-from tapbox import spotify_web as _spotify_web  # noqa: E402
-from tapbox.bookmarks import (episode_pos as _bm_episode_pos,  # noqa: E402
+from vibb import content, mpv as _mpv, spotify as _spotify  # noqa: E402
+from vibb import renderer as _renderer  # noqa: E402 — sonos axis+client
+from vibb import spotify_web as _spotify_web  # noqa: E402
+from vibb.bookmarks import (episode_pos as _bm_episode_pos,  # noqa: E402
                               load_state as _bm_load,
                               save_state as _bm_save)
-from tapbox.paths import (  # noqa: E402
+from vibb.paths import (  # noqa: E402
     ART_DIR, MEDIA_DIR, RUN_DIR, STATE_DIR, clock_trusted,
     go_restarted_within,
     note_go_restart)
@@ -168,16 +168,16 @@ def _queue_map():
         except (OSError, ValueError):
             return None
     return _QUEUE_CACHE["data"]
-PORT = int(os.environ.get("TAPBOX_PORT", "3679"))
-PORTAL_PORT = int(os.environ.get("TAPBOX_PORTAL_PORT", "80"))
-# The parent PWA is served to the LAN (http://tapbox.local:3679). Keep this
+PORT = int(os.environ.get("VIBB_PORT", "3679"))
+PORTAL_PORT = int(os.environ.get("VIBB_PORTAL_PORT", "80"))
+# The parent PWA is served to the LAN (http://vibb.local:3679). Keep this
 # port firewalled from the internet — the API is deliberately auth-less on
 # the home network (a PIN gate is a product-phase addition).
-BIND = os.environ.get("TAPBOX_BIND", "0.0.0.0")
+BIND = os.environ.get("VIBB_BIND", "0.0.0.0")
 # restart playback when it claims to play but makes no progress this long
-STALL_S = float(os.environ.get("TAPBOX_STALL_S", "30"))
+STALL_S = float(os.environ.get("VIBB_STALL_S", "30"))
 # how often the stall watchdog samples position + radio TX counters
-STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
+STALL_POLL_S = float(os.environ.get("VIBB_STALL_POLL", "5"))
 # frozen-position stalls on the BT output escalate to a link rebuild on
 # the Nth CONSECUTIVE one (field 2026-08-03: a headset died without the
 # chip ever reporting the disconnect — bluez kept listing the transport,
@@ -185,35 +185,35 @@ STALL_POLL_S = float(os.environ.get("TAPBOX_STALL_POLL", "5"))
 # 'Consecutive' anchors on the freeze POINT, not the exact position: each
 # respawn resumes ~3s earlier from the bookmark, so equality never holds;
 # progress PAST the anchor by FREEZE_PROGRESS_S is what proves life.
-FREEZE_ESCALATE = int(os.environ.get("TAPBOX_FREEZE_ESCALATE", "2"))
-FREEZE_PROGRESS_S = float(os.environ.get("TAPBOX_FREEZE_PROGRESS", "10"))
+FREEZE_ESCALATE = int(os.environ.get("VIBB_FREEZE_ESCALATE", "2"))
+FREEZE_PROGRESS_S = float(os.environ.get("VIBB_FREEZE_PROGRESS", "10"))
 # resume-position display hold (see Orchestrator._settle_position): a
 # bookmark below RESUME_MIN_S is never resumed, so nothing to hold; the
 # hold releases once live is within TOL of the target, and never lasts
 # longer than MAX_S after spawn
-RESUME_MIN_S = float(os.environ.get("TAPBOX_RESUME_MIN", "20"))
-POSITION_SETTLE_MAX_S = float(os.environ.get("TAPBOX_SETTLE_MAX", "20"))
-POSITION_SETTLE_TOL_S = float(os.environ.get("TAPBOX_SETTLE_TOL", "3"))
+RESUME_MIN_S = float(os.environ.get("VIBB_RESUME_MIN", "20"))
+POSITION_SETTLE_MAX_S = float(os.environ.get("VIBB_SETTLE_MAX", "20"))
+POSITION_SETTLE_TOL_S = float(os.environ.get("VIBB_SETTLE_TOL", "3"))
 # boot resume: silent grace before the speaker popup, and the wait tick
-BOOT_GRACE_S = float(os.environ.get("TAPBOX_BOOT_GRACE", "25"))
-BOOT_TICK_S = float(os.environ.get("TAPBOX_BOOT_TICK", "2"))
+BOOT_GRACE_S = float(os.environ.get("VIBB_BOOT_GRACE", "25"))
+BOOT_TICK_S = float(os.environ.get("VIBB_BOOT_TICK", "2"))
 # a spotify session that reads 'empty' right after a timed-out control is
 # very likely a SLOW TRACK LOAD, not a finished album — hold skips off the
 # replay fallback for this long after any control timeout
-SPOT_TIMEOUT_HOLD_S = float(os.environ.get("TAPBOX_SPOT_TIMEOUT_HOLD", "30"))
+SPOT_TIMEOUT_HOLD_S = float(os.environ.get("VIBB_SPOT_TIMEOUT_HOLD", "30"))
 # and even without a recent timeout, re-read an 'empty' session after this
 # beat before concluding the album truly ended (mid-load blips resolve)
-EMPTY_RECHECK_S = float(os.environ.get("TAPBOX_EMPTY_RECHECK", "2"))
+EMPTY_RECHECK_S = float(os.environ.get("VIBB_EMPTY_RECHECK", "2"))
 # how long after a spawn to trust player.py's published paused-state while
 # mpv's IPC socket is still coming up (the ~1-3s tap->audio window), so the
 # screen shows 'playing' at once instead of a dead card
-MPV_START_GRACE_S = float(os.environ.get("TAPBOX_MPV_START_GRACE", "12"))
+MPV_START_GRACE_S = float(os.environ.get("VIBB_MPV_START_GRACE", "12"))
 # how long after the daemon starts to prewarm mpv's decode path (idle, off
 # the boot rush) so the first human play hits a warm page cache
-PREWARM_DELAY_S = float(os.environ.get("TAPBOX_PREWARM_DELAY", "15"))
-WEB_DIR = os.environ.get("TAPBOX_WEB") or (
+PREWARM_DELAY_S = float(os.environ.get("VIBB_PREWARM_DELAY", "15"))
+WEB_DIR = os.environ.get("VIBB_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
-    else "/usr/share/tapbox/web")
+    else "/usr/share/vibb/web")
 
 
 def _tick(seconds):
@@ -226,34 +226,34 @@ def _tick(seconds):
 
 
 def log(msg):
-    print(f"tapboxd: {msg}", flush=True)
+    print(f"vibbd: {msg}", flush=True)
 
 
 def player_path():
     p = os.path.join(_here, "player.py")
-    return p if os.path.exists(p) else "/usr/local/bin/tapbox-player"
+    return p if os.path.exists(p) else "/usr/local/bin/vibb-player"
 
 
-# --- moved to the tapbox package; aliases keep internal call sites and the
+# --- moved to the vibb package; aliases keep internal call sites and the
 # --- tests' daemon.<name> monkeypatching working unchanged ----------------------
 
-from tapbox import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
-from tapbox import token as _token  # noqa: E402 — privileged-endpoint gate
-from tapbox import library as _library  # noqa: E402 — BUSY_CHECK wiring
-from tapbox import radio as _radio  # noqa: E402 — shared-radio yield markers
-from tapbox.library import (  # noqa: E402
+from vibb import bt as _bt, btbus, netmgmt as _netmgmt  # noqa: E402
+from vibb import token as _token  # noqa: E402 — privileged-endpoint gate
+from vibb import library as _library  # noqa: E402 — BUSY_CHECK wiring
+from vibb import radio as _radio  # noqa: E402 — shared-radio yield markers
+from vibb.library import (  # noqa: E402
     artwork_allowed, expand_target, find_entry, library_with_covers,
     load_library, normalize_library, save_library, state_key, _cache_sweeper,
     _natural_order, _sync_wake)
-from tapbox.netmgmt import (  # noqa: E402
+from vibb.netmgmt import (  # noqa: E402
     HOTSPOT_PSK, HOTSPOT_SSID, set_wifi, start_hotspot,
     stop_hotspot, wifi_add, wifi_connect, wifi_forget, wifi_reconnect,
     wifi_scan, wifi_state, _wifi_watchdog)
-from tapbox.output import (  # noqa: E402
+from vibb.output import (  # noqa: E402
     OUTPUT_PCMS, OUT_FILE, audio_ready, current_output, _i2s_card_present,
     reopen_go_output, _retarget_go_librespot)
-from tapbox import sysinfo as _sysinfo  # noqa: E402 — cache-size invalidation
-from tapbox.sysinfo import (  # noqa: E402
+from vibb import sysinfo as _sysinfo  # noqa: E402 — cache-size invalidation
+from vibb.sysinfo import (  # noqa: E402
     load_settings, plugged_cached, shutdown, system_status,
     update_settings, _battery_runtime_tracker)
 
@@ -1057,7 +1057,7 @@ class Orchestrator:
         return {"source": "sonos", "target": self.target, "index": idx}
 
     def _sonos_start_spotify(self, target, rd, episode=None):
-        """v2: tapbox owns the LOGIC, the Sonos merely holds the queue.
+        """v2: vibb owns the LOGIC, the Sonos merely holds the queue.
         ONE ShareLink add of the whole context, then positional jumps.
         Queue/metadata come from go-librespot's cached context listing —
         the same source as the box's song picker, so the screen behaves
@@ -2424,8 +2424,8 @@ def _net_changed():
 
 
 _netmgmt.net_changed[0] = _net_changed
-NET_HEAL_COOLDOWN_S = float(os.environ.get("TAPBOX_NET_HEAL_COOLDOWN", "60"))
-NET_IP_POLL_S = float(os.environ.get("TAPBOX_NET_IP_POLL", "15"))
+NET_HEAL_COOLDOWN_S = float(os.environ.get("VIBB_NET_HEAL_COOLDOWN", "60"))
+NET_IP_POLL_S = float(os.environ.get("VIBB_NET_IP_POLL", "15"))
 
 
 def _wlan_ip():
@@ -2642,7 +2642,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def _token_ok(self):
-        return _token.verify(self.headers.get("X-TapBox-Token"))
+        return _token.verify(self.headers.get("X-Vibb-Token"))
 
     def _path_is_safe(self):
         allow = SAFE.get(self.command)
@@ -2680,7 +2680,7 @@ class Handler(BaseHTTPRequestHandler):
         target). False means a 401 has already been sent."""
         if not REQUIRE_TOKEN or self._token_ok():
             return True
-        self._deny("token_invalid" if self.headers.get("X-TapBox-Token")
+        self._deny("token_invalid" if self.headers.get("X-Vibb-Token")
                    else "token_required")
         return False
 
@@ -3166,7 +3166,7 @@ SAFE = {
     "HEAD": True,
     # Playback only. The worst a LAN prankster can do with these is annoy
     # somebody, and keeping them open is what lets the phone shortcut
-    # ("Hey Siri, pause TapBox") work with no setup at all.
+    # ("Hey Siri, pause Vibb") work with no setup at all.
     # /play is here for its {"id": ...} form; a RAW target is checked
     # separately inside the handler (it can put arbitrary content in a
     # kid's room, so it needs the token).
@@ -3178,7 +3178,7 @@ SAFE = {
 }
 # Recovery valve for a box whose screen is broken. Documented in
 # SECURITY.md, never shipped enabled.
-REQUIRE_TOKEN = os.environ.get("TAPBOX_REQUIRE_TOKEN", "1") != "0"
+REQUIRE_TOKEN = os.environ.get("VIBB_REQUIRE_TOKEN", "1") != "0"
 
 _DENY_LOG = {"at": 0.0, "n": 0}
 
@@ -3202,7 +3202,7 @@ def _gate(fn):
         if not self._authorized():
             return
         return fn(self)
-    wrapper._tapbox_gated = True
+    wrapper._vibb_gated = True
     return wrapper
 
 
@@ -3222,15 +3222,15 @@ for _name in [n for n in list(vars(Handler)) if n.startswith("do_")]:
 # Books run 150-400MB, ~10x a podcast episode, so a full card is a REAL
 # failure mode here — and a full card takes the whole box down, not just
 # the upload. Refuse below the floor rather than filling it.
-MEDIA_FREE_FLOOR = int(os.environ.get("TAPBOX_MEDIA_FREE_FLOOR",
+MEDIA_FREE_FLOOR = int(os.environ.get("VIBB_MEDIA_FREE_FLOOR",
                                       str(1_500_000_000)))
-MEDIA_MAX_BYTES = int(os.environ.get("TAPBOX_MEDIA_MAX_BYTES",
+MEDIA_MAX_BYTES = int(os.environ.get("VIBB_MEDIA_MAX_BYTES",
                                      str(2_000_000_000)))
 MEDIA_EXTS = (".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav",
               ".jpg", ".jpeg", ".png")  # audio + cover art
 
 
-MEDIA_META = ".tapbox-meta.json"
+MEDIA_META = ".vibb-meta.json"
 
 
 def _media_probe(path):
@@ -3418,7 +3418,7 @@ _SPOT_LAST_PLAYING = [False]
 # leaving boot-resume to continue from a stale spot. _on_term flushes this.
 _SPOT_PENDING_BM = [None]
 
-SONOS_POLL_S = float(os.environ.get("TAPBOX_SONOS_POLL", "5"))
+SONOS_POLL_S = float(os.environ.get("VIBB_SONOS_POLL", "5"))
 
 
 def _sonos_poller():
@@ -3444,7 +3444,7 @@ def _sonos_poller():
                     ORCH.sonos_snap = snap
                     ORCH.sonos_snap_at = time.monotonic()
                 # rebuild the queue view for the screen (ids/titles);
-                # adopt tells the sidecar we are its tapboxd again
+                # adopt tells the sidecar we are its vibbd again
                 if ORCH.target and not is_spotify(ORCH.target):
                     try:
                         ORCH.sonos_queue = [
@@ -3617,7 +3617,7 @@ def _spotify_bookmarker():
     # stops yielding a bookmark (pause/stop/phone takeover) the last
     # throttled position flushes immediately — pausing still bookmarks
     # the pause point, and only a hard power cut can lose <=30s.
-    bm_flush_s = float(os.environ.get("TAPBOX_BOOKMARK_FLUSH", "30"))
+    bm_flush_s = float(os.environ.get("VIBB_BOOKMARK_FLUSH", "30"))
     bm_written = [0.0, None]  # wall clock of last write, track uri
     bm_pending = None
     while True:
@@ -3670,7 +3670,7 @@ def _spotify_bookmarker():
 
 
 def _audio_ready():
-    return audio_ready()  # shared logic lives in tapbox.output
+    return audio_ready()  # shared logic lives in vibb.output
 
 
 def _bt_recover(verb):
@@ -3711,12 +3711,12 @@ _BT_HEAL = {"lock": threading.Lock(), "last": 0.0}
 # 2026-07-24 #2). A short success cooldown heals the second crash fast
 # while capping the loop rate.
 BT_HEAL_SUCCESS_COOLDOWN_S = float(
-    os.environ.get("TAPBOX_BT_HEAL_OK_COOLDOWN", "45"))
-BT_HEAL_COOLDOWN_S = float(os.environ.get("TAPBOX_BT_HEAL_COOLDOWN", "300"))
+    os.environ.get("VIBB_BT_HEAL_OK_COOLDOWN", "45"))
+BT_HEAL_COOLDOWN_S = float(os.environ.get("VIBB_BT_HEAL_COOLDOWN", "300"))
 # A clean probe re-checks once after this long — the command-timeout
 # wedge signature needs ~50s to reach _hci_crashed's threshold (see the
 # clean-exit comment below), so the delay must comfortably clear that.
-BT_HEAL_REPROBE_S = float(os.environ.get("TAPBOX_BT_HEAL_REPROBE", "90"))
+BT_HEAL_REPROBE_S = float(os.environ.get("VIBB_BT_HEAL_REPROBE", "90"))
 
 
 def _heal_crashed_controller(rearm=True):
@@ -3829,24 +3829,24 @@ _BT_WAIT_LOCK = threading.Lock()  # status threads + the watcher tick
 # restart per reconnect is enough: the rest just wait for the API.
 _GO_REBUILD = {"at": 0.0}
 _GO_REBUILD_LOCK = threading.Lock()
-GO_REBUILD_COOLDOWN_S = float(os.environ.get("TAPBOX_GO_REBUILD_COOLDOWN", "8"))
-BT_WAIT_TICK_S = float(os.environ.get("TAPBOX_BT_WAIT_TICK", "3"))
-BT_WAIT_S = float(os.environ.get("TAPBOX_BT_WAIT_S", "180"))
+GO_REBUILD_COOLDOWN_S = float(os.environ.get("VIBB_GO_REBUILD_COOLDOWN", "8"))
+BT_WAIT_TICK_S = float(os.environ.get("VIBB_BT_WAIT_TICK", "3"))
+BT_WAIT_S = float(os.environ.get("VIBB_BT_WAIT_S", "180"))
 # /status must stay snappy for the 1/s screen poll; go-librespot can hang
 # a few seconds mid-restart, so cap how long its status query may block
-GO_ST_HOLD_S = float(os.environ.get("TAPBOX_GO_ST_HOLD", "5"))
-GO_STATUS_TIMEOUT = float(os.environ.get("TAPBOX_GO_STATUS_TIMEOUT", "1.5"))
+GO_ST_HOLD_S = float(os.environ.get("VIBB_GO_ST_HOLD", "5"))
+GO_STATUS_TIMEOUT = float(os.environ.get("VIBB_GO_STATUS_TIMEOUT", "1.5"))
 # mpv now-view: go-librespot only fills the (PWA-only) spotify sub-dict, so
 # probe it with a short timeout instead of blocking the screen wake ~1.5s.
-GO_ST_MPV_TIMEOUT = float(os.environ.get("TAPBOX_GO_ST_MPV_TIMEOUT", "0.3"))
-BT_READY_FLASH_S = float(os.environ.get("TAPBOX_BT_READY_FLASH", "20"))
+GO_ST_MPV_TIMEOUT = float(os.environ.get("VIBB_GO_ST_MPV_TIMEOUT", "0.3"))
+BT_READY_FLASH_S = float(os.environ.get("VIBB_BT_READY_FLASH", "20"))
 # auto-resume window after an auto-stop. 150s (not 30): a speaker OFF/ON
 # cycle takes 20-60s to re-establish A2DP (own reconnect flaps during its
 # boot, btwatchd's ladder runs 20-40s) — field log 2026-07-17 19:02 landed
 # at 51s and got the press-A popup instead of just continuing. Within the
 # popup's own lifetime the loss is recent and someone is present; beyond
 # BT_WAIT_S the lost state has expired and NOTHING resumes by itself.
-BT_RESUME_S = float(os.environ.get("TAPBOX_BT_RESUME_S", "150"))
+BT_RESUME_S = float(os.environ.get("VIBB_BT_RESUME_S", "150"))
 
 
 def _bt_blip_resume():
@@ -3972,7 +3972,7 @@ def _go_output_rebuild():
 
     Comes back on the CURRENT output device. Switching the output to bt
     while audio played on the built-in speaker leaves go-librespot's
-    config on tapbox_local (the switch is deferred until the transport
+    config on vibb_local (the switch is deferred until the transport
     exists) — a plain restart would resume on the built-in one, so the
     kid pressed reconnect and it kept playing there, needing a manual
     bt/local toggle to move to the headset (field 2026-07-17). Retarget
@@ -4155,7 +4155,7 @@ def _kick_bt_connect():
 
 def _internet_up():
     """Actual-internet probe — shared with player/content via radio.py
-    (env TAPBOX_PROBE_ADDR). Kept as a daemon-level name: tests patch
+    (env VIBB_PROBE_ADDR). Kept as a daemon-level name: tests patch
     daemon._internet_up."""
     return _radio.internet_up(2)
 
@@ -4180,13 +4180,13 @@ def _spotify_supervisor():
     output switch rewrote its config) get re-parked on the next tick."""
     parked = False
     misses = 0
-    park_grace_s = float(os.environ.get("TAPBOX_SPOT_PARK_GRACE", "180"))
+    park_grace_s = float(os.environ.get("VIBB_SPOT_PARK_GRACE", "180"))
     # Two cadences (review P1): while offline/parked the 20s tick keeps
     # recovery snappy (60s once made "no internet" lag a button-press
     # generation behind reality). While ONLINE and idle, each probe is a
     # radio wake out of the PS nap for nothing — noticing a loss can
     # wait 2 minutes (the play paths surface errors on their own).
-    idle_tick_s = float(os.environ.get("TAPBOX_SPOT_PROBE_IDLE", "120"))
+    idle_tick_s = float(os.environ.get("VIBB_SPOT_PROBE_IDLE", "120"))
     while True:
         _tick(20 if (parked or _SPOT_OFFLINE[0]) else idle_tick_s)
         try:
@@ -4367,7 +4367,7 @@ def _sonos_on_term():
 # decides what a TAP does (podcast: continue forever; music: track 1).
 
 SESSION_ALWAYS = -1
-CLOCK_WAIT_S = float(os.environ.get("TAPBOX_CLOCK_WAIT", "25"))
+CLOCK_WAIT_S = float(os.environ.get("VIBB_CLOCK_WAIT", "25"))
 _SESSION = {"verdict": None, "live": True}
 
 
@@ -4522,7 +4522,7 @@ class PortalHandler(BaseHTTPRequestHandler):
     hotspot, wildcard DNS (dnsmasq-shared.d) sends the phone's captive
     probes here — a redirect instead of the expected 204/Success makes
     the phone pop its 'sign in to network' sheet with the PWA in it.
-    On the home LAN it doubles as http://tapbox.local -> the PWA."""
+    On the home LAN it doubles as http://vibb.local -> the PWA."""
 
     def log_message(self, *args):
         pass
@@ -4551,7 +4551,7 @@ def _a_cached_audio_file():
     """Newest downloaded episode, to warm the exact demux/decode/resample
     path the next play will fault in (newest = most likely to be tapped).
     None when the cache is empty."""
-    cache = os.environ.get("TAPBOX_CACHE", "/var/lib/tapbox/cache")
+    cache = os.environ.get("VIBB_CACHE", "/var/lib/vibb/cache")
     newest, newest_mtime = None, -1.0
     for root, _dirs, files in os.walk(cache):
         for fn in files:
@@ -4591,7 +4591,7 @@ def _prewarm_mpv():
         log(f"mpv prewarm failed: {e!r}")
 
 
-WIFI_PS_TICK_S = float(os.environ.get("TAPBOX_WIFI_PS_TICK", "15"))
+WIFI_PS_TICK_S = float(os.environ.get("VIBB_WIFI_PS_TICK", "15"))
 # Play intent kicks the governor NOW: waiting for the next tick left PS
 # ON through an entire 27s resume (field 2026-07-18 20:04) — the flip
 # must land before the CDN burst, not after it.
@@ -4665,7 +4665,7 @@ def _wifi_ps_governor():
     something streams over the net, back on when idle. Respects the
     boot-time choice: if PS was already OFF (perf mode / operator
     preference) the governor leaves it alone entirely."""
-    if os.environ.get("TAPBOX_WIFI_PS_GOVERNOR", "1") != "1":
+    if os.environ.get("VIBB_WIFI_PS_GOVERNOR", "1") != "1":
         return
     # Crash recovery FIRST: the marker means a previous daemon turned PS
     # off for a stream and died before turning it back on. Without it,
@@ -4687,13 +4687,13 @@ def _wifi_ps_governor():
             pass  # can't read/fix — fall through to the normal baseline
     # The baseline read must WAIT OUT the boot: at daemon start wlan0
     # exists but PS is still off — NetworkManager enables it ~2min later
-    # and tapbox-power(save) re-asserts it. Reading 'off' once at t=0 and
+    # and vibb-power(save) re-asserts it. Reading 'off' once at t=0 and
     # standing down forever left PS ON through every stream (field
     # 2026-07-18 15:43: no governor log line the whole session, controls
     # starved). Poll until PS is seen ON once (then manage); a box whose
     # operator keeps PS off never shows 'on' and the governor stands down.
     managed = False
-    tries = int(os.environ.get("TAPBOX_WIFI_PS_BASELINE_TRIES", "30"))
+    tries = int(os.environ.get("VIBB_WIFI_PS_BASELINE_TRIES", "30"))
     for i in range(tries):
         try:
             r = subprocess.run(["iw", "dev", "wlan0", "get", "power_save"],
@@ -4711,7 +4711,7 @@ def _wifi_ps_governor():
     _ps_govern()
 
 
-_PS_OFF_MARKER = os.path.join(RUN_DIR, "tapbox-wifi-ps-off")
+_PS_OFF_MARKER = os.path.join(RUN_DIR, "vibb-wifi-ps-off")
 
 
 def _ps_mark(off):
@@ -4734,14 +4734,14 @@ def _ps_govern():
     ps_off = False  # current state we set (baseline = on)
     idle_since = None  # when continuous not-streaming began (PS still off)
     none_since = None  # when the 'unknown' verdict began (PS still off)
-    hyst_s = float(os.environ.get("TAPBOX_WIFI_PS_HYST", "180"))
+    hyst_s = float(os.environ.get("VIBB_WIFI_PS_HYST", "180"))
     # A wedged go-librespot (api up but never answering — a documented
     # failure mode) makes _streaming_now() return None forever, and the
     # loop below used to hold PS OFF indefinitely on that (+30-50mA all
     # night, energy audit 2026-07-24 #1). Bound it: 'unknown' for longer
     # than a real track load could take means the api is stuck, not
     # loading — fall through to the idle path and let PS come back on.
-    none_bound_s = float(os.environ.get("TAPBOX_WIFI_PS_NONE_BOUND", "300"))
+    none_bound_s = float(os.environ.get("VIBB_WIFI_PS_NONE_BOUND", "300"))
     while True:
         _PS_KICK.wait(WIFI_PS_TICK_S)  # play intent ends the wait early
         _PS_KICK.clear()
@@ -4862,13 +4862,13 @@ def main():
     # rewrites a valid token, so linked phones survive a restart.
     try:
         if _token.ensure() and not REQUIRE_TOKEN:
-            log("WARNING: TAPBOX_REQUIRE_TOKEN=0 — privileged endpoints "
+            log("WARNING: VIBB_REQUIRE_TOKEN=0 — privileged endpoints "
                 "are UNPROTECTED (recovery mode)")
     except OSError as e:
         log(f"WARNING: no API token ({e!r}) — privileged endpoints will "
             "refuse every request until this is fixed")
     server = ThreadingHTTPServer((BIND, PORT), Handler)
-    log(f"listening on {BIND}:{PORT} (PWA: http://tapbox.local:{PORT})")
+    log(f"listening on {BIND}:{PORT} (PWA: http://vibb.local:{PORT})")
     server.serve_forever()
 
 

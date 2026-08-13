@@ -17,10 +17,10 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import buttons  # noqa: E402

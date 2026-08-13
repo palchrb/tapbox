@@ -12,14 +12,14 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_SETTINGS"] = os.path.join(TMP, "settings.json")
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_SETTINGS"] = os.path.join(TMP, "settings.json")
 GO_CONF = os.path.join(TMP, "config.yml")
-os.environ["TAPBOX_GO_CONFIG"] = GO_CONF
+os.environ["VIBB_GO_CONFIG"] = GO_CONF
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import output, sysinfo  # noqa: E402
+from vibb import output, sysinfo  # noqa: E402
 
 RESTARTS = []
 output.subprocess.run = lambda cmd, **k: RESTARTS.append(cmd)
@@ -27,8 +27,8 @@ output.subprocess.run = lambda cmd, **k: RESTARTS.append(cmd)
 
 def write_conf(bitrate_line="bitrate: 160  # 96 | 160 | 320"):
     with open(GO_CONF, "w") as f:
-        f.write("device_name: TapBox\n" + bitrate_line
-                + "\naudio_device: tapbox_bt\n")
+        f.write("device_name: Vibb\n" + bitrate_line
+                + "\naudio_device: vibb_bt\n")
 
 
 def conf_bitrate():
@@ -73,10 +73,10 @@ print("4. only 96/160/320 accepted (160-320 range is not enough) OK")
 
 # 5. a corrupt settings file (hand-edited to 128) snaps back to the
 # default on load instead of feeding go-librespot a rate it can't start
-with open(os.environ["TAPBOX_SETTINGS"]) as f:
+with open(os.environ["VIBB_SETTINGS"]) as f:
     saved = json.load(f)
 saved["spotify_bitrate"] = 128
-with open(os.environ["TAPBOX_SETTINGS"], "w") as f:
+with open(os.environ["VIBB_SETTINGS"], "w") as f:
     json.dump(saved, f)
 assert sysinfo.load_settings()["spotify_bitrate"] == 160
 print("5. corrupt saved value loads as the default, never as-is OK")

@@ -13,7 +13,7 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 
 import sonosd  # noqa: E402
 

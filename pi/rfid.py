@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""TapBox RFID daemon — a card starts its mapped content.
+"""Vibb RFID daemon — a card starts its mapped content.
 
-Two modes, selected via /etc/tapbox/rfid.conf (systemd EnvironmentFile):
+Two modes, selected via /etc/vibb/rfid.conf (systemd EnvironmentFile):
 
   Poll mode (default, no config needed): the PN532 polls ~2x/s over I2C
     with power-down between polls. Tap a card -> play. This is the
@@ -20,10 +20,10 @@ Two modes, selected via /etc/tapbox/rfid.conf (systemd EnvironmentFile):
       SLOT_GPIO=file:/tmp/card   -> `touch /tmp/card` = insert, rm = remove
       FAKE_UID=cafebabe          -> UID used when no reader answers
 
-Card UIDs map to targets in /etc/tapbox/cards.json. All link routing
+Card UIDs map to targets in /etc/vibb/cards.json. All link routing
 lives in player.py behind the orchestration daemon; this daemon just
 hands targets over. Mapping a card ("learn mode"): card.sh writes the
-target to /etc/tapbox/pending-map; the next card is bound to it.
+target to /etc/vibb/pending-map; the next card is bound to it.
 """
 
 import json
@@ -34,15 +34,15 @@ import sys
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (_HERE, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_HERE, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import boxapi, mpv, spotify  # noqa: E402
+from vibb import boxapi, mpv, spotify  # noqa: E402
 
-CARDS_FILE = "/etc/tapbox/cards.json"
-PENDING_FILE = "/etc/tapbox/pending-map"
+CARDS_FILE = "/etc/vibb/cards.json"
+PENDING_FILE = "/etc/vibb/pending-map"
 READ_TIMEOUT_S = 0.15   # how long each poll waits for a card (poll mode)
 POLL_SLEEP_S = 0.4      # pause between polls while the box is in use
 IDLE_AFTER_S = 180      # no taps for this long -> slow polling
@@ -53,7 +53,7 @@ SLOT_STABLE_N = 3       # samples the switch must hold before we act
 SLOT_READ_S = 3.0       # how long to try reading a freshly inserted card
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-log = logging.getLogger("tapbox-rfid")
+log = logging.getLogger("vibb-rfid")
 
 mpv_proc = None
 
@@ -84,7 +84,7 @@ def play(target):
     stop_mpv()
     player = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.py")
     if not os.path.exists(player):
-        player = "/usr/local/bin/tapbox-player"
+        player = "/usr/local/bin/vibb-player"
     mpv_proc = subprocess.Popen([sys.executable, player, target])
 
 

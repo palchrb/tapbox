@@ -27,7 +27,7 @@ unless you're prepared to reverse-engineer the 14-pin/Molex variant.
 ## DAC / amp options for the jack (BOM #5–6)
 
 Any of these feeds the 3.5 mm jack. Chosen default is the PCM5102 route
-(least Pi-side fuss, matches TapBox's `hifiberry-dac` "local" path). Others
+(least Pi-side fuss, matches Vibb's `hifiberry-dac` "local" path). Others
 are alternatives — pick per taste; details in RESEARCH §3.
 
 | Option | Chips | Headphone amp? | Pi integration | Notes |
@@ -126,9 +126,9 @@ MAX17048 fuel gauge: VIN->3.3V GND->GND SDA->BCM2 SCL->BCM3, sense across
                  the LiPo -> battery % over I2C (addr 0x36)
 ```
 Battery % reaches the UI via a small reader (`src/battery.py`, see
-SOFTWARE) — TapBox's `power.sh` battery plumbing is PiSugar-specific and
+SOFTWARE) — Vibb's `power.sh` battery plumbing is PiSugar-specific and
 simply no-ops here. If you instead choose PiSugar 3 (alt), skip PowerBoost
-+ MAX17048 and use `power.sh` as TapBox documents it.
++ MAX17048 and use `power.sh` as Vibb documents it.
 
 ## Boot config additions (`/boot/firmware/config.txt`)
 
@@ -136,7 +136,7 @@ simply no-ops here. If you instead choose PiSugar 3 (alt), skip PowerBoost
 # --- pipod audio: I2S DAC (PCM5102, XSMT tied high => no gpio=25) ---
 dtparam=i2s=on
 #dtparam=audio=on          # leave OFF; I2S DAC replaces onboard
-dtoverlay=hifiberry-dac    # same overlay TapBox output.py expects ("local" pcm)
+dtoverlay=hifiberry-dac    # same overlay Vibb output.py expects ("local" pcm)
 
 # --- pipod display: SPI for the ST7789 TFT ---
 dtparam=spi=on
@@ -145,8 +145,8 @@ dtparam=spi=on
 # software (holdswitch.py). PiSugar owns power via I2C.
 ```
 
-This is deliberately the **same `hifiberry-dac`** that TapBox's
-`tapbox-power hat-audio-on` writes — minus the `gpio=25=op,dh` line — so the
+This is deliberately the **same `hifiberry-dac`** that Vibb's
+`vibb-power hat-audio-on` writes — minus the `gpio=25=op,dh` line — so the
 existing `output.py` "local" output path works unchanged. See
 [SOFTWARE.md](./SOFTWARE.md) for the install flow.
 

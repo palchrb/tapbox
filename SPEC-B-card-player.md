@@ -1,6 +1,6 @@
-# tapbox Concept B — Card Player (the Yoto competitor)
+# vibb Concept B — Card Player (the Yoto competitor)
 
-**Version:** 0.1 (carried over from tapbox SPEC v0.10)
+**Version:** 0.1 (carried over from vibb SPEC v0.10)
 **Last updated:** 2026-07-05
 **Status:** Design phase, pre-implementation
 **Parent doc:** [SPEC.md](SPEC.md) (shared platform)
@@ -49,10 +49,10 @@ v2 hardware if voice ships.
 - [x] Card slot semantics: card in = play (with resume), card out = pause (platform: rfid.py slot mode, 2026-07-05)
 - [ ] **Parent app: drag-and-drop upload of local audio files** (mp3, m4a, wav, opus) — offline use case (cabin/car/grandma)
 - [x] **Bluetooth A2DP source mode:** button-first pairing (auto-pair strongest nearby audio device), bond persists, auto-reconnect (platform, hardware-validated)
-- [ ] Bluetooth A2DP sink mode (toggle in PWA) — phone streams TO tapbox (escape hatch for Apple Music etc.)
+- [ ] Bluetooth A2DP sink mode (toggle in PWA) — phone streams TO vibb (escape hatch for Apple Music etc.)
 - [ ] Polished admin PWA: list cards, add/edit/delete mappings, now-playing
 - [ ] Card programming: paste URL → write NDEF to next-tapped NTAG OR save UID mapping
-- [x] Physical controls: play/pause, next, prev, volume up/down (platform: buttons.py + tapboxd /volume)
+- [x] Physical controls: play/pause, next, prev, volume up/down (platform: buttons.py + vibbd /volume)
 - [ ] Battery indicator (LED or PWA; PiSugar-based rig tooling exists)
 - [ ] Graceful shutdown via long-press
 - [x] Auto-restart on crash (systemd)
@@ -81,10 +81,10 @@ The polish target: **<10 minutes** from unboxing to "kid inserts card, music pla
 1. Unbox: device, USB-C charger, 5 blank NTAG215 cards, quickstart card with QR
 2. QR → hosted setup page: "Plug in your device, wait for the green LED."
 3. Power on (~25s boot). Green LED solid when ready.
-4. "Connect to Wi-Fi 'tapbox-XXXX' on your phone." Page auto-advances.
+4. "Connect to Wi-Fi 'vibb-XXXX' on your phone." Page auto-advances.
 5. Captive portal: pick home Wi-Fi, enter password, device joins.
 6. "Connect Spotify" — zeroconf (LOCKED, hardware-validated): open Spotify,
-   tap the devices icon, pick 'tapbox'. Credentials persist on the device.
+   tap the devices icon, pick 'vibb'. Credentials persist on the device.
    No password entry, no OAuth, no developer-app registration.
 7. Speaker test chime + volume calibration slider.
 8. "Program your first card" — paste any link, insert a blank card. Done.
@@ -103,8 +103,8 @@ Every step has: clear status, retry path, what-to-do-if-stuck. No JSON, no SSH.
 - Card inserted: switch edge → power the reader → **one single read** (slot
   guarantees mm-precise antenna alignment) → reader off. ~100ms of RF per card
   change instead of all-day polling.
-- Card removed: opposite edge → pause via tapboxd (bookmark saved; same card
-  resumes instantly — tapboxd keeps the session loaded). NFC is never involved
+- Card removed: opposite edge → pause via vibbd (bookmark saved; same card
+  resumes instantly — vibbd keeps the session loaded). NFC is never involved
   in stop detection (that's what forces Toniebox-style polling).
 - UX: physical state == audio state. Constrains the product to **cards only**
   (no figurines). Shallow slot, card sticks up visibly (kid can see + pull it;

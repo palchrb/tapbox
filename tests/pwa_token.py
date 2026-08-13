@@ -2,7 +2,7 @@
 """Gate the PWA's half of the API token (SECURITY.md Model B).
 
 Runs the real pi/web/app.js under node with a DOM/localStorage shim and
-a fake tapboxd, then checks the four things that decide whether a parent
+a fake vibbd, then checks the four things that decide whether a parent
 can actually use the box after the gate landed:
 
 - the token rides along on every request once linked;
@@ -25,12 +25,12 @@ HARNESS = r"""
 const fs = require("fs");
 process.on("unhandledRejection", () => {});
 
-/* --- fake tapboxd: mirrors the real gate ------------------------------ */
+/* --- fake vibbd: mirrors the real gate ------------------------------ */
 const SAFE = new Set(["/status", "/playpause", "/next", "/prev", "/pause"]);
 let TOKEN_ON_BOX = "ABCD1234EFGH5678";
 const seen = [];
 global.fetch = async (path, opts = {}) => {
-  const hdr = (opts.headers || {})["X-TapBox-Token"] || "";
+  const hdr = (opts.headers || {})["X-Vibb-Token"] || "";
   seen.push({ path, token: hdr });
   const json = (obj, ok, status) => ({
     ok, status: status || (ok ? 200 : 400), json: async () => obj });
@@ -84,7 +84,7 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
     // 2. QR landing: the box screen's #t=... linked this phone...
     assert(t.getTOKEN() === "ABCD1234EFGH5678",
            "scanning the box QR must link the phone: " + t.getTOKEN());
-    assert(store["tapbox.token"] === "ABCD1234EFGH5678",
+    assert(store["vibb.token"] === "ABCD1234EFGH5678",
            "the token must persist for the next visit");
     // ...and the secret must not be left in the URL bar / history
     assert(!String(t.urlNow()).includes("ABCD"),
@@ -106,7 +106,7 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
     catch (e) { code = e.code; }
     assert(code === "token_invalid", "401 must surface a code: " + code);
     assert(t.getTOKEN() === "", "a rejected token must be dropped");
-    assert(!("tapbox.token" in store), "and cleared from storage");
+    assert(!("vibb.token" in store), "and cleared from storage");
     console.log("4. rotated-away token is dropped (UI can prompt to re-link) OK");
     return;
   }

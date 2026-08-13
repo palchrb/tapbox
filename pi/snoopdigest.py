@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""tapbox-snoop-digest — answer questions a btsnoop grep can't.
+"""vibb-snoop-digest — answer questions a btsnoop grep can't.
 
-The ring (tapbox-btsnoop) already settled WHO crashes: the chip reports
+The ring (vibb-btsnoop) already settled WHO crashes: the chip reports
 Hardware Error itself mid-clean-traffic (btsnoop analysis 2026-07-27).
 This tool is for the NEXT question: what was the radio doing in the
 seconds before each crash. Field journal 2026-07-27 planted a concrete
@@ -20,8 +20,8 @@ so two captures can be compared — e.g. a JBL trip against a Skoda trip,
 or before/after the mpris player registration.
 
 Usage (on the box, or anywhere btmon exists):
-    tapbox-snoop-digest ~/20260727-200749.snoop [more.snoop ...]
-    btmon -r x.snoop | tapbox-snoop-digest -      # pre-rendered text ok
+    vibb-snoop-digest ~/20260727-200749.snoop [more.snoop ...]
+    btmon -r x.snoop | vibb-snoop-digest -      # pre-rendered text ok
 
 Stdlib only; .snoop files are rendered through `btmon -r`.
 """
@@ -314,7 +314,7 @@ def render(path):
 def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__.strip().split("\n\n")[0]
-                 + "\n\nusage: tapbox-snoop-digest <capture.snoop|-> ...")
+                 + "\n\nusage: vibb-snoop-digest <capture.snoop|-> ...")
     for path in argv[1:]:
         digest(path, render(path))
         print()

@@ -12,13 +12,13 @@ import urllib.error
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "library.json")
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "library.json")
 CREDS = os.path.join(STATE, "spotify-api.json")
-os.environ["TAPBOX_SPOTIFY_API"] = CREDS
+os.environ["VIBB_SPOTIFY_API"] = CREDS
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import library, spotify_web  # noqa: E402
+from vibb import library, spotify_web  # noqa: E402
 
 # 1. parse_user: share links, URIs and plain names all land on the username
 assert spotify_web.parse_user("palchrb") == "palchrb"

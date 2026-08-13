@@ -2,7 +2,7 @@
 """The carousel shelf slide (playful-ui, design review 2026-08-12).
 What must hold:
 
-1. THE GATE: with TAPBOX_UI_PNG set the animation is force-off, so all
+1. THE GATE: with VIBB_UI_PNG set the animation is force-off, so all
    existing UI tests stay byte- and call-count-stable.
 2. THE MASH RULE end to end: an event caught mid-slide aborts the glide
    AND is never lost — it lands in _pending for the main loop.
@@ -21,8 +21,8 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
-os.environ["TAPBOX_EMOJI"] = "0"
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
+os.environ["VIBB_EMOJI"] = "0"
 
 import ui  # noqa: E402
 
@@ -75,7 +75,7 @@ def make_app(inputs):
 
 
 # 1. the gate: UI_ANIM is off under the PNG env, and a flip draws NOTHING
-assert ui.UI_ANIM is False, "TAPBOX_UI_PNG must force the animation off"
+assert ui.UI_ANIM is False, "VIBB_UI_PNG must force the animation off"
 app = make_app(FakeInputs())
 app.handle_carousel("y")
 assert app.car_sel == 1

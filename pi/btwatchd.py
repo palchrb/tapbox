@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Event-driven BT reconnect daemon — phase C of PLAN-bt-dbus.md.
 
-Replaces the tapbox-bt-reconnect bash poll loop (up to 60s to notice
+Replaces the vibb-bt-reconnect bash poll loop (up to 60s to notice
 the speaker) with BlueZ D-Bus signals: when the remembered speaker
 powers on — most page us by themselves, the rest appear on the bus —
 we call Device1.Connect within seconds.
@@ -18,7 +18,7 @@ State machine (event-driven equivalents of the old loop):
   NO_TARGET  nothing remembered: idle on the MAC-file monitor
 
 Scope guards (plan §7):
-- No recovery role: firmware-crash healing lives in bt.py/tapboxd.
+- No recovery role: firmware-crash healing lives in bt.py/vibbd.
   A dead controller just fails our attempts into backoff.
 - No pairing, no scanning, no ALSA routing, and no one-output
   enforcement (that stays inside bt.py connect(); auto-kicking a
@@ -26,7 +26,7 @@ Scope guards (plan §7):
   reconnect loops — deliberately not taken on in phase C).
   One addition since (owner request 2026-07-27): follow-the-connector —
   a PAIRED audio sink that connects itself while the configured speaker
-  is ABSENT is adopted as the active speaker (via tapboxd /bt/connect,
+  is ABSENT is adopted as the active speaker (via vibbd /bt/connect,
   which owns routing). Detection lives here because this daemon already
   watches every Device1 signal; the switch itself still runs in bt.py.
 - Cross-process flock (LOCK_NB) before Connect: when bt.py owns the
@@ -34,8 +34,8 @@ Scope guards (plan §7):
 - bluez restart (NameOwnerChanged) re-enters the BOOT fast window, so
   recover()'s systemctl restart bluetooth yields a fast reconnect.
 
-Fallback: TAPBOX_BT_BACKEND=cli or missing python3-dbus/python3-gi
-exec's the old bash poll loop (installed as tapbox-bt-reconnect-poll).
+Fallback: VIBB_BT_BACKEND=cli or missing python3-dbus/python3-gi
+exec's the old bash poll loop (installed as vibb-bt-reconnect-poll).
 """
 
 import os
@@ -45,14 +45,14 @@ import threading
 import time
 
 _here = os.path.dirname(os.path.abspath(__file__))
-for _p in (_here, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_here, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
 
-POLL_FALLBACK = os.environ.get("TAPBOX_RECON_POLL",
-                               "/usr/local/bin/tapbox-bt-reconnect-poll")
+POLL_FALLBACK = os.environ.get("VIBB_RECON_POLL",
+                               "/usr/local/bin/vibb-bt-reconnect-poll")
 
 
 def log(msg):
@@ -67,8 +67,8 @@ def _fallback(reason):
     sys.exit(3)
 
 
-if os.environ.get("TAPBOX_BT_BACKEND") == "cli":
-    _fallback("TAPBOX_BT_BACKEND=cli")
+if os.environ.get("VIBB_BT_BACKEND") == "cli":
+    _fallback("VIBB_BT_BACKEND=cli")
 try:
     import dbus
     import dbus.mainloop.glib
@@ -76,25 +76,25 @@ try:
 except ImportError as _e:
     _fallback(f"dbus/gi unavailable ({_e})")
 
-from tapbox import boxapi  # noqa: E402
-from tapbox import radio as _radio  # noqa: E402 — shared-radio yield
-from tapbox.bt import (BT_QUIET_FILE, KICK_FILE, MAC_FILE,  # noqa: E402
+from vibb import boxapi  # noqa: E402
+from vibb import radio as _radio  # noqa: E402 — shared-radio yield
+from vibb.bt import (BT_QUIET_FILE, KICK_FILE, MAC_FILE,  # noqa: E402
                        acquire_process_lock)
 
 # timings are env-tunable so the test harness can run in seconds
-BOOT_RETRY_S = float(os.environ.get("TAPBOX_RECON_BOOT_RETRY", "5"))
-BOOT_WINDOW_S = float(os.environ.get("TAPBOX_RECON_BOOT_WINDOW", "120"))
-BACKOFF_MIN_S = float(os.environ.get("TAPBOX_RECON_BACKOFF_MIN", "20"))
-BACKOFF_MAX_S = float(os.environ.get("TAPBOX_RECON_BACKOFF_MAX", "300"))
-DROP_RETRY_S = float(os.environ.get("TAPBOX_RECON_DROP_RETRY", "3"))
+BOOT_RETRY_S = float(os.environ.get("VIBB_RECON_BOOT_RETRY", "5"))
+BOOT_WINDOW_S = float(os.environ.get("VIBB_RECON_BOOT_WINDOW", "120"))
+BACKOFF_MIN_S = float(os.environ.get("VIBB_RECON_BACKOFF_MIN", "20"))
+BACKOFF_MAX_S = float(os.environ.get("VIBB_RECON_BACKOFF_MAX", "300"))
+DROP_RETRY_S = float(os.environ.get("VIBB_RECON_DROP_RETRY", "3"))
 # a FRESH drop means someone is probably standing right there
 # power-cycling the speaker — and a powered-on classic-BT speaker that
 # doesn't page US is invisible to events, so our own pages are the only
 # discovery. Keep them coming every ~15s through the blip window
-# (matches tapboxd's auto-resume), then decay as before. Nothing is
+# (matches vibbd's auto-resume), then decay as before. Nothing is
 # playing then (the lost path stopped it), so the radio is free.
-RECENT_DROP_S = float(os.environ.get("TAPBOX_RECON_RECENT", "150"))
-RECENT_RETRY_S = float(os.environ.get("TAPBOX_RECON_RECENT_RETRY", "15"))
+RECENT_DROP_S = float(os.environ.get("VIBB_RECON_RECENT", "150"))
+RECENT_RETRY_S = float(os.environ.get("VIBB_RECON_RECENT_RETRY", "15"))
 # The ladder used to floor at BACKOFF_MAX forever: a speaker switched
 # off for the night still got a ~5s blind page-TX every 5 minutes, all
 # of it on the shared 2.4GHz radio (energy audit 2026-07-20 #5). After
@@ -102,26 +102,26 @@ RECENT_RETRY_S = float(os.environ.get("TAPBOX_RECON_RECENT_RETRY", "15"))
 # revival path is event-driven and already in place: the speaker paging
 # US (inbound reconnect), RSSI/appearance evidence, the play-press kick
 # file, a retarget, and boot.
-ABSENT_AFTER_S = float(os.environ.get("TAPBOX_RECON_ABSENT_AFTER", "3600"))
-DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_DEBOUNCE", "5"))
-LOCK_RETRY_S = float(os.environ.get("TAPBOX_RECON_LOCK_RETRY", "10"))
-FALLBACK_S = float(os.environ.get("TAPBOX_RECON_FALLBACK", "20"))
+ABSENT_AFTER_S = float(os.environ.get("VIBB_RECON_ABSENT_AFTER", "3600"))
+DEBOUNCE_S = float(os.environ.get("VIBB_RECON_DEBOUNCE", "5"))
+LOCK_RETRY_S = float(os.environ.get("VIBB_RECON_LOCK_RETRY", "10"))
+FALLBACK_S = float(os.environ.get("VIBB_RECON_FALLBACK", "20"))
 CONNECT_TIMEOUT_S = 30
 # Radio yield: blind pages hold while wifi is mid-setup at boot or a
-# network stream/track load is in flight (advisory marker from tapboxd).
+# network stream/track load is in flight (advisory marker from vibbd).
 # Only BLIND (timer/boot) pages — user-intent kicks and speaker-initiated
-# signals are never gated. See tapbox/radio.py for the rationale.
-YIELD_RETRY_S = float(os.environ.get("TAPBOX_RECON_YIELD_RETRY", "4"))
-YIELD_GIVEUP_S = float(os.environ.get("TAPBOX_RECON_YIELD_GIVEUP", "120"))
+# signals are never gated. See vibb/radio.py for the rationale.
+YIELD_RETRY_S = float(os.environ.get("VIBB_RECON_YIELD_RETRY", "4"))
+YIELD_GIVEUP_S = float(os.environ.get("VIBB_RECON_YIELD_GIVEUP", "120"))
 # 45, not 15: NetworkManager doesn't even bring wlan0 up until ~27s of
 # uptime on this box, so a 15s gate expired BEFORE the association it
 # was meant to protect (field 2026-07-18 20:00: boot pages at 23s and
 # 33s landed in the assoc window). Free once wifi settles (route up);
 # an offline cabin boot delays blind pages <=45s — kicks bypass.
-WIFI_GATE_S = float(os.environ.get("TAPBOX_RECON_WIFI_GATE", "45"))
+WIFI_GATE_S = float(os.environ.get("VIBB_RECON_WIFI_GATE", "45"))
 # ~4 failed boot pages = the speaker is off; the 5s boot cadence would
 # otherwise burn ~24 pages against nothing, exactly while wifi comes up
-BOOT_FAIL_LIMIT = int(os.environ.get("TAPBOX_RECON_BOOT_FAILS", "4"))
+BOOT_FAIL_LIMIT = int(os.environ.get("VIBB_RECON_BOOT_FAILS", "4"))
 # Follow-the-connector (field 2026-07-27): the Skoda head unit paged US
 # and brought up AVRCP while the box still pointed at the JBL sitting at
 # home — metadata flowed to the car's display, audio kept opening the
@@ -130,8 +130,8 @@ BOOT_FAIL_LIMIT = int(os.environ.get("TAPBOX_RECON_BOOT_FAILS", "4"))
 # absent, adopt the connector. The confirm delay lets a manual switch
 # in progress win the race (bt.py connects first, writes the MAC file
 # after) so adoption becomes a no-op instead of a duplicate connect.
-ADOPT_CONFIRM_S = float(os.environ.get("TAPBOX_RECON_ADOPT_CONFIRM", "3"))
-ADOPT_DEBOUNCE_S = float(os.environ.get("TAPBOX_RECON_ADOPT_DEBOUNCE", "60"))
+ADOPT_CONFIRM_S = float(os.environ.get("VIBB_RECON_ADOPT_CONFIRM", "3"))
+ADOPT_DEBOUNCE_S = float(os.environ.get("VIBB_RECON_ADOPT_DEBOUNCE", "60"))
 AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
 # When the target IS alive, a second audio sink connecting itself is not
 # adopted — and not left parked either: a parallel ACL with the Skoda's
@@ -141,7 +141,7 @@ AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
 # if it pages right back (some head units retry hard) let it park — a
 # quiet parked link beats fighting a reconnect loop with page storms.
 # The kick memory decays, so a fresh trip hours later gets a fresh kick.
-KICK_RETRY_S = float(os.environ.get("TAPBOX_RECON_KICK_RETRY", "3600"))
+KICK_RETRY_S = float(os.environ.get("VIBB_RECON_KICK_RETRY", "3600"))
 # A peer that ACCEPTS the ACL page but never lets the audio channel up
 # (AVDTP refused: the car head unit whose single A2DP slot CarPlay
 # holds, or a headset with a stale session from before a reboot) used
@@ -157,7 +157,7 @@ KICK_RETRY_S = float(os.environ.get("TAPBOX_RECON_KICK_RETRY", "3600"))
 # evidence, because the refusing car is nearby and chatty by
 # definition. Threshold is a field heuristic — tune on the box via the
 # env, not by redeploying.
-REFUSAL_PARK_N = int(os.environ.get("TAPBOX_RECON_REFUSAL_PARK", "5"))
+REFUSAL_PARK_N = int(os.environ.get("VIBB_RECON_REFUSAL_PARK", "5"))
 
 BLUEZ = "org.bluez"
 ADAPTER_PATH = "/org/bluez/hci0"
@@ -188,7 +188,7 @@ class Reconnector:
         self.boot_deadline = time.monotonic() + BOOT_WINDOW_S
         self.monitor = None          # Gio ref — GC would stop events
         self.kick_monitor = None     # ditto, for the connect-now kick
-        self.announced = None        # last output we told tapboxd about
+        self.announced = None        # last output we told vibbd about
         self.disconnected_since = None  # when the target went away
         self._pcm_waiting = False    # a bt announcement awaits the PCM
         self._nudged = False         # one A2DP nudge per steady period
@@ -301,7 +301,7 @@ class Reconnector:
             self.state = "BOOT"
 
     def _kicked(self, *_args):
-        """tapboxd touched the kick file: the user just switched the
+        """vibbd touched the kick file: the user just switched the
         output to bt while the speaker is disconnected — connect NOW
         instead of waiting out the backoff ladder. attempt() handles the
         harmless cases (already connected, in flight, lock busy); the
@@ -437,7 +437,7 @@ class Reconnector:
             self._pcm_waiting = False
             return
         try:
-            from tapbox import btbus
+            from vibb import btbus
             ready = btbus.a2dp_pcm_present(self.target)
         except Exception:
             ready = True  # can't tell — announce rather than stall
@@ -514,7 +514,7 @@ class Reconnector:
 
     def _output(self, device):
         """Follow-the-speaker output policy: connected -> bt, confirmed
-        away/forgotten -> built-in (tapboxd skips the fallback when no
+        away/forgotten -> built-in (vibbd skips the fallback when no
         I2S card exists, so BT-only boxes are unaffected). Announced at
         most once per transition — flapping links can't restart
         go-librespot in a loop."""
@@ -525,7 +525,7 @@ class Reconnector:
             r = boxapi.post("/output", {"device": device, "fallback": True},
                             timeout=5)
         except Exception as e:
-            # tapboxd not up yet (boot: we connect the speaker before the
+            # vibbd not up yet (boot: we connect the speaker before the
             # daemon listens) — retry until the announcement lands
             log(f"output -> {device} not applied ({e.__class__.__name__}) "
                 f"— retrying in 10s")
@@ -545,7 +545,7 @@ class Reconnector:
         return False
 
     def _notify_lost(self):
-        """Tell tapboxd the transport just died. mpv reacts to a dead
+        """Tell vibbd the transport just died. mpv reacts to a dead
         ALSA device by ERRORING each episode and auto-advancing — field
         log 2026-07-17: ~15 episodes skipped in 3s before the output
         fallback caught up (the stall watchdog can't see it: the
@@ -605,7 +605,7 @@ class Reconnector:
         return False  # one-shot timer
 
     def _adopt_post(self, mac):
-        """tapboxd owns the switch (quiesce, alias rewrite, resume) —
+        """vibbd owns the switch (quiesce, alias rewrite, resume) —
         same path as picking the speaker in the PWA. Off the GLib loop:
         /bt/connect legitimately runs for minutes when it heals."""
         try:
@@ -822,7 +822,7 @@ def main():
     # radio makes bluez unresponsive, and the block persists reboots
     subprocess.run(["rfkill", "unblock", "bluetooth"], capture_output=True)
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-    addr = (os.environ.get("TAPBOX_DBUS_ADDRESS")
+    addr = (os.environ.get("VIBB_DBUS_ADDRESS")
             or os.environ.get("DBUS_SYSTEM_BUS_ADDRESS"))
     try:
         bus = dbus.bus.BusConnection(addr) if addr else dbus.SystemBus()

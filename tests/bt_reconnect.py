@@ -44,7 +44,7 @@ CAR = "B4:EC:02:4F:36:7C"
 PHONE = "AA:BB:CC:DD:EE:FF"
 SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
 
-# stub tapboxd: records POSTs so scenario 6 can see the adopt call
+# stub vibbd: records POSTs so scenario 6 can see the adopt call
 POSTS = []
 
 
@@ -105,17 +105,17 @@ def main():
     threading.Thread(target=stub.serve_forever, daemon=True).start()
 
     env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS=addr,
-               TAPBOX_BT_FILE=mac_file, TAPBOX_BT_LOCKFILE=lock_file,
-               TAPBOX_DAEMON=f"http://127.0.0.1:{stub.server_port}",
-               TAPBOX_RECON_FALLBACK="1",
-               TAPBOX_RECON_BOOT_RETRY="1", TAPBOX_RECON_BOOT_WINDOW="15",
-               TAPBOX_RECON_BACKOFF_MIN="2", TAPBOX_RECON_BACKOFF_MAX="8",
-               TAPBOX_RECON_DROP_RETRY="1", TAPBOX_RECON_DEBOUNCE="0.5",
-               TAPBOX_RECON_LOCK_RETRY="1",
-               TAPBOX_BT_KICK=kick_file,
-               TAPBOX_RECON_REFUSAL_PARK="3",
-               TAPBOX_RECON_ADOPT_CONFIRM="0.5",
-               TAPBOX_RECON_ADOPT_DEBOUNCE="2")
+               VIBB_BT_FILE=mac_file, VIBB_BT_LOCKFILE=lock_file,
+               VIBB_DAEMON=f"http://127.0.0.1:{stub.server_port}",
+               VIBB_RECON_FALLBACK="1",
+               VIBB_RECON_BOOT_RETRY="1", VIBB_RECON_BOOT_WINDOW="15",
+               VIBB_RECON_BACKOFF_MIN="2", VIBB_RECON_BACKOFF_MAX="8",
+               VIBB_RECON_DROP_RETRY="1", VIBB_RECON_DEBOUNCE="0.5",
+               VIBB_RECON_LOCK_RETRY="1",
+               VIBB_BT_KICK=kick_file,
+               VIBB_RECON_REFUSAL_PARK="3",
+               VIBB_RECON_ADOPT_CONFIRM="0.5",
+               VIBB_RECON_ADOPT_DEBOUNCE="2")
 
     def start_fake():
         p = subprocess.Popen(
@@ -128,8 +128,8 @@ def main():
     bus = dbus.bus.BusConnection(addr)
 
     def mock():
-        return dbus.Interface(bus.get_object("org.bluez", "/org/tapbox/mock"),
-                              "org.tapbox.Mock")
+        return dbus.Interface(bus.get_object("org.bluez", "/org/vibb/mock"),
+                              "org.vibb.Mock")
 
     fake = start_fake()
     mock().AddDevice(GO, "JBL GO", True, False, 0)

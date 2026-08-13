@@ -12,16 +12,16 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
 
-daemon.current_output = lambda: {"output": "bt", "pcm": "tapbox_bt"}
+daemon.current_output = lambda: {"output": "bt", "pcm": "vibb_bt"}
 
 RESTARTS = []
 daemon.subprocess.run = lambda *a, **k: RESTARTS.append(a)
@@ -42,7 +42,7 @@ print("1. v0.0.7 rebuild: reopened live, no restart, no replay OK")
 # NO fresh restart on record -> falls through to the plain restart
 daemon.reopen_go_output = lambda pcm: False
 daemon._retarget_go_librespot = lambda pcm: False  # config already right
-from tapbox import paths  # noqa: E402
+from vibb import paths  # noqa: E402
 try:
     os.remove(paths.GO_RESTART_FILE)
 except OSError:

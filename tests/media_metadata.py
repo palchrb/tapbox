@@ -25,15 +25,15 @@ import types
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
 MEDIA = os.path.join(TMP, "media")
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_MEDIA"] = MEDIA
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_MEDIA"] = MEDIA
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import content  # noqa: E402
+from vibb import content  # noqa: E402
 
 COLL = os.path.join(MEDIA, "Ronja")
 os.makedirs(COLL)

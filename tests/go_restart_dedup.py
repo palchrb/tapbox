@@ -13,12 +13,12 @@ import time as _time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = RUN
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_ASOUND"] = os.path.join(tempfile.mkdtemp(), "asound.conf")
+os.environ["VIBB_RUN"] = RUN
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_ASOUND"] = os.path.join(tempfile.mkdtemp(), "asound.conf")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import paths  # noqa: E402
+from vibb import paths  # noqa: E402
 
 # 1. the marker: never -> not recent; noted -> recent; aged out -> not
 assert paths.go_restarted_within(8) is False
@@ -48,11 +48,11 @@ gi.repository = repo
 sys.modules.setdefault("gi", gi)
 sys.modules.setdefault("gi.repository", repo)
 
-from tapbox import bt, output  # noqa: E402
+from vibb import bt, output  # noqa: E402
 
 RAN = []
 bt._run = lambda cmd, **kw: RAN.append(tuple(cmd))
-output.current_output = lambda: {"output": "bt", "pcm": "tapbox_bt"}
+output.current_output = lambda: {"output": "bt", "pcm": "vibb_bt"}
 
 # 2. v0.0.7 default: routing a NEW headset while bt is the current output
 # reopens go-librespot's output LIVE — ALSA re-reads asound.conf and picks
@@ -61,7 +61,7 @@ output.current_output = lambda: {"output": "bt", "pcm": "tapbox_bt"}
 REOPENED = []
 output.reopen_go_output = lambda pcm: REOPENED.append(pcm) or True
 bt._route_alsa("AA:BB:CC:DD:EE:FF")
-assert REOPENED == ["tapbox_bt"], REOPENED
+assert REOPENED == ["vibb_bt"], REOPENED
 assert RAN == [], f"a live reopen must not restart go-librespot: {RAN}"
 assert paths.go_restarted_within(8) is False, "no restart -> no mark"
 print("2. bt._route_alsa reopens live on a new headset (no restart) OK")
@@ -78,7 +78,7 @@ print("3. bt._route_alsa falls back to restart on an old binary OK")
 # 4. audio on the BUILT-IN speaker: a new bt route must not touch the
 # running process at all — the mapping applies on the next switch to bt,
 # and current local playback must not blip (reopen would close+reopen it)
-output.current_output = lambda: {"output": "local", "pcm": "tapbox_local"}
+output.current_output = lambda: {"output": "local", "pcm": "vibb_local"}
 output.reopen_go_output = lambda pcm: REOPENED.append(pcm) or True
 REOPENED.clear()
 RAN.clear()
@@ -91,7 +91,7 @@ print("4. new headset while on the built-in speaker leaves playback alone OK")
 
 # 5. the SAME mac again is a no-op (already in asound.conf): no reopen,
 # no restart, no mark — whatever the current output
-output.current_output = lambda: {"output": "bt", "pcm": "tapbox_bt"}
+output.current_output = lambda: {"output": "bt", "pcm": "vibb_bt"}
 REOPENED.clear()
 RAN.clear()
 bt._route_alsa("AA:AA:AA:AA:AA:AA")  # the one section 4 wrote to asound

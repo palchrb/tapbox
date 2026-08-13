@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# TapBox API token (installed as tapbox-token).
+# Vibb API token (installed as vibb-token).
 #
-#   sudo tapbox-token          show the token + the link that pairs a phone
-#   sudo tapbox-token rotate   issue a NEW token (every linked phone must
+#   sudo vibb-token          show the token + the link that pairs a phone
+#   sudo vibb-token rotate   issue a NEW token (every linked phone must
 #                              be linked again)
-#   sudo tapbox-token path     print just the file path
+#   sudo vibb-token path     print just the file path
 #
 # The token gates the privileged half of the box API (Wi-Fi, Bluetooth,
 # settings, shutdown). Playback and the PWA's read-only views never need
@@ -25,14 +25,14 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-PYLIB=/usr/local/lib/tapbox-py
-TOKEN_FILE="${TAPBOX_TOKEN_FILE:-/etc/tapbox/api-token}"
+PYLIB=/usr/local/lib/vibb-py
+TOKEN_FILE="${VIBB_TOKEN_FILE:-/etc/vibb/api-token}"
 
 py() {  # one implementation of the token rules — the daemon's own module
-  TAPBOX_TOKEN_FILE="$TOKEN_FILE" /usr/bin/python3 -c "
+  VIBB_TOKEN_FILE="$TOKEN_FILE" /usr/bin/python3 -c "
 import sys
 sys.path.insert(0, '$PYLIB')
-from tapbox import token
+from vibb import token
 $1"
 }
 
@@ -46,7 +46,7 @@ box_name() {
 show() {
   local tok name ip
   tok="$(py 'print(token.ensure())')" || {
-    echo "Could not read $TOKEN_FILE — is TapBox installed?" >&2; exit 1; }
+    echo "Could not read $TOKEN_FILE — is Vibb installed?" >&2; exit 1; }
   name="$(box_name)"
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   echo

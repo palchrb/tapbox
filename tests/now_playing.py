@@ -11,9 +11,9 @@ import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
@@ -89,7 +89,7 @@ print("5. another target's stale publish is ignored OK")
 # 6. a freshly tapped spotify target: go-librespot still describes the
 # PREVIOUS context — /status must show the tapped entry's identity
 # (bookmark name + cached mosaic), never the old track
-from tapbox import content, spotify as sp  # noqa: E402
+from vibb import content, spotify as sp  # noqa: E402
 
 orch._mpv_alive = lambda: False
 NEW = "https://open.spotify.com/playlist/bbbbbbbbbbbbbbbbbbbbbb"

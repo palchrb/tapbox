@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tapbox-name: RetroPie
+# vibb-name: RetroPie
 #
-# TapBox edition of palchrb/retropie_wrapper — launched by the extras
+# Vibb edition of palchrb/retropie_wrapper — launched by the extras
 # hook (hold X+Y -> Extras -> A), NOT by BT-controller connections, and
 # with the SPI display instead of CEC/TV. Kept from the original: the
 # real-CLI-session-via-screen requirement, and the emergency hold-
@@ -9,9 +9,9 @@
 # session when a game wedges).
 #
 # Install ON THE BOX (SSH only):
-#   sudo cp retropie.sh /etc/tapbox/extras/retropie.sh
-#   sudo chown root:root /etc/tapbox/extras/retropie.sh
-#   sudo chmod 755 /etc/tapbox/extras/retropie.sh
+#   sudo cp retropie.sh /etc/vibb/extras/retropie.sh
+#   sudo chown root:root /etc/vibb/extras/retropie.sh
+#   sudo chmod 755 /etc/vibb/extras/retropie.sh
 # Deps: apt install screen python3-evdev  (+ build fbcp-ili9341)
 #
 # --- WHAT HAD TO BE TRUE BEFORE ANY OF THIS WORKED --------------------
@@ -43,20 +43,20 @@
 #    ROMs are the broken case, not the other way round.
 #
 # 4. A controller paired the normal way (bluetoothctl or the RetroPie
-#    menu). Note it then shows up in the TapBox PWA's BT list as a
+#    menu). Note it then shows up in the Vibb PWA's BT list as a
 #    device — it is filtered out of the SPEAKER list (d.audio), so it
 #    cannot be picked as an audio output by accident.
 #
 # 5. Audio out of the TV, set INSIDE RetroPie's own menus (the games
 #    obey that). ES's own menu sounds are separate and still come out
-#    the TapBox speaker; the proposed fix is an ~/.asoundrc for
+#    the Vibb speaker; the proposed fix is an ~/.asoundrc for
 #    RP_USER pointing default at the vc4hdmi card. UNVERIFIED — never
 #    tested on real hardware, so treat it as a hypothesis.
 #
-# The tapbox-extra wrapper has ALREADY: stopped tapbox-ui/idle/buttons,
+# The vibb-extra wrapper has ALREADY: stopped vibb-ui/idle/buttons,
 # stopped playback (bookmarked) and go-librespot, and lifted the CPU
 # governor. On exit — however this script ends — the wrapper restores
-# every TapBox service, rfkill-unblocks both radios and resets wifi
+# every Vibb service, rfkill-unblocks both radios and resets wifi
 # txpower, so nothing here is load-bearing for the return trip.
 set -u
 RP_USER="${RP_USER:-palchrb}"   # the user RetroPie-Setup installed for
@@ -83,16 +83,16 @@ fi
 # always comes back whole:
 #   bt-reconnect  quiets the BT pager while a controller is in use
 #   daemon+mpris  the orchestration daemon and its AVRCP bridge. NOTE:
-#                 tapboxd is also the phone's remote escape hatch, so
+#                 vibbd is also the phone's remote escape hatch, so
 #                 while a game runs there is no PWA — the MODE-hold
 #                 emergency exit and SSH remain.
 #   btsnoop       the BT-crash capture ring writes to /run, i.e. RAM
 #                 (three segments). Only running if you enabled it for
 #                 a crash hunt; 'stop' does not disable it, so it comes
 #                 back on the next boot.
-systemctl stop tapbox-bt-reconnect 2>/dev/null || true
-systemctl stop tapbox-daemon tapbox-mpris 2>/dev/null || true
-systemctl stop tapbox-btsnoop 2>/dev/null || true
+systemctl stop vibb-bt-reconnect 2>/dev/null || true
+systemctl stop vibb-daemon vibb-mpris 2>/dev/null || true
+systemctl stop vibb-btsnoop 2>/dev/null || true
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 # RF: wifi STAYS UP by default (power save on — latency, not range).
@@ -143,7 +143,7 @@ done
 # bug, and RetroPie never once got to start. Trusting the human is the
 # right default here: launching this is a deliberate X+Y chord plus a
 # confirm, the emergency MODE-hold still quits a session with no
-# picture, and the wrapper's ExecStopPost brings TapBox back whatever
+# picture, and the wrapper's ExecStopPost brings Vibb back whatever
 # happens. A wrong guess costs one confused minute; a wrong abort cost
 # the whole feature.
 #
@@ -175,11 +175,11 @@ else
   if [ -x "$FBCP_BIN" ]; then
     "$FBCP_BIN" & FBCP_PID=$!
   else
-    # leave the reason ON THE BOX SCREEN (tapbox-ui shows this file on
-    # its next start), then bail so TapBox comes right back
+    # leave the reason ON THE BOX SCREEN (vibb-ui shows this file on
+    # its next start), then bail so Vibb comes right back
     echo "RetroPie: no TV found — connect HDMI and try again" \
-      > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
-    echo "retropie: no TV on HDMI — aborting so TapBox comes right back"
+      > "${VIBB_RUN:-/run}/vibb-extra.msg" 2>/dev/null || true
+    echo "retropie: no TV on HDMI — aborting so Vibb comes right back"
     exit 1
   fi
 fi
@@ -262,8 +262,8 @@ trap cleanup EXIT
 # see the wait loop below.
 runuser -l "$RP_USER" -c "screen -dmS $SESSION" || {
   echo "retropie: could not create the screen session" >&2
-  echo "RetroPie: could not start — see journalctl -u tapbox-extra" \
-    > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
+  echo "RetroPie: could not start — see journalctl -u vibb-extra" \
+    > "${VIBB_RUN:-/run}/vibb-extra.msg" 2>/dev/null || true
   exit 1
 }
 sleep 2   # let the login shell finish its rc files before typing at it
@@ -286,8 +286,8 @@ for _ in $(seq 1 30); do
 done
 if ! es_running; then
   echo "retropie: EmulationStation never started — handing the box back" >&2
-  echo "RetroPie: did not start — see journalctl -u tapbox-extra" \
-    > "${TAPBOX_RUN:-/run}/tapbox-extra.msg" 2>/dev/null || true
+  echo "RetroPie: did not start — see journalctl -u vibb-extra" \
+    > "${VIBB_RUN:-/run}/vibb-extra.msg" 2>/dev/null || true
   exit 1
 fi
 

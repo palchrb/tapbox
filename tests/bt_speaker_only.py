@@ -15,11 +15,11 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_ASOUND"] = os.path.join(TMP, "asound.conf")
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_ASOUND"] = os.path.join(TMP, "asound.conf")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import bt, btbus  # noqa: E402
+from vibb import bt, btbus  # noqa: E402
 
 # 1. the flag reaches the API, per device
 btbus.paired_devices = lambda: [

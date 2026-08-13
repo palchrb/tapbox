@@ -3,7 +3,7 @@
 a SHORT timeout: the render loop is single-threaded, so a daemon slowed
 by go-librespot's blocking API (a track load stalls its whole HTTP
 layer — field 2026-07-20 12:54) must never freeze the screen more than
-a beat. (2) A render-loop watchdog restarts tapbox-ui if the loop ever
+a beat. (2) A render-loop watchdog restarts vibb-ui if the loop ever
 wedges for real, instead of the kid staring at a frozen frame until the
 60-min idle shutdown — but it must NOT fire during a legitimate long
 inline block (a ~130s BT pair)."""
@@ -13,8 +13,8 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 
 import ui  # noqa: E402
 

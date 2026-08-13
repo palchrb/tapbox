@@ -7,10 +7,10 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import content, library  # noqa: E402
+from vibb import content, library  # noqa: E402
 
 # 1. library validation: -1 (all) allowed, out-of-range rejected
 lib = {"sections": [{"name": "S", "entries": [
@@ -36,7 +36,7 @@ EPISODES = [{"id": f"e{i}", "url": f"http://x/{i}.mp3"} for i in range(20)]
 content._catalog = lambda slug, kind: list(EPISODES)   # oldest first
 content._catalog_image = lambda slug, kind: None
 content._episode_file = lambda slug, i, kind: os.path.join(
-    os.environ["TAPBOX_CACHE"], slug, f"{i}.x")
+    os.environ["VIBB_CACHE"], slug, f"{i}.x")
 got = []
 content._download = lambda url, dest, **k: got.append(dest)
 

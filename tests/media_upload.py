@@ -28,16 +28,16 @@ from http.server import ThreadingHTTPServer
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
 MEDIA = os.path.join(TMP, "media")
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_MEDIA"] = MEDIA
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_MEDIA"] = MEDIA
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "api-token")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import token  # noqa: E402
+from vibb import token  # noqa: E402
 
 TOKEN = token.ensure()
 srv = ThreadingHTTPServer(("127.0.0.1", 0), daemon.Handler)
@@ -51,7 +51,7 @@ def upload(coll, name, data, tok=TOKEN, ctype="application/octet-stream"):
     if ctype:
         req.add_header("Content-Type", ctype)
     if tok:
-        req.add_header("X-TapBox-Token", tok)
+        req.add_header("X-Vibb-Token", tok)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, json.loads(r.read())
@@ -63,7 +63,7 @@ def api(path, body=None, method="GET"):
     data = json.dumps(body or {}).encode() if method != "GET" else None
     req = urllib.request.Request(BASE + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
-    req.add_header("X-TapBox-Token", TOKEN)
+    req.add_header("X-Vibb-Token", TOKEN)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return r.status, json.loads(r.read())
@@ -86,7 +86,7 @@ print("1b. no leftover .part after a successful upload OK")
 
 # 2. THE POINT: the box can already PLAY what was uploaded — the folder
 #    path expands to a playable list with per-file ids for bookmarks
-from tapbox import content  # noqa: E402
+from vibb import content  # noqa: E402
 
 upload("Ronja", "02-kapittel.mp3", b"ID3" + os.urandom(1000))
 entries = content.expand_entries(os.path.join(MEDIA, "Ronja"))
@@ -165,7 +165,7 @@ print("8. delete removes a single file and a whole collection OK")
 
 # 9. MEDIA_DIR must live OUTSIDE the cache — prune_cache would happily
 #    delete a 300MB audiobook nobody has another copy of
-from tapbox.paths import CACHE_DIR, MEDIA_DIR  # noqa: E402
+from vibb.paths import CACHE_DIR, MEDIA_DIR  # noqa: E402
 
 assert not os.path.realpath(MEDIA_DIR).startswith(
     os.path.realpath(CACHE_DIR) + os.sep), (MEDIA_DIR, CACHE_DIR)

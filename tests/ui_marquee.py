@@ -14,8 +14,8 @@ import tempfile
 # private marker dir: a BUSY marker left in /tmp by an earlier test
 # (spotify_controls touches it on next/prev) must not defer this
 # test's artwork fetches
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 
 import ui  # noqa: E402
 

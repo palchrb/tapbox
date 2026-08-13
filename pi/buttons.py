@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TapBox button daemon — generic media-key listener.
+"""Vibb button daemon — generic media-key listener.
 
 Watches EVERY input device that offers media keys: bluetooth AVRCP
 buttons (any speaker/headset — BlueZ maps them all to the same standard
@@ -19,12 +19,12 @@ import sys
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (_HERE, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_HERE, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import boxapi, mpv, spotify  # noqa: E402
+from vibb import boxapi, mpv, spotify  # noqa: E402
 
 # evdev is only needed for the daemon (device watching); the one-shot CLI
 # (used by the PiSugar tap shells) imports lazily so it runs on plain python3.

@@ -12,16 +12,16 @@ import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import library as lib  # noqa: E402
+from vibb import library as lib  # noqa: E402
 
 # stand-in for content.py: a child that sleeps "forever" (or exits fast)
-SLEEPER = os.path.join(os.environ["TAPBOX_STATE"], "fake_content.py")
+SLEEPER = os.path.join(os.environ["VIBB_STATE"], "fake_content.py")
 with open(SLEEPER, "w") as f:
     f.write("import sys, time\n"
             "time.sleep(0.1 if sys.argv[1] == 'fast' else 300)\n")

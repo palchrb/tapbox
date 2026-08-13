@@ -116,7 +116,7 @@ const file = (name, size) => ({ name, size, __isFile: true });
   assert(/\/media\/upload\?collection=Ronja&name=01\.mp3/.test(s.url), s.url);
   assert(s.headers["Content-Type"] === "application/octet-stream",
          "must be octet-stream, not multipart: " + s.headers["Content-Type"]);
-  assert(s.headers["X-TapBox-Token"] === "ABCD1234EFGH5678", "token missing");
+  assert(s.headers["X-Vibb-Token"] === "ABCD1234EFGH5678", "token missing");
   assert(s.isBlobLike, "the raw file must be the body");
   console.log("1. upload is octet-stream + token, raw file body OK");
 

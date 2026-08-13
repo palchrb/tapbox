@@ -18,10 +18,10 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "etc", "api-token")
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "etc", "api-token")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import token  # noqa: E402
+from vibb import token  # noqa: E402
 
 F = token.TOKEN_FILE
 
@@ -99,7 +99,7 @@ print("8. rotate(): new token live immediately, old one dead OK")
 
 # 9. header() carries the token for internal callers
 h = token.header()
-assert h == {"X-TapBox-Token": second}, h
+assert h == {"X-Vibb-Token": second}, h
 print("9. header() carries the token for internal callers OK")
 
 # 10. grouped() is the screen form

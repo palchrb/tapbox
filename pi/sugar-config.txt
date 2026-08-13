@@ -1,9 +1,9 @@
-# PiSugar 3 — CALIBRATED battery curve for TapBox (2026-07-05)
+# PiSugar 3 — CALIBRATED battery curve for Vibb (2026-07-05)
 #
 # Built from a real full-discharge run on the test rig: fully charged
 # (4.19V) -> safe shutdown at 16:13 after 5h04m of continuous Bluetooth
 # playback (~0.8W average system draw), voltage logged every 60s by
-# tapbox-batlog. Percent is defined as REMAINING PLAYTIME: "40%" means
+# vibb-batlog. Percent is defined as REMAINING PLAYTIME: "40%" means
 # 40% of the ~5h runtime was left at that voltage under playback load.
 #
 # Notes on the calibration:
@@ -25,7 +25,7 @@
 # 2. Replace/add the line below inside the top-level { ... } object
 #    (comma after the previous entry; do NOT paste the # comment lines).
 # 3. Restart the server:   sudo systemctl restart pisugar-server
-# 4. Verify:               sudo tapbox-power status
+# 4. Verify:               sudo vibb-power status
 #
 # The server validates the curve: voltages and percentages must both be
 # strictly monotonic together — keep it that way if you tweak it.

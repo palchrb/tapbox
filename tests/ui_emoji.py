@@ -13,13 +13,13 @@ import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TMP = "/tmp/tapbox-ui-emoji"
+TMP = "/tmp/vibb-ui-emoji"
 os.makedirs(TMP, exist_ok=True)
-for k in ("TAPBOX_RUN", "TAPBOX_STATE", "TAPBOX_CACHE"):
+for k in ("VIBB_RUN", "VIBB_STATE", "VIBB_CACHE"):
     os.environ[k] = TMP
-os.environ["TAPBOX_UI_PNG"] = os.path.join(TMP, "screen.png")  # no SPI
-# (the old TAPBOX_PNG name here was a no-op typo — QA review 2026-08-12)
-os.environ["TAPBOX_EMOJI"] = "0"  # pins 1-9 pin the SCRUB pipeline; the
+os.environ["VIBB_UI_PNG"] = os.path.join(TMP, "screen.png")  # no SPI
+# (the old VIBB_PNG name here was a no-op typo — QA review 2026-08-12)
+os.environ["VIBB_EMOJI"] = "0"  # pins 1-9 pin the SCRUB pipeline; the
 #                                   sprite pins below manage state directly
 sys.path.insert(0, os.path.join(REPO, "pi"))
 import ui  # noqa: E402
@@ -160,11 +160,11 @@ print("11. no-font path renders the shipped scrub, byte-for-byte OK")
 #     a perfectly good bbox, which is how the 2026-08-11 field bug
 #     would re-enter through the cache as black-box PNGs.
 TTF = next((p for p in (
-    os.environ.get("TAPBOX_TEST_TTF", ""),
+    os.environ.get("VIBB_TEST_TTF", ""),
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/doc/pipx/html-docs/fonts/fontawesome-webfont.ttf",
 ) if p and os.path.exists(p)), None)
-os.environ["TAPBOX_EMOJI"] = "1"
+os.environ["VIBB_EMOJI"] = "1"
 if TTF:
     ui._EMOJI_FONT_PATHS = (TTF,)
     ui._EMOJI_STRIKES = (64,)
@@ -226,7 +226,7 @@ if TTF:
     assert spr2 is not None, "corrupt sprite must be re-rendered"
     with open(path, "rb") as fh:
         assert fh.read(4) == b"\x89PNG", "corrupt file was not healed"
-    from tapbox import content  # noqa: E402
+    from vibb import content  # noqa: E402
     content.prune_cache([])
     assert os.path.isdir(ui.UI_EMOJI_DIR) and os.listdir(ui.UI_EMOJI_DIR), \
         "prune_cache wiped the sprite dir (content.py allow-list)"

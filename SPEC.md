@@ -1,4 +1,4 @@
-# tapbox — Product Specification (platform + two concepts)
+# vibb — Product Specification (platform + two concepts)
 
 **Version:** 0.11 (draft)
 **Last updated:** 2026-07-05
@@ -34,7 +34,7 @@ This is **not** the same audience that buys Tonies in a department store. It is 
 
 ## 3. Differentiation
 
-| | Tonies | Yoto | Jooki | Phoniebox (DIY) | tapbox |
+| | Tonies | Yoto | Jooki | Phoniebox (DIY) | vibb |
 |---|---|---|---|---|---|
 | Open content (BYO Spotify) | ❌ | Partial | ✅ | ✅ | ✅ |
 | Polished onboarding | ✅ | ✅ | ✅ | ❌ | **✅ key bet** |
@@ -60,14 +60,14 @@ Explicitly **not** trying to be:
 | Layer | Choice | License | Notes |
 |---|---|---|---|
 | OS | Raspberry Pi OS Lite (Trixie) | Debian mix | Standard Pi OS |
-| Spotify backend | [go-librespot](https://github.com/devgianlu/go-librespot) (daemon, HTTP API :3678) | GPL-3.0 | Zeroconf login ("pick tapbox in the Spotify app") is the LOCKED onboarding UX. Phone doubles as remote (same Connect session). Separate binary over HTTP, no linking issues |
+| Spotify backend | [go-librespot](https://github.com/devgianlu/go-librespot) (daemon, HTTP API :3678) | GPL-3.0 | Zeroconf login ("pick vibb in the Spotify app") is the LOCKED onboarding UX. Phone doubles as remote (same Connect session). Separate binary over HTTP, no linking issues |
 | Local/podcast/radio playback | mpv (IPC socket) | GPL-2.0 | Used as binary. Resamples everything to 44.1kHz (BT/SBC requirement) |
 | Content expansion | `nrk.py` | Apache 2.0 | NRK podcasts/series/live channels via psapi (incremental catalog cache), any RSS feed, local folders. Offline cache: newest-N episode download (mp3 direct, HLS→m4a) |
-| Orchestration | `daemon.py` (tapboxd, HTTP API :3679) | Apache 2.0 | THE authority on playback state. `/play /pause /playpause /next /prev /stop /volume /status`. Routes commands to the active source, resumes last target on dead sessions, yields mpv when the phone takes over Spotify, one box-volume knob (mpv softvol / Spotify volume). This API is the backend for the parent PWA and for Concept A's screen UI |
+| Orchestration | `daemon.py` (vibbd, HTTP API :3679) | Apache 2.0 | THE authority on playback state. `/play /pause /playpause /next /prev /stop /volume /status`. Routes commands to the active source, resumes last target on dead sessions, yields mpv when the phone takes over Spotify, one box-volume knob (mpv softvol / Spotify volume). This API is the backend for the parent PWA and for Concept A's screen UI |
 | Playback runner | `player.py` | Apache 2.0 | Per-playback process: Spotify→go-librespot, rest→mpv. Per-card resume bookmarks keyed on episode id; live streams excluded |
 | Input daemons | `rfid.py`, `buttons.py` | Apache 2.0 | RFID: poll mode + slot mode (card in = play, card out = pause). Buttons: generic evdev media keys (AVRCP, GPIO via gpio-keys overlay, USB) incl. volume |
 | Power tooling | `power.sh`, `idle.py`, PiSugar tap shells | Apache 2.0 | Governor/LED/HDMI/wifi tuning, battery CSV logger, idle auto-poweroff, PiSugar button gestures |
-| Web UI (planned) | Custom PWA (framework TBD) | Apache 2.0 | Onboarding + library/card admin against tapboxd |
+| Web UI (planned) | Custom PWA (framework TBD) | Apache 2.0 | Onboarding + library/card admin against vibbd |
 | Bluetooth A2DP | bluez-alsa | LGPL | Source mode (BT speakers/headsets, auto-reconnect, button-first pairing) and sink escape hatch |
 | Service supervision | systemd | LGPL | `install.sh` is idempotent: `git pull && sudo ./pi/install.sh` = full update |
 
@@ -83,9 +83,9 @@ Explicitly **not** trying to be:
 
 ### Technical
 - **No offline mode for streaming services:** DRM playback always needs a live session + per-track key, so true offline Spotify is off the table regardless of client. Mitigations: local files, drag-and-drop upload in the PWA, podcast auto-cache (implemented), honest positioning: "Home-first; travel content = local files and cached podcasts."
-- **No Spotify *bandwidth* cache either (2026-07-05):** Rust librespot caches downloaded (still-encrypted) audio to disk, making repeat plays free — a big deal on mobile hotspots given kids' repeat-heavy listening (~72 MB/h at 160 kbps otherwise). go-librespot, which we use for its control API, has no audio cache. **RESOLVED via fork (2026-07-06):** TapBox now runs [palchrb/go-librespot](https://github.com/palchrb/go-librespot) — upstream + an on-disk cache for the encrypted audio files (LRU, size-limited, keyed by file id, atomic writes; keys still fetched live, mirroring Rust librespot's design — no extra DRM exposure). Pinned in install.sh; config: `cache: {enabled, dir, size_limit}`. Still worth proposing upstream to shed the fork-maintenance cost (rebasing on upstream releases). Note: a cache saves data, not connectivity; fully-offline is covered by the mitigation above only.
+- **No Spotify *bandwidth* cache either (2026-07-05):** Rust librespot caches downloaded (still-encrypted) audio to disk, making repeat plays free — a big deal on mobile hotspots given kids' repeat-heavy listening (~72 MB/h at 160 kbps otherwise). go-librespot, which we use for its control API, has no audio cache. **RESOLVED via fork (2026-07-06):** Vibb now runs [palchrb/go-librespot](https://github.com/palchrb/go-librespot) — upstream + an on-disk cache for the encrypted audio files (LRU, size-limited, keyed by file id, atomic writes; keys still fetched live, mirroring Rust librespot's design — no extra DRM exposure). Pinned in install.sh; config: `cache: {enabled, dir, size_limit}`. Still worth proposing upstream to shed the fork-maintenance cost (rebasing on upstream releases). Note: a cache saves data, not connectivity; fully-offline is covered by the mitigation above only.
 - **bt.py step 2 — BlueZ D-Bus port (planned):** full implementation plan in [PLAN-bt-dbus.md](./PLAN-bt-dbus.md) (transport seam, Agent1, event-driven reconnect daemon, test harness, rig checklists). Refined 2026-07-07 by architect/implementer/tester review passes.
-- **WiFi auto-off away from known networks (designed 2026-07-06, built 2026-07-07):** a disconnected wpa_supplicant scan-loops constantly (~10-20mA, 5-10% of playback draw). Lives in `netmgmt._wifi_watchdog`: wifi is always unblocked at daemon startup (systemd-rfkill persists blocks across reboots — same gotcha as BT); while associated (or the setup hotspot is up) nothing happens; after `wifi_auto_off_min` (setting, default 15, 0 = never) without a known network the radio is rfkill-blocked; then a ~30s probe every 10 min (TAPBOX_WIFI_PROBE_INTERVAL/WINDOW) lets NetworkManager scan and auto-join, staying on only on an actual association — a parent's hotspot is found within max 10 min while ~99% of the saving is kept. `set_wifi(True)` (the PWA "Reconnect" button or the screen's Wi-Fi toggle) always grants a fresh grace window; a manual "wifi off" is deliberate and never probed back on. Never triggers during streaming by construction (trigger condition is "not associated"). Fresh boxes without saved networks keep the onboarding-hotspot path instead. **Probe hold (2026-07-16):** offline playback (cached content over bluetooth) shares the Zero 2 W's one 2.4GHz radio with the probe's NM scan — audible stutter and the documented BT firmware-crash trigger. `netmgmt.probe_hold` (installed by tapboxd: any mpv session on the bt output — paused counts, since a kid mid-listen resumes straight into a live ~30s probe window otherwise) defers the probe until the session ends; deferred, not skipped — it fires on the first watchdog pass afterwards. **`wifi_probe` setting (PWA, 2026-07-16):** 0 turns the periodic probe off entirely — the radio stays down until the explicit reconnect button (`set_wifi`), for parents who prefer zero scans and zero standby spend at the cabin. Default 1 (probe as designed). Measure the real saving with the battery logger before shipping claims.
+- **WiFi auto-off away from known networks (designed 2026-07-06, built 2026-07-07):** a disconnected wpa_supplicant scan-loops constantly (~10-20mA, 5-10% of playback draw). Lives in `netmgmt._wifi_watchdog`: wifi is always unblocked at daemon startup (systemd-rfkill persists blocks across reboots — same gotcha as BT); while associated (or the setup hotspot is up) nothing happens; after `wifi_auto_off_min` (setting, default 15, 0 = never) without a known network the radio is rfkill-blocked; then a ~30s probe every 10 min (VIBB_WIFI_PROBE_INTERVAL/WINDOW) lets NetworkManager scan and auto-join, staying on only on an actual association — a parent's hotspot is found within max 10 min while ~99% of the saving is kept. `set_wifi(True)` (the PWA "Reconnect" button or the screen's Wi-Fi toggle) always grants a fresh grace window; a manual "wifi off" is deliberate and never probed back on. Never triggers during streaming by construction (trigger condition is "not associated"). Fresh boxes without saved networks keep the onboarding-hotspot path instead. **Probe hold (2026-07-16):** offline playback (cached content over bluetooth) shares the Zero 2 W's one 2.4GHz radio with the probe's NM scan — audible stutter and the documented BT firmware-crash trigger. `netmgmt.probe_hold` (installed by vibbd: any mpv session on the bt output — paused counts, since a kid mid-listen resumes straight into a live ~30s probe window otherwise) defers the probe until the session ends; deferred, not skipped — it fires on the first watchdog pass afterwards. **`wifi_probe` setting (PWA, 2026-07-16):** 0 turns the periodic probe off entirely — the radio stays down until the explicit reconnect button (`set_wifi`), for parents who prefer zero scans and zero standby spend at the cabin. Default 1 (probe as designed). Measure the real saving with the battery logger before shipping claims.
 
 - **Battery life:** validate all marketing numbers with the CSV logger on real hardware (discharge run in progress on the rig).
 
@@ -99,7 +99,7 @@ offline story:
   one stable URL, no mDNS/Android-.local issues; multi-box and multi-parent
   accounts; config backup for free). Editing works whenever the *phone* is
   online — the box syncs later.
-- **The box stays fully autonomous at runtime:** tapboxd, screen UI, cards,
+- **The box stays fully autonomous at runtime:** vibbd, screen UI, cards,
   buttons, cached content and menus work identically with zero internet
   (flight/cabin is sacred). The cloud is a sync source for configuration,
   never a runtime dependency.
@@ -112,7 +112,7 @@ offline story:
   sofa — physical buttons/cards/screen still work, which is the mitigation);
   service uptime becomes our problem; privacy positioning requires storing
   config only (no listening logs, or opt-in) and EU hosting.
-- **Migration is cheap by design:** the tapboxd API is the whole contract —
+- **Migration is cheap by design:** the vibbd API is the whole contract —
   the cloud agent is a thin client of it, and today's PWA code is reused
   with a different base URL. Nothing built so far is discarded; the current
   box-served PWA remains the self-builder/offline-LAN path.
@@ -122,7 +122,7 @@ offline story:
 ### Remote access (decided for the rig, 2026-07-07)
 - **Tailscale is the recommended remote-admin path for self-builders:** the
   PWA binds 0.0.0.0, so with tailscaled up the box is reachable at
-  `http://tapbox.<tailnet>.ts.net` from anywhere — authenticated and
+  `http://vibb.<tailnet>.ts.net` from anywhere — authenticated and
   encrypted, without exposing the deliberately auth-less :3679 to the
   internet, and regardless of which physical network the box is on
   (MagicDNS replaces mDNS off-LAN). ~15-20MB RAM, negligible idle power.

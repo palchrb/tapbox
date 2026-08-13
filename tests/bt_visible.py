@@ -57,24 +57,24 @@ def wait_for(what, pred, timeout=15):
 
 # --- section A: the daemon endpoint (no dbus needed) -------------------------
 
-os.environ["TAPBOX_STATE"] = os.path.join(TMP, "state")
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", os.path.join(TMP, "cache"))
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
-os.environ["TAPBOX_BT_BACKEND"] = "cli"  # deterministic: no real bus
+os.environ["VIBB_STATE"] = os.path.join(TMP, "state")
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "api-token")
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ.setdefault("VIBB_CACHE", os.path.join(TMP, "cache"))
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
+os.environ["VIBB_BT_BACKEND"] = "cli"  # deterministic: no real bus
 FAKE_CLI = os.path.join(TMP, "fake-bt-cli.sh")
 write_exec(FAKE_CLI, f"""#!/bin/sh
 echo "$@" >> {ARGS_LOG}
 echo "==> Paired: Fake Car ({CAR})"
 exit 0
 """)
-os.environ["TAPBOX_PLAY"] = FAKE_CLI
+os.environ["VIBB_PLAY"] = FAKE_CLI
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
-from tapbox import bt as bt_mod  # noqa: E402
+from vibb import bt as bt_mod  # noqa: E402
 
 QUIESCED, RESUMED = [], []
 daemon._bt_quiesce = lambda: QUIESCED.append(1) or True
@@ -89,14 +89,14 @@ def _box_token():
     """Privileged endpoints need the box token since the API gate landed.
     ensure() returns the daemon's existing one, or creates it when the
     daemon runs in-process here and never went through main()."""
-    from tapbox import token
+    from vibb import token
     return token.ensure()
 
 def post(path, body):
     req = urllib.request.Request(
         f"http://127.0.0.1:{PORT}{path}", data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json",
-                 "X-TapBox-Token": _box_token()}, method="POST")
+                 "X-Vibb-Token": _box_token()}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, json.loads(r.read())
@@ -126,10 +126,10 @@ case "$1" in show) echo "Powered: yes";; esac
 exit 0
 """)
 env2 = dict(os.environ, PATH=BIN + ":" + os.environ["PATH"],
-            TAPBOX_DBUS_ADDRESS="unix:path=/nonexistent",
+            VIBB_DBUS_ADDRESS="unix:path=/nonexistent",
             DBUS_SYSTEM_BUS_ADDRESS="unix:path=/nonexistent")
 r = subprocess.run([sys.executable,
-                    os.path.join(REPO, "pi", "tapbox", "bt.py"),
+                    os.path.join(REPO, "pi", "vibb", "bt.py"),
                     "visible", "10"], env=env2, capture_output=True,
                    text=True, timeout=60)
 assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
@@ -157,11 +157,11 @@ fake = subprocess.Popen(
     stdout=subprocess.PIPE, text=True)
 assert "ready" in fake.stdout.readline()
 CALL = ["dbus-send", "--bus=" + addr, "--print-reply",
-        "--dest=org.bluez", "--type=method_call", "/org/tapbox/mock"]
+        "--dest=org.bluez", "--type=method_call", "/org/vibb/mock"]
 
 
 def mock(method, *args, parse=None):
-    r = subprocess.run(CALL + [f"org.tapbox.Mock.{method}", *args],
+    r = subprocess.run(CALL + [f"org.vibb.Mock.{method}", *args],
                        check=True, capture_output=True, text=True)
     if parse == "uint":
         return int(re.search(r"uint32 (\d+)", r.stdout).group(1))
@@ -180,13 +180,13 @@ def events():
 
 MAC_FILE = os.path.join(TMP, "bt-mac-window")
 LOCK_FILE = os.path.join(TMP, "bt-window.lock")
-ENV = dict(os.environ, TAPBOX_BT_BACKEND="dbus",
-           DBUS_SYSTEM_BUS_ADDRESS=addr, TAPBOX_BT_FILE=MAC_FILE,
-           TAPBOX_BT_LOCKFILE=LOCK_FILE,
-           TAPBOX_ASOUND=os.path.join(TMP, "asound-window.conf"),
-           TAPBOX_BT_CACHE_SECS="1", PATH=BIN + ":" + os.environ["PATH"])
-ENV.pop("TAPBOX_DBUS_ADDRESS", None)
-BT_PY = os.path.join(REPO, "pi", "tapbox", "bt.py")
+ENV = dict(os.environ, VIBB_BT_BACKEND="dbus",
+           DBUS_SYSTEM_BUS_ADDRESS=addr, VIBB_BT_FILE=MAC_FILE,
+           VIBB_BT_LOCKFILE=LOCK_FILE,
+           VIBB_ASOUND=os.path.join(TMP, "asound-window.conf"),
+           VIBB_BT_CACHE_SECS="1", PATH=BIN + ":" + os.environ["PATH"])
+ENV.pop("VIBB_DBUS_ADDRESS", None)
+BT_PY = os.path.join(REPO, "pi", "vibb", "bt.py")
 
 
 def visible(*extra):
@@ -269,7 +269,7 @@ try:
     assert verdict == "paired", verdict
     assert p.wait(timeout=60) == 0, p.stdout.read()
     assert open(MAC_FILE).read().strip() == CAR3, "adopt must set the output"
-    assert CAR3 in open(ENV["TAPBOX_ASOUND"]).read(), "adopt must route ALSA"
+    assert CAR3 in open(ENV["VIBB_ASOUND"]).read(), "adopt must route ALSA"
     os.remove(MAC_FILE)
     print("7. visible ... adopt runs the battle-tested connect path OK")
 
@@ -304,7 +304,7 @@ try:
     snap = subprocess.run([sys.executable, "-c", f"""
 import json, sys
 sys.path.insert(0, {json.dumps(os.path.join(REPO, "pi"))})
-from tapbox import btbus
+from vibb import btbus
 ok, detail = btbus.connect_device({json.dumps(GO)})
 print(json.dumps(ok))
 """], env=ENV, capture_output=True, text=True, timeout=60)

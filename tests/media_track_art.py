@@ -17,10 +17,10 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
 TMP = tempfile.mkdtemp()
-for k in ("TAPBOX_RUN", "TAPBOX_STATE", "TAPBOX_CACHE"):
+for k in ("VIBB_RUN", "VIBB_STATE", "VIBB_CACHE"):
     os.environ[k] = TMP
 
-from tapbox import content  # noqa: E402
+from vibb import content  # noqa: E402
 
 FOLDER = tempfile.mkdtemp()
 runs = []

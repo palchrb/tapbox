@@ -3,7 +3,7 @@
 hotspot died, NetworkManager auto-fell back to the home AP, and
 go-librespot kept zombie TCPs bound to the OLD address for minutes
 (pong/put-state timeouts wedged its api and froze the box) — the old
-'network changed' hook only fired on tapboxd's own /wifi/connect. The
+'network changed' hook only fired on vibbd's own /wifi/connect. The
 ip watchdog heals EVERY real address change through one debounced gate."""
 import os
 import sys
@@ -12,10 +12,10 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = STATE
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(STATE, "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = STATE
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(STATE, "lib.json")
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402

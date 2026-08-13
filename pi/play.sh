@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# TapBox test rig — connect a Bluetooth headset/speaker and play from Spotify.
+# Vibb test rig — connect a Bluetooth headset/speaker and play from Spotify.
 # Requires install.sh to have been run (and Spotify login completed).
 #
 # Usage:
@@ -25,12 +25,12 @@
 set -euo pipefail
 
 API="http://127.0.0.1:3678"
-MAC_FILE="/etc/tapbox/bt-headset"
+MAC_FILE="/etc/vibb/bt-headset"
 MAC_RE='^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'
 
-# All bluetooth logic lives in tapbox/bt.py (shared with tapboxd's /bt API)
-BT_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tapbox/bt.py"
-[[ -f $BT_PY ]] || BT_PY=/usr/local/lib/tapbox-py/tapbox/bt.py
+# All bluetooth logic lives in vibb/bt.py (shared with vibbd's /bt API)
+BT_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vibb/bt.py"
+[[ -f $BT_PY ]] || BT_PY=/usr/local/lib/vibb-py/vibb/bt.py
 bt_py() { python3 "$BT_PY" "$@"; }
 
 if [[ $EUID -ne 0 ]]; then
@@ -46,9 +46,9 @@ DAEMON="http://127.0.0.1:3679"
 # just means the privileged calls get a clear 401 instead of silently
 # doing nothing.
 TOKEN_HDR=()
-if [[ -r ${TAPBOX_TOKEN_FILE:-/etc/tapbox/api-token} ]]; then
-  TOKEN_HDR=(-H "X-TapBox-Token: $(tr -d '[:space:]' \
-    < "${TAPBOX_TOKEN_FILE:-/etc/tapbox/api-token}")")
+if [[ -r ${VIBB_TOKEN_FILE:-/etc/vibb/api-token} ]]; then
+  TOKEN_HDR=(-H "X-Vibb-Token: $(tr -d '[:space:]' \
+    < "${VIBB_TOKEN_FILE:-/etc/vibb/api-token}")")
 fi
 FRESH_ARG=""
 FG=0
@@ -96,7 +96,7 @@ case "$1" in
   test)
     bt_py ensure
     echo "==> Playing test sound (you should hear 'Front Center')..."
-    aplay -D tapbox_bt /usr/share/sounds/alsa/Front_Center.wav
+    aplay -D vibb_bt /usr/share/sounds/alsa/Front_Center.wav
     exit 0 ;;
   pause|resume|next|prev|stop)
     # Route via the daemon so the command hits whatever is actually active
@@ -115,7 +115,7 @@ case "$1" in
     fi
     exit 0 ;;
   scan-raw)
-    # Machine-readable scan for tapboxd /bt/scan: mac<TAB>name<TAB>audio
+    # Machine-readable scan for vibbd /bt/scan: mac<TAB>name<TAB>audio
     bt_py scan-raw
     exit 0 ;;
   use)
@@ -165,7 +165,7 @@ fi
 
 if [[ $FG -eq 1 ]]; then
   PLAYERPY="$(dirname "$(readlink -f "$0")")/player.py"
-  [[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/tapbox-player
+  [[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/vibb-player
   # shellcheck disable=SC2086
   python3 "$PLAYERPY" $FRESH_ARG "$LINK"
   exit 0
@@ -177,12 +177,12 @@ if curl -sf -X POST "$DAEMON/play" -H 'Content-Type: application/json' \
      "${TOKEN_HDR[@]}" \
      -d "{\"target\": \"$LINK\", \"fresh\": $FRESH_BOOL}" >/dev/null; then
   echo "==> Playing in the background (survives this terminal)."
-  echo "    Follow:  journalctl -u tapbox-daemon -f"
+  echo "    Follow:  journalctl -u vibb-daemon -f"
   echo "    Control: sudo $0 pause|next|prev|stop   or the buttons"
 else
   echo "daemon not running — playing in the foreground instead" >&2
   PLAYERPY="$(dirname "$(readlink -f "$0")")/player.py"
-  [[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/tapbox-player
+  [[ -f $PLAYERPY ]] || PLAYERPY=/usr/local/bin/vibb-player
   # shellcheck disable=SC2086
   python3 "$PLAYERPY" $FRESH_ARG "$LINK"
 fi

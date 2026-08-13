@@ -69,7 +69,7 @@ global.setInterval = () => 0;
 global.clearTimeout = () => {};
 global.clearInterval = () => {};
 
-/* --- in-memory tapboxd ------------------------------------------------- */
+/* --- in-memory vibbd ------------------------------------------------- */
 const SPOT = "https://open.spotify.com/playlist/0hg";
 const calls = [];
 global.fetch = async (path, opts = {}) => {

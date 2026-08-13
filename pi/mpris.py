@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tapbox-mpris — register the box as a BlueZ media player (AVRCP TG).
+"""vibb-mpris — register the box as a BlueZ media player (AVRCP TG).
 
 Why this exists (btsnoop capture 2026-07-27, Skoda/Alps head unit):
 
@@ -12,7 +12,7 @@ Why this exists (btsnoop capture 2026-07-27, Skoda/Alps head unit):
    gives those polls a real answer.
 2. With a player registered, the car's display shows what is playing —
    title/artist/album for Spotify, podcasts and uploaded audiobooks
-   alike, since everything flows through tapboxd's /status.
+   alike, since everything flows through vibbd's /status.
 3. The car's AVRCP transport commands arrive as PLAYER METHOD calls
    (Play/Pause/Next/...) instead of synthetic key events, and are
    forwarded to the daemon's IDEMPOTENT endpoints — reinforcing the
@@ -41,11 +41,11 @@ import sys
 import time
 import urllib.request
 
-BASE = os.environ.get("TAPBOX_DAEMON", "http://127.0.0.1:3679")
-ADAPTER = os.environ.get("TAPBOX_BT_ADAPTER", "/org/bluez/hci0")
-PLAYER_PATH = "/org/tapbox/player"
+BASE = os.environ.get("VIBB_DAEMON", "http://127.0.0.1:3679")
+ADAPTER = os.environ.get("VIBB_BT_ADAPTER", "/org/bluez/hci0")
+PLAYER_PATH = "/org/vibb/player"
 PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
-POLL_S = float(os.environ.get("TAPBOX_MPRIS_POLL", "3"))
+POLL_S = float(os.environ.get("VIBB_MPRIS_POLL", "3"))
 # a seek is a position that lands off its extrapolation by more than:
 SEEK_JUMP_S = 3.0
 
@@ -63,7 +63,7 @@ def post(path):
     """Forward a car command to the daemon. SAFE endpoints, but boxapi
     attaches the box token anyway — and idempotent by design: the car's
     explicit 'play' can never pause a playing box (937ea05)."""
-    from tapbox import boxapi
+    from vibb import boxapi
     try:
         boxapi.post(path, {})
     except (OSError, ValueError) as e:
@@ -84,7 +84,7 @@ COMMANDS = {
 
 
 def status_to_props(st):
-    """tapboxd /status -> MPRIS player properties (what BlueZ parses).
+    """vibbd /status -> MPRIS player properties (what BlueZ parses).
     Position is None when /status carried no position — that means
     UNKNOWN (mpv's IPC socket answers get_property with nothing while
     it's busy), never 0. Callers run the result through carry_position()
@@ -292,7 +292,7 @@ def main():
     # around the clock — with no BT peer there is nobody to show
     # metadata to or answer AVRCP polls for, yet it was ~1200 of the
     # quiet box's ~1260 thread spawns per hour (every poll is a request
-    # thread in tapboxd). Track BlueZ's Device1.Connected and skip the
+    # thread in vibbd). Track BlueZ's Device1.Connected and skip the
     # round-trip while nothing is connected. Enumeration failure fails
     # OPEN (keep polling): a few wasted polls beat a silent car display.
     bt_conn = {"n": 0, "known": False}
@@ -338,15 +338,15 @@ def main():
 
     GLib.timeout_add_seconds(2, register)
     GLib.timeout_add_seconds(int(POLL_S), tick)
-    log("up — bridging tapboxd /status to AVRCP")
+    log("up — bridging vibbd /status to AVRCP")
     GLib.MainLoop().run()
 
 
 if __name__ == "__main__":
-    # repo checkout or installed location for the tapbox package (boxapi)
+    # repo checkout or installed location for the vibb package (boxapi)
     _here = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isdir(os.path.join(_here, "tapbox")):
+    if os.path.isdir(os.path.join(_here, "vibb")):
         sys.path.insert(0, _here)
     else:
-        sys.path.insert(0, "/usr/local/lib/tapbox-py")
+        sys.path.insert(0, "/usr/local/lib/vibb-py")
     main()

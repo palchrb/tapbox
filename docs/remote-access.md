@@ -107,11 +107,11 @@ never applies unless you asked for it. This is strictly better than
 **Status:** backlog. **Feasibility:** solid, well-trodden pattern.
 
 Architecture:
-- A small always-on **VPS** holds a real cert for e.g. `tapbox.vibb.me`
+- A small always-on **VPS** holds a real cert for e.g. `vibb.vibb.me`
   (public DNS A-record → VPS public IP) and runs a reverse proxy
   (Caddy/nginx) that forwards to the box over WireGuard.
 - The **box** runs a WireGuard *client* dialling out to the VPS; the VPS
-  proxies `tapbox.vibb.me` → `<box WG IP>:3679`.
+  proxies `vibb.vibb.me` → `<box WG IP>:3679`.
 
 Why it's attractive:
 - Real public HTTPS, works from anywhere — like Tailscale, but **you own
@@ -152,7 +152,7 @@ the box can be reached *directly* — no relay. The box publishes its
 current global IPv6 as an AAAA record (to self-hosted CoreDNS via RFC 2136
 dynamic-update / an etcd backend, or — simpler, since we already use
 Cloudflare — a tiny DDNS updater against the Cloudflare API). The phone
-resolves `tapbox.vibb.me AAAA` → connects directly from anywhere.
+resolves `vibb.vibb.me AAAA` → connects directly from anywhere.
 
 Why it's the battery winner: **no persistent tunnel → no keepalives.**
 The box only touches the network to *update DNS when its address

@@ -9,13 +9,13 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_ART"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_ART"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import content, library  # noqa: E402
+from vibb import content, library  # noqa: E402
 
-CACHE = os.environ["TAPBOX_CACHE"]
+CACHE = os.environ["VIBB_CACHE"]
 PL = "https://open.spotify.com/playlist/0hgSZmY9xhzx51hlLB2arI?si=x"
 PL2 = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
 POD = "https://radio.nrk.no/podkast/fantorangen"
@@ -67,10 +67,10 @@ assert os.path.exists(content.spotify_art_path(PL2))
 print("4. orphaned spotify art removed OK")
 
 # 5. sections validate an optional image (short string), reject junk
-lib = {"sections": [{"name": "Musikk", "image": "/var/lib/tapbox/art/s.jpg",
+lib = {"sections": [{"name": "Musikk", "image": "/var/lib/vibb/art/s.jpg",
                      "entries": [{"name": "P", "target": PL}]}]}
 out = library.normalize_library(lib)
-assert out["sections"][0]["image"] == "/var/lib/tapbox/art/s.jpg"
+assert out["sections"][0]["image"] == "/var/lib/vibb/art/s.jpg"
 lib["sections"][0]["image"] = ["not", "a", "string"]
 try:
     library.normalize_library(lib)

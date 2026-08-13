@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate the shared-radio yield markers (tapbox/radio.py). The Zero 2 W
+"""Gate the shared-radio yield markers (vibb/radio.py). The Zero 2 W
 has ONE 2.4GHz radio: BT pages against an absent speaker deauthed wifi
 mid-boot and starved CDN track loads to 19s (field 2026-07-18). The
 markers are ADVISORY and mtime-TTL'd — a crashed writer must never
@@ -13,16 +13,16 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ.setdefault("TAPBOX_CACHE", tempfile.mkdtemp())
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ.setdefault("VIBB_CACHE", tempfile.mkdtemp())
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_RADIO_BUSY_TTL"] = "20"
-os.environ["TAPBOX_BT_PAGING_TTL"] = "10"
+os.environ["VIBB_RADIO_BUSY_TTL"] = "20"
+os.environ["VIBB_BT_PAGING_TTL"] = "10"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import radio  # noqa: E402
+from vibb import radio  # noqa: E402
 
 # 1. no marker file -> not busy, not paging (the common cold path)
 assert radio.busy() is False
@@ -74,8 +74,8 @@ print("6. wait_paging_clear: instant when clear, capped when not OK")
 # (reason=6) live. Settled needs a default route through wlan0 too.
 oper = os.path.join(TMP, "operstate")
 route = os.path.join(TMP, "route")
-os.environ["TAPBOX_WLAN_OPERSTATE"] = oper
-os.environ["TAPBOX_NET_ROUTE"] = route
+os.environ["VIBB_WLAN_OPERSTATE"] = oper
+os.environ["VIBB_NET_ROUTE"] = route
 HDR = ("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask"
        "\tMTU\tWindow\tIRTT\n")
 with open(oper, "w") as f:

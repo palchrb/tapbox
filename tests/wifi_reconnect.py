@@ -16,13 +16,13 @@ from http.server import ThreadingHTTPServer
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", tempfile.mkdtemp())
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "api-token")
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ.setdefault("VIBB_CACHE", tempfile.mkdtemp())
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import netmgmt  # noqa: E402
+from vibb import netmgmt  # noqa: E402
 
 
 # --- 1. netmgmt.wifi_reconnect: unblock + wait for a known network ----------
@@ -58,7 +58,7 @@ print("3. busy wifi -> None (409) OK")
 
 # --- 2. daemon POST /wifi/reconnect: quiesce, clear offline, unpark ---------
 
-os.environ["TAPBOX_BT_BACKEND"] = "cli"
+os.environ["VIBB_BT_BACKEND"] = "cli"
 import daemon  # noqa: E402
 
 QUIESCED, RESUMED, STARTED = [], [], []
@@ -80,14 +80,14 @@ def _box_token():
     """Privileged endpoints need the box token since the API gate landed.
     ensure() returns the daemon's existing one, or creates it when the
     daemon runs in-process here and never went through main()."""
-    from tapbox import token
+    from vibb import token
     return token.ensure()
 
 def post(path, body):
     req = urllib.request.Request(
         f"http://127.0.0.1:{PORT}{path}", data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json",
-                 "X-TapBox-Token": _box_token()}, method="POST")
+                 "X-Vibb-Token": _box_token()}, method="POST")
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.status, json.loads(resp.read())
 
@@ -119,7 +119,7 @@ print("5. failed reconnect leaves offline flag + go-librespot alone OK")
 # playback for it would be an audible interruption for nothing)
 daemon.wifi_scan = lambda: [{"ssid": "homenet"}]
 with open(daemon.OUT_FILE, "w") as f:
-    json.dump({"output": "bt", "pcm": "tapbox_bt"}, f)
+    json.dump({"output": "bt", "pcm": "vibb_bt"}, f)
 QUIESCED.clear()
 RESUMED.clear()
 code, r = post("/wifi/scan", {})
@@ -127,7 +127,7 @@ assert code == 200 and QUIESCED and RESUMED, (code, QUIESCED, RESUMED)
 print("5b. /wifi/scan on the bt output quiesces A2DP around the sweep OK")
 
 with open(daemon.OUT_FILE, "w") as f:
-    json.dump({"output": "local", "pcm": "tapbox_local"}, f)
+    json.dump({"output": "local", "pcm": "vibb_local"}, f)
 QUIESCED.clear()
 RESUMED.clear()
 code, r = post("/wifi/scan", {})
@@ -137,7 +137,7 @@ print("5c. /wifi/scan on the built-in output never touches playback OK")
 
 # --- 3. UI wiring: X on the offline-Spotify now-view reconnects -------------
 
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 import ui  # noqa: E402
 
 POSTS, VOL = [], []

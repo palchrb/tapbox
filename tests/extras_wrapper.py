@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Gate the tapbox-extra wrapper (pi/extra.sh).
+"""Gate the vibb-extra wrapper (pi/extra.sh).
 
 --run must free the hardware BEFORE the script runs (ui/idle/buttons +
 go-librespot stopped, playback stopped via the SAFE /stop endpoint) and
 exec the script. --restore must unmask BEFORE starting (a script that
 masked units would otherwise brick the box) and start the FULL set —
 including units the wrapper never stopped, so a script that stopped
-tapbox-daemon itself still returns to a whole box. tapbox-daemon must
+vibb-daemon itself still returns to a whole box. vibb-daemon must
 NOT be stopped by --run (it is the remote escape hatch)."""
 import json
 import os
@@ -82,10 +82,10 @@ def governors():
             for n in range(2)]
 
 
-env = dict(os.environ, TAPBOX_SYSTEMCTL=FAKE, TAPBOX_RFKILL=FAKE_RFKILL,
-           TAPBOX_IW=FAKE_IW,
-           TAPBOX_DAEMON=f"http://127.0.0.1:{srv.server_port}",
-           TAPBOX_CPUFREQ=CPUS, TAPBOX_RUN=TMP)
+env = dict(os.environ, VIBB_SYSTEMCTL=FAKE, VIBB_RFKILL=FAKE_RFKILL,
+           VIBB_IW=FAKE_IW,
+           VIBB_DAEMON=f"http://127.0.0.1:{srv.server_port}",
+           VIBB_CPUFREQ=CPUS, VIBB_RUN=TMP)
 
 # the "extra": records that it ran and inspects what was stopped first
 MARK = os.path.join(TMP, "ran")
@@ -104,9 +104,9 @@ assert STOPS and STOPS[0] == ("/stop", "application/json",
 # kid's audiobook position on every extra launch (field 2026-07-29)
 with open(MARK) as f:
     before_script = f.read()
-assert "stop tapbox-idle tapbox-buttons tapbox-ui" in before_script
+assert "stop vibb-idle vibb-buttons vibb-ui" in before_script
 assert "stop go-librespot" in before_script, "the ALSA holder must stop"
-assert "tapbox-daemon" not in before_script, \
+assert "vibb-daemon" not in before_script, \
     "--run must leave the daemon (remote escape hatch) alone"
 assert governors() == ["ondemand", "ondemand"], \
     "the powersave park (600MHz) must lift for the extra"
@@ -126,20 +126,20 @@ first_start = next(i for i, c in enumerate(calls) if c.startswith("start "))
 unblock = next(i for i, c in enumerate(calls)
                if c.startswith("rfkill unblock"))
 assert unblock < first_start, "radios must return before any unit starts"
-assert calls[first_start] == "start tapbox-ui", \
+assert calls[first_start] == "start vibb-ui", \
     f"the screen must be the first unit back: {calls[first_start]}"
 started = [c.split()[-1] for c in calls if c.startswith("start")]
-for unit in ("tapbox-ui", "tapbox-idle", "tapbox-buttons",
-             "tapbox-daemon", "go-librespot", "tapbox-mpris",
-             "tapbox-bt-reconnect", "bluetooth", "bluealsa"):
+for unit in ("vibb-ui", "vibb-idle", "vibb-buttons",
+             "vibb-daemon", "go-librespot", "vibb-mpris",
+             "vibb-bt-reconnect", "bluetooth", "bluealsa"):
     assert unit in started, f"restore must start {unit}: {started}"
 assert "start --no-block go-librespot" in calls, \
     "go-librespot must not block the restore on network-online"
 assert not any(c.startswith(("unmask", "enable")) for c in calls), \
     "healthy units must not be re-enabled (daemon-reload cost)"
-assert "tapbox-btsnoop" not in " ".join(calls), \
+assert "vibb-btsnoop" not in " ".join(calls), \
     "the opt-in snoop ring must stay however the owner left it"
-assert "reset-failed tapbox-extra" in calls, \
+assert "reset-failed vibb-extra" in calls, \
     "restore must clear the failed-unit remnant (journal spam otherwise)"
 assert governors() == ["powersave", "powersave"], \
     "--restore must re-park the CPU to the snapshotted mode"
@@ -151,8 +151,8 @@ subprocess.run(["bash", WRAPPER, "--restore"],
                env=dict(env, FAKE_ENABLED_STATE="masked"),
                capture_output=True, timeout=30)
 calls = open(LOG).read().splitlines()
-assert any(c.startswith("unmask tapbox-ui") for c in calls)
-assert any(c.startswith("enable tapbox-ui") for c in calls)
+assert any(c.startswith("unmask vibb-ui") for c in calls)
+assert any(c.startswith("enable vibb-ui") for c in calls)
 # ...and the snapshot honors a box that was in perf mode before the game
 for n in range(2):
     with open(os.path.join(CPUS, f"cpu{n}", "cpufreq",
@@ -179,9 +179,9 @@ assert r.returncode == 7, "the extra's exit must propagate (exec)"
 print("3. crash propagates through exec (unit sees the failure) OK")
 
 # 3b. the screen-message contract: a FAILED unit leaves a generic note
-#     for tapbox-ui unless the script wrote its own; success leaves
+#     for vibb-ui unless the script wrote its own; success leaves
 #     nothing; --run clears last time's leftover
-MSG = os.path.join(TMP, "tapbox-extra.msg")
+MSG = os.path.join(TMP, "vibb-extra.msg")
 env_fail = dict(env, SERVICE_RESULT="exit-code", EXIT_STATUS="1")
 subprocess.run(["bash", WRAPPER, "--restore"], env=env_fail,
                capture_output=True, timeout=30)
@@ -205,7 +205,7 @@ print("3b. screen-message contract: generic on failure, script's own "
 
 # 4. a dead daemon must not block the handoff (curl is best-effort)
 srv.shutdown()
-env_dead = dict(env, TAPBOX_DAEMON="http://127.0.0.1:9")
+env_dead = dict(env, VIBB_DAEMON="http://127.0.0.1:9")
 r = subprocess.run(["bash", WRAPPER, "--run", script], env=env_dead,
                    capture_output=True, text=True, timeout=30)
 assert r.returncode == 0, r.stderr

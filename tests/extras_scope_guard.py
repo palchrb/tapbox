@@ -15,10 +15,10 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_STATE"] = TMP
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(TMP, "lib.json")
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 SRC = open(os.path.join(REPO, "pi", "daemon.py")).read()
@@ -35,7 +35,7 @@ BANNED = {".sh", ".bash", ".py", ".pl", ".rb", ".bin", ".run", ".elf",
           ".service", ".desktop"}
 assert not (set(daemon.MEDIA_EXTS) & BANNED), daemon.MEDIA_EXTS
 # ...and the sanitizer keeps every name inside the media dir
-for evil in ("../x.mp3", "..\\x.mp3", "/etc/tapbox/extras/x.mp3",
+for evil in ("../x.mp3", "..\\x.mp3", "/etc/vibb/extras/x.mp3",
              "a/../../x.mp3", "x.sh", "x.mp3.sh"):
     safe = daemon._media_safe_name(evil)
     assert "/" not in safe and "\\" not in safe and ".." not in safe, evil
@@ -44,8 +44,8 @@ print("2. upload whitelist data-only, sanitizer basename-bound OK")
 
 # 3. the extras dir default is outside the media/upload roots
 import ui  # noqa: E402
-extras_default = "/etc/tapbox/extras"
-from tapbox import paths  # noqa: E402
+extras_default = "/etc/vibb/extras"
+from vibb import paths  # noqa: E402
 for root in (getattr(paths, "MEDIA_DIR", ""), getattr(paths, "CACHE_DIR", "")):
     if root:
         assert not extras_default.startswith(root.rstrip("/") + "/"), \
@@ -54,9 +54,9 @@ print("3. extras dir outside media/cache roots OK")
 
 # 4. install.sh: creates the dir, never writes into or removes it
 sh = open(os.path.join(REPO, "pi", "install.sh")).read()
-assert re.search(r"install -d -m 755 /etc/tapbox/extras", sh), \
+assert re.search(r"install -d -m 755 /etc/vibb/extras", sh), \
     "install.sh must create the drop-in dir"
-assert not re.search(r"rm\s+(-\w+\s+)*['\"]?/etc/tapbox/extras", sh), \
+assert not re.search(r"rm\s+(-\w+\s+)*['\"]?/etc/vibb/extras", sh), \
     "install.sh must never delete the extras dir"
 assert not re.search(r"(cp|install)\s[^\n]*extras/", sh), \
     "install.sh must never place files INSIDE the extras dir"
@@ -65,8 +65,8 @@ print("4. install.sh creates but never touches the dir's content OK")
 # 5. the UI's gate: wrong-owner or writable files never listed (the
 #    deep test lives in ui_extras.py; here just pin the constants so a
 #    refactor can't silently relocate the dir into an upload root)
-assert ui.EXTRAS_DIR == os.environ.get("TAPBOX_EXTRAS", extras_default)
-assert ui.EXTRA_WRAPPER == "/usr/local/bin/tapbox-extra"
+assert ui.EXTRAS_DIR == os.environ.get("VIBB_EXTRAS", extras_default)
+assert ui.EXTRA_WRAPPER == "/usr/local/bin/vibb-extra"
 print("5. UI constants pinned OK")
 
 print("\nall extras_scope_guard checks passed")

@@ -12,7 +12,7 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 
 from PIL import Image, ImageDraw  # noqa: E402
 

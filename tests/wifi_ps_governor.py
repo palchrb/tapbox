@@ -12,11 +12,11 @@ import threading
 import time as _time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()  # no stale radio markers
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()  # no stale radio markers
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -107,7 +107,7 @@ class StopLoop(Exception):
 def run_governor(get_seq, streaming_seq, hyst="0", fresh=True):
     """Run the governor: get_seq scripts the baseline get_power_save
     reads (last value repeats), streaming_seq the _streaming_now ticks.
-    Returns the iw set-calls made. hyst pins TAPBOX_WIFI_PS_HYST — 0 by
+    Returns the iw set-calls made. hyst pins VIBB_WIFI_PS_HYST — 0 by
     default so the pre-hysteresis scenarios keep their instant flips."""
     calls = []
     if fresh:  # a fresh daemon start — no leftover crash note
@@ -117,8 +117,8 @@ def run_governor(get_seq, streaming_seq, hyst="0", fresh=True):
             pass
     gets = list(get_seq)
     seq = list(streaming_seq)
-    os.environ["TAPBOX_WIFI_PS_BASELINE_TRIES"] = str(max(2, len(gets)))
-    os.environ["TAPBOX_WIFI_PS_HYST"] = hyst
+    os.environ["VIBB_WIFI_PS_BASELINE_TRIES"] = str(max(2, len(gets)))
+    os.environ["VIBB_WIFI_PS_HYST"] = hyst
 
     def fake_run(cmd, **k):
         if "get" in cmd:
@@ -172,7 +172,7 @@ assert calls == [], f"must not manage an operator's PS-off: {calls}"
 print("7. operator PS-off is respected (governor stands down) OK")
 
 # 8. boot race: PS reads 'off' at daemon start (NetworkManager enables
-# it ~2min later, tapbox-power re-asserts it) — the baseline poll must
+# it ~2min later, vibb-power re-asserts it) — the baseline poll must
 # WAIT until it's seen on, then manage. A one-shot read stood down
 # forever and left PS ON through every stream (field 2026-07-18 15:43).
 calls = run_governor(["Power save: off\n", "Power save: off\n",
@@ -193,9 +193,9 @@ print("9. mid-load unknown holds the PS state OK")
 # through to the idle path and flips PS back on (+30-50mA-all-night leak,
 # energy audit 2026-07-24 #1). NONE_BOUND=0 => the second tick's None is
 # already 'too long'.
-os.environ["TAPBOX_WIFI_PS_NONE_BOUND"] = "0"
+os.environ["VIBB_WIFI_PS_NONE_BOUND"] = "0"
 calls = run_governor(["Power save: on\n"], [True, None])
-os.environ["TAPBOX_WIFI_PS_NONE_BOUND"] = "300"
+os.environ["VIBB_WIFI_PS_NONE_BOUND"] = "300"
 sets = [c[-1] for c in calls]
 assert sets == ["off", "on"], f"wedged-api unknown must not pin PS off: {sets}"
 print("9b. unknown past the bound (wedged api) flips PS back on OK")

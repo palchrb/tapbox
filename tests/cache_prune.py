@@ -8,10 +8,10 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = CACHE
+os.environ["VIBB_CACHE"] = CACHE
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import content  # noqa: E402
+from vibb import content  # noqa: E402
 
 KEEP_POD = "https://radio.nrk.no/podkast/fantorangenfortellinger"
 KEEP_FEED = "https://example.com/rss.xml"

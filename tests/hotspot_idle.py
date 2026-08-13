@@ -13,11 +13,11 @@ import tempfile
 import time as _time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
-os.environ["TAPBOX_HOTSPOT_IDLE_OFF"] = "600"
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_HOTSPOT_IDLE_OFF"] = "600"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import netmgmt  # noqa: E402
+from vibb import netmgmt  # noqa: E402
 
 NMCLI = []
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate the Sonos renderer axis in tapboxd (QA priorities 1-3,
+"""Gate the Sonos renderer axis in vibbd (QA priorities 1-3,
 2026-08-09) against a FAKE sidecar. What must hold:
 
 1. output stays two-valued: OUTPUT_PCMS never grows a sonos key, and
@@ -25,13 +25,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-for k in ("TAPBOX_RUN", "TAPBOX_STATE", "TAPBOX_CACHE"):
+for k in ("VIBB_RUN", "VIBB_STATE", "VIBB_CACHE"):
     os.environ[k] = TMP
-os.environ["TAPBOX_SETTINGS"] = os.path.join(TMP, "settings.json")
-os.environ["TAPBOX_BT_FILE"] = os.path.join(TMP, "bt-headset")
-os.environ["TAPBOX_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
-os.environ["TAPBOX_BT_KICK"] = os.path.join(TMP, "kick")
-os.environ["TAPBOX_BT_QUIET"] = os.path.join(TMP, "quiet")
+os.environ["VIBB_SETTINGS"] = os.path.join(TMP, "settings.json")
+os.environ["VIBB_BT_FILE"] = os.path.join(TMP, "bt-headset")
+os.environ["VIBB_BT_LOCKFILE"] = os.path.join(TMP, "bt.lock")
+os.environ["VIBB_BT_KICK"] = os.path.join(TMP, "kick")
+os.environ["VIBB_BT_QUIET"] = os.path.join(TMP, "quiet")
 
 FAKE = {"state": {"armed": False, "seq": 1, "stale_s": None},
         "log": []}
@@ -76,11 +76,11 @@ class FakeSidecar(BaseHTTPRequestHandler):
 
 srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeSidecar)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
-os.environ["TAPBOX_SONOS_API"] = f"http://127.0.0.1:{srv.server_port}"
+os.environ["VIBB_SONOS_API"] = f"http://127.0.0.1:{srv.server_port}"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 import daemon  # noqa: E402
-from tapbox import renderer  # noqa: E402
-from tapbox.output import OUTPUT_PCMS  # noqa: E402
+from vibb import renderer  # noqa: E402
+from vibb.output import OUTPUT_PCMS  # noqa: E402
 
 daemon.go_status = lambda **k: {}
 daemon._flush_spotify_bookmark = lambda: None
@@ -96,9 +96,9 @@ assert r and r.get("renderer") == "sonos", r
 assert renderer.read()["uid"] == "RINCON_T"
 assert not os.path.exists(os.path.join(TMP, "output.json")), \
     "sonos switch must not write OUT_FILE (player.py would read pcm null)"
-assert not os.path.exists(os.environ["TAPBOX_BT_QUIET"]), \
+assert not os.path.exists(os.environ["VIBB_BT_QUIET"]), \
     "sonos switch must not touch the BT quiet marker"
-assert not os.path.exists(os.environ["TAPBOX_BT_KICK"]), \
+assert not os.path.exists(os.environ["VIBB_BT_KICK"]), \
     "sonos switch must not page the BT speaker"
 print("1. renderer axis is orthogonal — no OUT_FILE/quiet/kick OK")
 
@@ -150,8 +150,8 @@ orch.sonos_idx = 0
 FAKE["log"].clear()
 orch.play = lambda *a, **k: None  # the resume fire-and-forget is not under test
 orch._renderer_to_box()
-from tapbox.bookmarks import load_state  # noqa: E402
-from tapbox.library import state_key  # noqa: E402
+from vibb.bookmarks import load_state  # noqa: E402
+from vibb.library import state_key  # noqa: E402
 st_file = load_state(state_key("https://podkast.example/feed.xml"))
 # pos = 712 + the snapshot's measurement age (stale_s) — the age
 # correction is intended (architect G1-b)

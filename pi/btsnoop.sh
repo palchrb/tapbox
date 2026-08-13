@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TapBox btsnoop ring — diagnostic HCI capture for the BCM43430 crash hunt.
+# Vibb btsnoop ring — diagnostic HCI capture for the BCM43430 crash hunt.
 #
 # Purpose: decide WHICH LAYER owns `hci0: hardware error 0x00`. The kernel
 # SYNTHESIZES that exact event (hci_reset_dev, code 0x00) when the HOST gives
@@ -16,15 +16,15 @@
 # segments live in RAM (/run) and only the newest few are kept — the SD card
 # is never touched and RAM use is bounded. On a crash the box keeps running
 # (wifi/SSH survive), so copy the segments out BEFORE rebooting:
-#     cp /run/tapbox-btsnoop/*.snoop ~/   # then analyze: btmon -r <file>
+#     cp /run/vibb-btsnoop/*.snoop ~/   # then analyze: btmon -r <file>
 #
 # Opt-in: installed disabled; enable for a hunt with
-#     sudo systemctl enable --now tapbox-btsnoop
+#     sudo systemctl enable --now vibb-btsnoop
 set -u
 
-DIR="${TAPBOX_BTSNOOP_DIR:-/run/tapbox-btsnoop}"
-SEG_S="${TAPBOX_BTSNOOP_SEG_S:-300}"   # segment length (s)
-KEEP="${TAPBOX_BTSNOOP_KEEP:-3}"       # segments kept (~12MB each under A2DP)
+DIR="${VIBB_BTSNOOP_DIR:-/run/vibb-btsnoop}"
+SEG_S="${VIBB_BTSNOOP_SEG_S:-300}"   # segment length (s)
+KEEP="${VIBB_BTSNOOP_KEEP:-3}"       # segments kept (~12MB each under A2DP)
 
 mkdir -p "$DIR"
 echo "btsnoop ring: ${SEG_S}s segments, keeping $KEEP, in $DIR (RAM)"

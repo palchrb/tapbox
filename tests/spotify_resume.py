@@ -13,10 +13,10 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import spotify as s  # noqa: E402
+from vibb import spotify as s  # noqa: E402
 
 PL_A = "spotify:playlist:aaaaaaaaaaaaaaaaaaaaaa"
 PL_B = "spotify:playlist:bbbbbbbbbbbbbbbbbbbbbb"
@@ -97,9 +97,9 @@ print("9. logout clears every bookmark OK")
 # 10. replaying the target that is ALREADY loaded continues in place:
 # paused -> one /player/resume; playing -> no-op. Never a respawn (which
 # reloads the context + seeks — an audible hiccup for nothing).
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ.setdefault("TAPBOX_CACHE", os.environ["TAPBOX_STATE"])
+os.environ.setdefault("VIBB_CACHE", os.environ["VIBB_STATE"])
 import daemon  # noqa: E402
 
 calls = []

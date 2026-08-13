@@ -26,14 +26,14 @@ import time
 import urllib.error
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import library, spotify  # noqa: E402
+from vibb import library, spotify  # noqa: E402
 
 PL = "https://open.spotify.com/playlist/0hgSZmY9xhzx51hlLB2arI"
 LISTING = {"uri": "spotify:playlist:0hgSZmY9xhzx51hlLB2arI",

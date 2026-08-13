@@ -14,14 +14,14 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = RUN
-os.environ["TAPBOX_SETTINGS"] = os.path.join(RUN, "settings.json")
+os.environ["VIBB_RUN"] = RUN
+os.environ["VIBB_SETTINGS"] = os.path.join(RUN, "settings.json")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import json  # noqa: E402
 
 import idle  # noqa: E402
-from tapbox import paths  # noqa: E402
+from vibb import paths  # noqa: E402
 
 CALLS = []
 idle.subprocess.run = lambda argv, **kw: CALLS.append(argv[0])
@@ -32,7 +32,7 @@ idle.ssh_active = lambda: SSH[0]  # hermetic — no real `ss` in the gate
 
 
 def set_limit(minutes):
-    with open(os.environ["TAPBOX_SETTINGS"], "w") as f:
+    with open(os.environ["VIBB_SETTINGS"], "w") as f:
         json.dump({"idle_shutdown_min": minutes}, f)
 
 

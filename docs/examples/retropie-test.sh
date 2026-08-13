@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tapbox-name: RetroPie (stuff test)
+# vibb-name: RetroPie (stuff test)
 #
 # EXPERIMENT, not the shipping launcher. Same box teardown as
 # retropie.sh, but EmulationStation is started the way palchrb's own
@@ -23,12 +23,12 @@
 #
 # Consequence you already know: this script does NOT know when ES ends
 # (stuff is fire-and-forget), so it parks instead of returning the box.
-# To come back:  sudo systemctl stop tapbox-extra   (runs the normal
+# To come back:  sudo systemctl stop vibb-extra   (runs the normal
 # restore — no reboot needed), or just reboot.
 #
 # Install:
 #   sudo install -m 755 -o root -g root \
-#     docs/examples/retropie-test.sh /etc/tapbox/extras/
+#     docs/examples/retropie-test.sh /etc/vibb/extras/
 set -u
 RP_USER="${RP_USER:-palchrb}"
 SESSION="${SESSION:-retropie}"
@@ -37,9 +37,9 @@ echo "retropie-test: starting ES via a pre-existing screen session (stuff)"
 
 # --- same teardown as the real script ---------------------------------
 # Free the RAM ES needs; the wrapper's ExecStopPost restarts all of it.
-systemctl stop tapbox-bt-reconnect 2>/dev/null || true
-systemctl stop tapbox-daemon tapbox-mpris 2>/dev/null || true
-systemctl stop tapbox-btsnoop 2>/dev/null || true
+systemctl stop vibb-bt-reconnect 2>/dev/null || true
+systemctl stop vibb-daemon vibb-mpris 2>/dev/null || true
+systemctl stop vibb-btsnoop 2>/dev/null || true
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 # wifi STAYS UP — the whole point is to watch this from ssh
@@ -75,7 +75,7 @@ runuser -l "$RP_USER" -c \
 
 echo "retropie-test: ES launched into screen session '$SESSION' as $RP_USER"
 echo "retropie-test:   watch it:   sudo -u $RP_USER screen -r $SESSION"
-echo "retropie-test:   give back:  sudo systemctl stop tapbox-extra"
+echo "retropie-test:   give back:  sudo systemctl stop vibb-extra"
 
 # Park. stuff is fire-and-forget, so this script cannot know when ES
 # ends — exiting here would hand the box back mid-game. Sleeping keeps

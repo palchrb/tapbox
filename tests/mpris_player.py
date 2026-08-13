@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate the AVRCP media-player bridge (tapbox-mpris).
+"""Gate the AVRCP media-player bridge (vibb-mpris).
 
 Born from the 2026-07-27 btsnoop capture: the Skoda head unit polls the
 AVRCP player list continuously while streaming, and with no player
@@ -18,7 +18,7 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
+os.environ["VIBB_RUN"] = TMP
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import mpris  # noqa: E402
@@ -72,8 +72,8 @@ sent = []
 fake_boxapi = types.SimpleNamespace(
     post=lambda path, body=None, **k: sent.append(path))
 fake_pkg = types.SimpleNamespace(boxapi=fake_boxapi)
-sys.modules["tapbox"] = fake_pkg
-sys.modules["tapbox.boxapi"] = fake_boxapi
+sys.modules["vibb"] = fake_pkg
+sys.modules["vibb.boxapi"] = fake_boxapi
 mpris.post(mpris.COMMANDS["Play"])
 assert sent == ["/resume"], sent
 print("2b. post() forwards to the daemon via boxapi OK")

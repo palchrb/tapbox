@@ -9,10 +9,10 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "pi"))
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 
 import ui  # noqa: E402
-from tapbox import sysinfo  # noqa: E402
+from vibb import sysinfo  # noqa: E402
 
 # 1. the setting exists, defaults off, now a 3-way (0 menus/1 flat/2 cats)
 assert sysinfo.SETTING_SPECS["simple_nav"] == (0, 0, 2)

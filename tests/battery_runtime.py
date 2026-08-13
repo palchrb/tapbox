@@ -11,10 +11,10 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ.setdefault("TAPBOX_STATE", tempfile.mkdtemp())
+os.environ.setdefault("VIBB_STATE", tempfile.mkdtemp())
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
-from tapbox import sysinfo as s  # noqa: E402
+from vibb import sysinfo as s  # noqa: E402
 
 STEP = 60  # one tick's elapsed seconds
 # _runtime_step(delta, charging_now, confirmed, rose, prev_accum, pct)

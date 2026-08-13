@@ -76,10 +76,10 @@ def _install_stubs():
 def main():
     tmp = tempfile.mkdtemp()
     os.environ.update(
-        TAPBOX_BT_FILE=os.path.join(tmp, "mac"),
-        TAPBOX_BT_LOCKFILE=os.path.join(tmp, "lock"),
-        TAPBOX_RECON_FALLBACK="1", TAPBOX_RECON_DROP_RETRY="1")
-    open(os.environ["TAPBOX_BT_FILE"], "w").write("AA:BB:CC:DD:EE:FF\n")
+        VIBB_BT_FILE=os.path.join(tmp, "mac"),
+        VIBB_BT_LOCKFILE=os.path.join(tmp, "lock"),
+        VIBB_RECON_FALLBACK="1", VIBB_RECON_DROP_RETRY="1")
+    open(os.environ["VIBB_BT_FILE"], "w").write("AA:BB:CC:DD:EE:FF\n")
 
     connected, timers, delays = _install_stubs()
     sys.path.insert(0, os.path.join(REPO, "pi"))
@@ -98,7 +98,7 @@ def main():
 
     def losts():
         return [p for p, _b in posts if p == "/bt/lost"]
-    from tapbox import btbus
+    from vibb import btbus
     pcm = {"v": False}
     btbus.a2dp_pcm_present = lambda mac: pcm["v"]
 
@@ -124,14 +124,14 @@ def main():
     assert outputs() == ["bt"], posts
     print("1. bt announce waits for the A2DP PCM OK")
 
-    # 2: drop -> lost-notify fires ONCE (tapboxd stops the player before
+    # 2: drop -> lost-notify fires ONCE (vibbd stops the player before
     # mpv error-skips the queue); within the window no local fallback,
     # sustained absence -> local
     posts.clear()
     connected["v"] = False
     r._props_changed("org.bluez.Device1", {"Connected": False}, [],
                      path=bw.dev_path(r.target))
-    assert losts() == ["/bt/lost"], f"drop must notify tapboxd: {posts}"
+    assert losts() == ["/bt/lost"], f"drop must notify vibbd: {posts}"
     timers.clear()
     r.state = "WAITING"
     r._attempt_failed("page-timeout")          # inside FALLBACK window
@@ -140,7 +140,7 @@ def main():
     timers.clear()
     r._attempt_failed("page-timeout")          # past the window
     assert outputs() == ["local"], posts
-    print("2. drop notifies tapboxd; local fallback only after "
+    print("2. drop notifies vibbd; local fallback only after "
           "sustained absence OK")
 
     # 3: a failed attempt while already connected must not churn output
@@ -156,7 +156,7 @@ def main():
     print("3. stale failure while connected is a no-op OK")
 
     # 4: quick drop->reconnect flap leaves the output alone (the lost
-    # notify still fires — tapboxd's guard makes it a no-op when nothing
+    # notify still fires — vibbd's guard makes it a no-op when nothing
     # was playing into the speaker)
     posts.clear()
     r.announced = "bt"

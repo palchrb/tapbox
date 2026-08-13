@@ -8,7 +8,7 @@ Run ON THE RIG (needs dbus-daemon, python3-dbus, python3-gi):
 
 It starts a private bus + fake_bluezd.py, seeds two devices, and
 compares bt_status()/device_info()/a2dp_pcm_present() under
-TAPBOX_BT_BACKEND=dbus against the expected fixture (which the cli
+VIBB_BT_BACKEND=dbus against the expected fixture (which the cli
 backend produces from equivalent bluetoothctl output — asserted here
 via PATH fakes, no real radio touched).
 
@@ -38,15 +38,15 @@ EXPECTED_STATUS_DEVICES = [  # bt_status sorts by name
 
 def fresh_env(tmp, backend):
     env = dict(os.environ,
-               TAPBOX_BT_BACKEND=backend,
-               TAPBOX_BT_FILE=os.path.join(tmp, "bt-mac"),
-               TAPBOX_BT_LOCKFILE=os.path.join(tmp, "bt.lock"),
-               TAPBOX_ASOUND=os.path.join(tmp, "asound.conf"),
-               TAPBOX_STATE=os.path.join(tmp, "state"),
-               TAPBOX_SETTINGS=os.path.join(tmp, "se.json"),
-               TAPBOX_LIBRARY=os.path.join(tmp, "l.json"),
-               TAPBOX_CACHE=os.path.join(tmp, "cache"))
-    os.makedirs(env["TAPBOX_STATE"], exist_ok=True)
+               VIBB_BT_BACKEND=backend,
+               VIBB_BT_FILE=os.path.join(tmp, "bt-mac"),
+               VIBB_BT_LOCKFILE=os.path.join(tmp, "bt.lock"),
+               VIBB_ASOUND=os.path.join(tmp, "asound.conf"),
+               VIBB_STATE=os.path.join(tmp, "state"),
+               VIBB_SETTINGS=os.path.join(tmp, "se.json"),
+               VIBB_LIBRARY=os.path.join(tmp, "l.json"),
+               VIBB_CACHE=os.path.join(tmp, "cache"))
+    os.makedirs(env["VIBB_STATE"], exist_ok=True)
     return env
 
 
@@ -55,7 +55,7 @@ def snapshot(env):
     code = f"""
 import json, sys
 sys.path.insert(0, {json.dumps(os.path.join(REPO, "pi"))})
-from tapbox import bt, btbus
+from vibb import bt, btbus
 out = {{
   "backend": btbus.backend(),
   "status": bt.bt_status(),
@@ -111,22 +111,22 @@ def seed_fake_bluezd(bus_addr):
     line = proc.stdout.readline()
     assert "ready" in line, line
     call = ["dbus-send", "--bus=" + bus_addr, "--print-reply",
-            "--dest=org.bluez", "--type=method_call", "/org/tapbox/mock"]
-    subprocess.run(call + ["org.tapbox.Mock.AddDevice",
+            "--dest=org.bluez", "--type=method_call", "/org/vibb/mock"]
+    subprocess.run(call + ["org.vibb.Mock.AddDevice",
                            f"string:{GO}", "string:JBL GO",
                            "boolean:true", "boolean:false", "int16:0"],
                    check=True)
-    subprocess.run(call + ["org.tapbox.Mock.AddDevice",
+    subprocess.run(call + ["org.vibb.Mock.AddDevice",
                            f"string:{JR}", "string:JBL JR310BT",
                            "boolean:true", "boolean:true", "int16:0"],
                    check=True)
     for mac in (GO, JR):  # both fixtures are speakers — say so, or the
         # parity check would compare two backends that both just fail
         # to detect audio (bt_speaker_only gates the flag itself)
-        subprocess.run(call + ["org.tapbox.Mock.SetUuids", f"string:{mac}",
+        subprocess.run(call + ["org.vibb.Mock.SetUuids", f"string:{mac}",
                                "string:0000110b-0000-1000-8000-00805f9b34fb"],
                        check=True)
-    subprocess.run(call + ["org.tapbox.Mock.SetPcm",
+    subprocess.run(call + ["org.vibb.Mock.SetPcm",
                            f"string:{JR}", "boolean:true"], check=True)
     return proc
 

@@ -23,14 +23,14 @@ import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp()
-os.environ["TAPBOX_RUN"] = TMP
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_TOKEN_FILE"] = os.path.join(TMP, "api-token")
-os.environ.setdefault("TAPBOX_UI_PNG", "/dev/null")
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_TOKEN_FILE"] = os.path.join(TMP, "api-token")
+os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import ui  # noqa: E402
-from tapbox import token  # noqa: E402
+from vibb import token  # noqa: E402
 
 TOKEN = token.ensure()
 
@@ -89,7 +89,7 @@ print("1. every settings row acts on its own label (no index drift) OK")
 #     as its own hotspot — the parent would have to re-scan every time.
 import types as _t  # noqa: E402
 
-from tapbox import netmgmt  # noqa: E402
+from vibb import netmgmt  # noqa: E402
 
 AVAHI = os.path.join(TMP, "avahi.conf")
 with open(AVAHI, "w") as f:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TapBox idle auto-shutdown (installed as tapbox-idle, on by default).
+"""Vibb idle auto-shutdown (installed as vibb-idle, on by default).
 
 Powers the box off after N minutes without ACTIVITY, to save battery
 when it's been left on and forgotten. The PiSugar's physical button
@@ -13,7 +13,7 @@ Activity is either of:
     button press (paths.touch_activity), so a kid browsing the
     carousel without starting anything never has the box die mid-use.
 
-The timeout comes from tapboxd's settings.json (idle_shutdown_min,
+The timeout comes from vibbd's settings.json (idle_shutdown_min,
 re-read every cycle so the settings menu applies live; 0 = disabled).
 While disabled NOTHING accumulates — flipping the setting back on
 starts a fresh countdown instead of powering off within the minute.
@@ -29,13 +29,13 @@ import sys
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (_HERE, "/usr/local/lib/tapbox-py"):
-    if os.path.isdir(os.path.join(_p, "tapbox")):
+for _p in (_HERE, "/usr/local/lib/vibb-py"):
+    if os.path.isdir(os.path.join(_p, "vibb")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
-from tapbox import boxapi, mpv, renderer, spotify  # noqa: E402
-from tapbox.paths import last_activity, read_settings  # noqa: E402
+from vibb import boxapi, mpv, renderer, spotify  # noqa: E402
+from vibb.paths import last_activity, read_settings  # noqa: E402
 
 IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 CHECK_S = 60
@@ -74,7 +74,7 @@ def sonos_playing():
     OUR session must hold auto-off — powering the box off kills the
     controller and the bookmark while the music plays on in the corner
     (QA review 2026-08-09; the round-1 'idle needs zero changes' was
-    only true with tapboxd up). Only a CONFIRMED playing state holds:
+    only true with vibbd up). Only a CONFIRMED playing state holds:
     sidecar down or stale answers False, or a dead sidecar would pin
     the box awake forever."""
     if not renderer.is_sonos():
@@ -166,7 +166,7 @@ def _cycle(idle):
         return 0  # disabled: never accumulate behind the parent's back
     if idle >= limit * 60:
         subprocess.run(["logger",
-                        f"tapbox-idle: idle {limit}min, powering off"])
+                        f"vibb-idle: idle {limit}min, powering off"])
         subprocess.run(["poweroff"])
         return None
     return idle
@@ -174,7 +174,7 @@ def _cycle(idle):
 
 def main():
     idle = 0
-    print(f"tapbox-idle: {describe(idle_minutes())} "
+    print(f"vibb-idle: {describe(idle_minutes())} "
           "(live from settings.json)", flush=True)
     while True:
         idle = _cycle(idle)

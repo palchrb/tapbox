@@ -12,15 +12,15 @@ import tempfile
 import time as _time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["TAPBOX_STATE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_CACHE"] = tempfile.mkdtemp()
-os.environ["TAPBOX_LIBRARY"] = os.path.join(os.environ["TAPBOX_STATE"],
+os.environ["VIBB_STATE"] = tempfile.mkdtemp()
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_LIBRARY"] = os.path.join(os.environ["VIBB_STATE"],
                                             "lib.json")
-os.environ["TAPBOX_RUN"] = tempfile.mkdtemp()  # no stale radio markers
+os.environ["VIBB_RUN"] = tempfile.mkdtemp()  # no stale radio markers
 # 0 by default: the boot-grace scenarios opt in — and a CI container's
 # real uptime may be under the 180s default, which would mask the
 # parking scenarios entirely
-os.environ["TAPBOX_SPOT_PARK_GRACE"] = "0"
+os.environ["VIBB_SPOT_PARK_GRACE"] = "0"
 sys.path.insert(0, os.path.join(REPO, "pi"))
 
 import daemon  # noqa: E402
@@ -123,13 +123,13 @@ print("4. internet back: offline banner clears OK")
 # parked go-librespot 70s after boot on a FALSE 'no internet' — field
 # 2026-07-18 20:17:11). Within the grace nothing parks and no banner
 # shows, however many probes fail.
-os.environ["TAPBOX_SPOT_PARK_GRACE"] = "999999999"
+os.environ["VIBB_SPOT_PARK_GRACE"] = "999999999"
 daemon._SPOT_OFFLINE[0] = False
 daemon._go_unit_active = lambda: True
 run_ticks(6, internet=False, go_st={})
 assert CALLS == [], f"parked within the boot grace: {CALLS}"
 assert daemon._SPOT_OFFLINE[0] is False, "false offline banner in the grace"
-os.environ["TAPBOX_SPOT_PARK_GRACE"] = "0"
+os.environ["VIBB_SPOT_PARK_GRACE"] = "0"
 print("5. boot grace: no parking, no banner in the first minutes OK")
 
 # 6. a fresh PAGING marker (btwatchd mid-connect) skips the probe tick

@@ -1,19 +1,19 @@
-# pipod — research: turning a real iPod into a TapBox-based player
+# pipod — research: turning a real iPod into a Vibb-based player
 
 *Compiled 2026-07-21. This is the sourced research behind pipod. Design
 decisions distilled from it live in [HARDWARE.md](./HARDWARE.md) and
 [SOFTWARE.md](./SOFTWARE.md); this file is the "why", with citations.*
 
-pipod is a **variant of TapBox**: same software core (go-librespot fork,
-mpv, the `tapbox` Python package, PiSugar 3 tooling), but the enclosure is
+pipod is a **variant of Vibb**: same software core (go-librespot fork,
+mpv, the `vibb` Python package, PiSugar 3 tooling), but the enclosure is
 a **real Apple iPod**, the input is the **original click wheel**, the
 screen is a small TFT with an **iPod-style scrolling UI**, and audio goes
 out a **3.5 mm jack (line/headphone) *and* Bluetooth**, switchable in the
-UI exactly like TapBox does today.
+UI exactly like Vibb does today.
 
 The reference build for the concept is Guy Dupont's viral "sPot"
 (dupontgu/retro-ipod-spotify-client). pipod differs from sPot in three
-deliberate ways: it reuses TapBox's mature backend instead of sPot's
+deliberate ways: it reuses Vibb's mature backend instead of sPot's
 Spotipy/Web-API front-end, it keeps both a wired jack **and** BT, and it
 wires the Hold switch to power/lock.
 
@@ -181,11 +181,11 @@ problem — **depth is the only binding constraint.**
 | | **PiSugar 3** | **Bare LiPo + PowerBoost 1000C** |
 |---|---|---|
 | Fit | ~11–13 mm stacked ⚠️ (needs a thick shell) | shape a flat pouch to the cavity — thinner |
-| Capacity | fixed 1200 mAh (~5 h, TapBox-measured) | your choice; 2000–2500 mAh ≈ 8–10 h |
+| Capacity | fixed 1200 mAh (~5 h, Vibb-measured) | your choice; 2000–2500 mAh ≈ 8–10 h |
 | Fuel gauge | yes, over I²C | add a MAX17048 breakout if you want % |
 | RTC | yes (DS3231) | none (Zero has no RTC; NTP on wifi) |
 | Soft power / safe-shutdown | built in (momentary button, `safe_shutdown_level`) | you wire it (see below) |
-| TapBox tooling | **`power.sh` already supports it** (curve, taps, idle, RTC) | `power.sh` no-ops gracefully without pisugar-server |
+| Vibb tooling | **`power.sh` already supports it** (curve, taps, idle, RTC) | `power.sh` no-ops gracefully without pisugar-server |
 | Assembly | pogo-pin stack, no soldering | solder LiPo + boost + charge |
 | Hold switch as power | ⚠️ latching fits PiSugar's *momentary* pad poorly (§4) | ✅ latching → PowerBoost **EN** pin = clean hardware on/off |
 
@@ -193,7 +193,7 @@ problem — **depth is the only binding constraint.**
 + PowerBoost 1000C** is the better primary — bigger battery, thinner, and
 the latching Hold switch becomes a natural power switch on the boost's `EN`
 pin (§4). Keep **PiSugar 3** as the "easy mode" alternative when you want the
-integrated fuel-gauge/RTC/safe-shutdown and TapBox's `power.sh` niceties, and
+integrated fuel-gauge/RTC/safe-shutdown and Vibb's `power.sh` niceties, and
 you've confirmed a thick shell swallows the stack.
 Dupont's sPot used the LiPo+PowerBoost route (1000 mAh):
 https://hackaday.io/project/177034/components ·
@@ -240,7 +240,7 @@ https://learn.adafruit.com/introducing-the-raspberry-pi-zero/audio-outputs
   zero config. But it eats the single micro-USB OTG data port. Fine as a
   fallback, awkward inside an iPod (this was Dupont's own fallback idea).
 - **(b) I²S DAC (recommended)** — digital over the GPIO header; best
-  quality; needs a dtoverlay. **This is what TapBox already uses.**
+  quality; needs a dtoverlay. **This is what Vibb already uses.**
 - **(c) PWM + RC filter** — cheapest, noisy, needs an amp. Not worth it
   here. (For reference: `dtoverlay=pwm-2chan,pin=18,func=2,pin2=13,func2=4`
   + 270 Ω/33 nF + 10 µF/150 Ω per channel.)
@@ -268,7 +268,7 @@ weakly/distorted:
 - **Pimoroni Pirate Audio: Headphone Amp** — **PCM5100A DAC + PAM8908 HP
   amp**, real 3.5 mm jack, 24-bit/192 kHz, pHAT-sized. Overlay:
   **`dtoverlay=hifiberry-dac`** (+ `gpio=25=op,dh` DAC-enable) — **the exact
-  overlay TapBox already ships.** But it's a full pHAT with its own ST7789
+  overlay Vibb already ships.** But it's a full pHAT with its own ST7789
   LCD + 4 buttons on BCM 5/6/16/24 and **DAC-enable on BCM25 — which
   collides with the click wheel's Data pin (BCM25).**
   https://shop.pimoroni.com/en-us/products/pirate-audio-headphone-amp
@@ -281,9 +281,9 @@ hardware** → then you can **drop `gpio=25=op,dh`**, freeing **BCM25 for the
 wheel's Data line** and matching Dupont's `click.c` unmodified. For real
 headphone drive add a **small analog HP amp (PAM8908 / TPA6132A2 breakout)**
 after the DAC's line-out. Software-wise this is still just
-`dtoverlay=hifiberry-dac` — so TapBox's existing `output.py` "local" PCM
+`dtoverlay=hifiberry-dac` — so Vibb's existing `output.py` "local" PCM
 path works **as-is**, and BT stays the other selectable output.
-TapBox already standardizes on this overlay:
+Vibb already standardizes on this overlay:
 https://github.com/pimoroni/pirate-audio
 
 ---
@@ -333,15 +333,15 @@ https://gpiozero.readthedocs.io/en/stable/recipes.html
 
 PiSugar software side for reference: taps run shell scripts
 (single `<0.5s` / double / long `>1s`), `safe_shutdown_level`, DS3231 RTC
-wake via `auto_wake_time` — all already wired in TapBox's `power.sh`.
+wake via `auto_wake_time` — all already wired in Vibb's `power.sh`.
 https://github.com/PiSugar/pisugar-power-manager-rs/blob/master/doc/config.md
 
 ---
 
-## 5. What pipod reuses from TapBox vs. builds new
+## 5. What pipod reuses from Vibb vs. builds new
 
 **Reuse unchanged:** go-librespot fork (Spotify Connect + on-disk cache),
-mpv + the `tapbox` package (`library`, `content`, `radio`, `boxapi`,
+mpv + the `vibb` package (`library`, `content`, `radio`, `boxapi`,
 `spotify`), **`output.py` (already has `bt` + `local` I²S outputs — the jack
 IS "local")**, `power.sh` (PiSugar curve/taps/idle/RTC; `hat-audio-on`
 already applies the needed overlay), `btwatchd`, the daemon/PWA.
@@ -349,11 +349,11 @@ already applies the needed overlay), `btwatchd`, the daemon/PWA.
 **Build new (the genuinely new pieces — see [SOFTWARE.md](./SOFTWARE.md)):**
 1. `clickwheel/click.c` — wheel reader (pigpio, DMA 1 µs), Dupont-derived.
 2. `src/podui.py` — iPod-style **scrolling-list UI** on the TFT + input
-   router. TapBox's `ui.py` is a 4-button 240×240 model — wrong nav
+   router. Vibb's `ui.py` is a 4-button 240×240 model — wrong nav
    paradigm for a wheel — so podui is new, but reuses `boxapi` + `ui.py`'s
    album-art disk cache and marquee logic.
 3. `src/holdswitch.py` — Hold-switch lock + safe-shutdown daemon.
-4. `install-pipod.sh` — overlay + systemd units, layered on TapBox's
+4. `install-pipod.sh` — overlay + systemd units, layered on Vibb's
    installer.
 
 ---

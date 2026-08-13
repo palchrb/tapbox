@@ -1,4 +1,4 @@
-# TapBox — mulige neste steg (backlog)
+# Vibb — mulige neste steg (backlog)
 
 Ideer som er vurdert men ikke besluttet/bygget. Ikke en forpliktelse — en
 liste å plukke fra. Nyeste øverst. Hver post: hva, hvorfor, hvordan,
@@ -9,14 +9,14 @@ kostnad/risiko, anbefaling.
 ## Stabile per-høyttaler PCM-navn (i stedet for ett omdefinert alias)
 
 **Hva:** Én uforanderlig ALSA-blokk per paret høyttaler
-(`pcm.tapbox_bt_2cfdb35b1cba` osv.) i stedet for dagens ene `tapbox_bt`
+(`pcm.vibb_bt_2cfdb35b1cba` osv.) i stedet for dagens ene `vibb_bt`
 som får definisjonen sin omskrevet ved hvert bytte. Å bytte høyttaler =
-åpne et annet *navn*, ikke endre hva et navn betyr. `tapbox_bt` kan bestå
+åpne et annet *navn*, ikke endre hva et navn betyr. `vibb_bt` kan bestå
 som kompat-alias.
 
 **Hvorfor:** Dagens mønster koder «hvilken høyttaler» som global,
 muterbar tilstand — det var det som ga stillhets-buggen 2026-07-27
-(prosess-cachet ALSA-konfig løste `tapbox_bt` til den forlatte bilens
+(prosess-cachet ALSA-konfig løste `vibb_bt` til den forlatte bilens
 MAC; total stillhet til manuell restart). Fork-fiksen
 (snd_config_update_free_global i setupPcm, v0.1.5) reparerer symptomet,
 men med stabile navn blir stale-oppløsning *strukturelt* umulig, to
@@ -91,7 +91,7 @@ automatisk til **både** `GET /bt` → PWA-lista **og** device-settings-skjermen
 **Alternativ (backend-agnostisk):** egen `bt-names.json` (mac→navn) som
 overlays i API/UI. Uavhengig av BlueZ-skriving og helt under vår kontroll,
 men må flettes inn på hvert listing-punkt og mister BlueZ sin «tom =
-tilbakestill»-oppførsel. Passer tapbox-filosofien «eig din egen state», men
+tilbakestill»-oppførsel. Passer vibb-filosofien «eig din egen state», men
 er litt mer kode enn Alias-veien.
 
 **Anbefaling:** Bygg via `Alias` — minst kode, navnet vises overalt gratis.
@@ -147,7 +147,7 @@ dette ene kvelepunktet.
 spor + en `loading`-markør) og legg kontrollkommandoer i kø med umiddelbar
 kvittering, i stedet for å la HTTP-handleren vente på spilleløkka.
 
-**Gevinst:** Skip kvitterer øyeblikkelig uansett CDN-vær; tapbox-lagets
+**Gevinst:** Skip kvitterer øyeblikkelig uansett CDN-vær; vibb-lagets
 timeout-vern (busy-drops, timeout-hold, empty-recheck) blir sovende
 sikkerhetsnett i stedet for daglig brukte krykker.
 
@@ -162,16 +162,16 @@ Shippet 2026-07-28 med eierens valg: X+Y-chord (ikke settings-rad),
 ingen timeout, daemon oppe under extras. Gjenstår kun felttest på
 boksen + at eieren skriver sitt RetroPie-script etter docs/extras.md.
 
-**Hva:** `/etc/tapbox/extras/` (root-eid; install.sh oppretter, rører aldri
+**Hva:** `/etc/vibb/extras/` (root-eid; install.sh oppretter, rører aldri
 innholdet). En extra = kjørbar, root-eid fil (UI nekter andre — barne-
-skrivbar fil ville vært rett-til-root); navn fra `# tapbox-name:`-header.
+skrivbar fil ville vært rett-til-root); navn fra `# vibb-name:`-header.
 Settings viser «Extras»-rad KUN når katalogen har innhold, bak confirm-gate.
 Ingen HTTP-rute — SSH legger inn, fysisk skjerm starter (SECURITY-linjen:
 maksimal overlevering skal ikke kunne fjernutløses).
 
 **Overlevering:** ui.py eier SPI+GPIO og må selv dø — extraen startes derfor
 som transient systemd-enhet (`systemd-run`) med wrapper
-`/usr/local/bin/tapbox-extra`: stopp tapbox-ui/-idle/-buttons + avspilling
+`/usr/local/bin/vibb-extra`: stopp vibb-ui/-idle/-buttons + avspilling
 (frigjør I2S), kjør scriptet, gjenopprett. Daemon/API blir stående.
 **Retur-garanti (QA-blokker): gjenoppretting i `ExecStopPost=` på den
 transiente enheten** (kjører uansett hvordan wrapperen dør — SIGKILL
@@ -180,7 +180,7 @@ knappen er nødutgang. Ingen hard timeout (avklart med eier? — åpen).
 
 **Gate-tester før shipping:** wrapper-modell gjennom exit-0/krasj/aldri-
 avslutter/drept-wrapper (alle må gjenopprette + slippe idle-stoppen),
-scope-vakt (ingen rute eller opplastingsendelse når /etc/tapbox/extras),
+scope-vakt (ingen rute eller opplastingsendelse når /etc/vibb/extras),
 install-idempotens over full katalog, UI: skjult ved tom katalog + confirm.
 
 **Docs (aldri produktkode):** docs/extras.md med RetroPie-eksempelscript —
