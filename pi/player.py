@@ -674,6 +674,17 @@ def main():
                     fast_skips = _count_fast_skip(
                         fast_skips, now_m - track_started)
                 prev_path, track_started = path, now_m
+                # Re-anchor the rollback point on EVERY track change.
+                # Without this, `stable` still names the previous
+                # episode, so a fault in the first 15s of episode N
+                # rolled the kid into the MIDDLE of episode N-1 (the
+                # 15s gate below never got to move it). Anchor to where
+                # this track is about to BE, not to 0: the first track
+                # is already seeked to start_pos, and an in-session
+                # jump seeks to its saved position just below — 0.0
+                # would make a fault right after a resume-at-5:00
+                # actively rewind the child to the top (QA 2026-08-13).
+                stable = (path, start_pos if was_first else 0.0)
                 # dead output = mpv chews through the queue erroring
                 # track after track; with the audio path gone there is
                 # no reason to wait for skip #3. ANY track change without
@@ -695,6 +706,7 @@ def main():
                     if saved > RESUME_MIN_S:
                         try:
                             ipc(sock, "seek", saved, "absolute")
+                            stable = (path, saved)  # anchor follows the seek
                             log(f"resuming this episode at {int(saved)}s")
                         except OSError:
                             pass
