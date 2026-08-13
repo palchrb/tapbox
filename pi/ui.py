@@ -3647,16 +3647,22 @@ def splash_frame(t, word_font=None):
     d = ImageDraw.Draw(img)
     cx, cy = MARK_CX * _SS, MARK_CY * _SS
     rings = mark_rings()
-    wide = max(1, round(MARK_STROKE * MARK_S * _SS))
+    hw = MARK_STROKE / 2.0
     for i, pts in enumerate(rings):
         # the artwork staggers the rings 0.28s apart, so the breath
         # travels outward instead of pulsing as one blob
         phase = -0.28 * (len(rings) - i)
         k = MARK_S * _breathe(t, phase=phase) * _SS
         a = _breathe(t, lo=0.55, hi=1.0, phase=phase)
-        xy = [(cx + x * k, cy + y * k) for x, y in pts]
-        d.line(xy + [xy[0]], fill=_blend(MARK_RING, BG, a),
-               width=wide, joint="curve")
+        # a BAND, not a stroked polyline: PIL puts a joint at every one
+        # of the 160 vertices and they show as nicks all the way round.
+        # The rings nest, so filling outer-then-inner in order lets the
+        # next ring paint over the hole this one punches.
+        mean_r = sum(math.hypot(x, y) for x, y in pts) / len(pts)
+        for scale, colour in ((1.0 + hw / mean_r, _blend(MARK_RING, BG, a)),
+                              (1.0 - hw / mean_r, BG)):
+            d.polygon([(cx + x * k * scale, cy + y * k * scale)
+                       for x, y in pts], fill=colour)
     r = MARK_CORE_R * MARK_S * _breathe(t, lo=0.9, hi=1.08) * _SS
     d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=MARK_CORE_RGB)
     img = img.resize((W, H), Image.Resampling.LANCZOS)
