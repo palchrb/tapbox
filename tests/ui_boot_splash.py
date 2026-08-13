@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """The breathing boot mark, and the handoff that must not race.
 
-The splash is drawn from the artwork's own 186x84 coordinates scaled to
-full screen width, so the logo is the logo — not a re-composed version
-of it. It animates on its own thread, filling dead time that already
-existed (lgpio init, the library fetch, the first /status) rather than
-adding any.
+The splash is drawn straight from the 240x240 artwork's own numbers —
+the mark group at (120,96) scaled 1.9, the wordmark centred on baseline
+196 — so the screen IS the artboard and nothing is re-fitted. It
+animates on its own thread, filling dead time that already existed
+(lgpio init, the library fetch, the first /status) rather than adding
+any.
 
 The hazard worth a test is the handoff: two threads owning one SPI
 panel. run() must stop AND join the animation before it paints, or a
@@ -25,14 +26,15 @@ os.environ["VIBB_SPLASH_FPS"] = "60"      # keep the test quick
 
 import ui  # noqa: E402
 
-# 1. the geometry is the ARTWORK's, scaled — not eyeballed
-assert abs(ui.MARK_S - ui.W / 186.0) < 1e-9, "full width, height follows"
-assert abs(ui.MARK_CX - 42.0 * ui.MARK_S) < 0.01
-assert abs(ui.MARK_CY - ui.H / 2.0) < 0.5, \
-    "the mark is centred in the source, so it lands on the screen's centre"
-assert abs(ui.MARK_TOP - (ui.H - 84.0 * ui.MARK_S) / 2) < 0.01, "letterbox"
-assert ui.MARK_RADII[0] > ui.MARK_RADII[-1] and len(ui.MARK_RADII) == 4
-print("1. geometry derives from the source coordinates OK")
+# 1. the geometry is the ARTWORK's own, not eyeballed or re-fitted
+assert (ui.MARK_S, ui.MARK_CX, ui.MARK_CY) == (1.9, 120.0, 96.0)
+assert ui.MARK_RADII == (25.45, 19.58, 14.39, 9.48)
+assert (ui.MARK_WORD_X, ui.MARK_WORD_Y) == (120.0, 196.0)
+assert ui.MARK_WORD_SIZE == 52 and ui.MARK_WORD_TRACK == -1.56
+# and it all fits: the outer ring at full breath must not clip
+assert ui.MARK_CY - ui.MARK_RADII[0] * ui.MARK_S * 1.04 > 0
+assert ui.MARK_WORD_Y < ui.H
+print("1. geometry is the artwork's own numbers, and fits OK")
 
 # 2. the breathe: symmetric, bounded, and STAGGERED across the rings —
 #    the stagger is what makes the breath travel outward
@@ -56,9 +58,22 @@ a = ui.splash_frame(0.0)
 b = ui.splash_frame(ui.BREATHE_S / 2)
 assert a.size == (ui.W, ui.H) and b.size == (ui.W, ui.H)
 assert a.tobytes() != b.tobytes(), "the mark must actually move"
-assert a.getpixel((5, 5)) == ui.BG, "letterbox stays background"
+assert a.getpixel((5, 5)) == ui.BG, "corners stay background"
 print("4. frames are full-screen and animate OK")
 
+
+# 4b. the wordmark is CENTRED even with negative tracking — drawing
+#     glyph by glyph is easy to get subtly off-centre
+from PIL import Image as _I, ImageDraw as _D  # noqa: E402
+
+probe = _I.new("RGB", (ui.W, ui.H), ui.BG)
+ui._tracked_text(_D.Draw(probe), (ui.MARK_WORD_X, ui.MARK_WORD_Y),
+                 "vibb", ui._mark_font(), ui.MARK_WORD, ui.MARK_WORD_TRACK)
+box = probe.getbbox()
+assert box, "the wordmark must actually draw"
+assert abs((box[0] + box[2]) / 2 - ui.MARK_WORD_X) <= 2, \
+    f"wordmark off-centre: {box}"
+print("4b. tracked wordmark stays centred OK")
 
 # 5. THE HANDOFF: stop() must join, so no frame can land after it returns
 class CountingDisplay:

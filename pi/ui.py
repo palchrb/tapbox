@@ -3522,25 +3522,20 @@ class App:
 
 
 # --- the boot mark ------------------------------------------------------------
-# The vibb logo exactly as drawn: four concentric rings breathing out of
-# phase around a lit core, wordmark to their right. The artwork is
-# 186x84, so it goes on at FULL WIDTH and the screen letterboxes it —
-# the source card colour is this UI's own background, so the card and
-# the letterbox are the same black and the mark simply floats.
+# The vibb logo, drawn from the 240x240 artwork's own numbers: the mark
+# group sits at (120,96) scaled 1.9, the wordmark is centred on baseline
+# 196. Nothing is re-composed or re-fitted — the screen IS the artboard.
 #
-# Drawn as geometry, never a scaled bitmap: at this size a resampled PNG
-# would soften exactly the thin strokes the mark is made of.
-SRC_W, SRC_H = 186.0, 84.0
-MARK_S = W / SRC_W                 # 240/186 — full width, height follows
-MARK_TOP = (H - SRC_H * MARK_S) / 2.0
-MARK_CX = 42.0 * MARK_S            # the artwork's own coordinates,
-MARK_CY = MARK_TOP + 42.0 * MARK_S  # scaled — nothing re-composed
+# Geometry, never a scaled bitmap: at this size a resampled PNG would
+# soften exactly the thin strokes the mark is made of.
+MARK_S = 1.9                       # the artwork's own group transform
+MARK_CX, MARK_CY = 120.0, 96.0
 MARK_RADII = (25.45, 19.58, 14.39, 9.48)
 MARK_CORE_R = 4.3
-MARK_STROKE = 2.6
-MARK_WORD_X = 80.6 * MARK_S        # text-anchor: start, on its baseline
-MARK_WORD_Y = MARK_TOP + 58.6 * MARK_S
-MARK_WORD_SIZE = round(44.4 * MARK_S)
+MARK_STROKE = 2.6                  # scales with the group, as in SVG
+MARK_WORD_X, MARK_WORD_Y = 120.0, 196.0     # centred, on its baseline
+MARK_WORD_SIZE = 52
+MARK_WORD_TRACK = -1.56            # letter-spacing from the artwork
 MARK_RING = (240, 168, 132)        # #f0a884
 MARK_CORE_RGB = (251, 228, 220)    # #fbe4dc
 MARK_WORD = (246, 231, 224)        # #f6e7e0
@@ -3578,13 +3573,24 @@ def _mark_font():
         return ImageFont.load_default()
 
 
+def _tracked_text(d, xy, text, font, fill, track):
+    """Centred text with letter-spacing — PIL has no tracking, and the
+    wordmark's is negative, so the glyphs go one at a time."""
+    widths = [d.textlength(c, font=font) for c in text]
+    total = sum(widths) + track * (len(text) - 1)
+    x = xy[0] - total / 2.0
+    for c, w in zip(text, widths):
+        d.text((x, xy[1]), c, font=font, fill=fill, anchor="ls")
+        x += w + track
+
+
 def splash_frame(t, word_font=None):
     """One frame of the boot mark at time t seconds."""
     img = Image.new("RGB", (W * _SS, H * _SS), BG)
     d = ImageDraw.Draw(img)
     cx, cy = MARK_CX * _SS, MARK_CY * _SS
     for i, r0 in enumerate(MARK_RADII):
-        # the artwork staggers the rings by 0.28s each, so the breath
+        # the artwork staggers the rings 0.28s apart, so the breath
         # travels outward instead of pulsing as one blob
         phase = -0.28 * (len(MARK_RADII) - i)
         r = r0 * MARK_S * _breathe(t, phase=phase) * _SS
@@ -3595,9 +3601,8 @@ def splash_frame(t, word_font=None):
     r = MARK_CORE_R * MARK_S * _breathe(t, lo=0.9, hi=1.08) * _SS
     d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=MARK_CORE_RGB)
     img = img.resize((W, H), Image.Resampling.LANCZOS)
-    ImageDraw.Draw(img).text((MARK_WORD_X, MARK_WORD_Y), "vibb",
-                             font=word_font or _mark_font(),
-                             fill=MARK_WORD, anchor="ls")
+    _tracked_text(ImageDraw.Draw(img), (MARK_WORD_X, MARK_WORD_Y), "vibb",
+                  word_font or _mark_font(), MARK_WORD, MARK_WORD_TRACK)
     return img
 
 
