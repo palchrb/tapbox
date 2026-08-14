@@ -843,7 +843,10 @@ function renderStorytelShelf() {
     // on disk. A series can be added but not yet (or never) downloaded,
     // so the two are shown separately — checked+disabled only once it is
     // fully on the box, so a stalled download stays re-checkable.
-    const total = g.books.filter((b) => !b.locked).length;
+    // Count ALL books, not just unlocked ones: isLockedContent does not
+    // reliably mean inaccessible (a Premium account plays them), so the
+    // download attempts every book and the server decides.
+    const total = g.books.length;
     const done = g.downloaded || 0;
     const complete = g.in_library && done >= total && total > 0;
     const row = document.createElement("label");
@@ -858,12 +861,10 @@ function renderStorytelShelf() {
     const name = document.createElement("strong");
     name.textContent = g.name;
     const sub = document.createElement("small");
-    const nlocked = g.books.filter((b) => b.locked).length;
     let state = "";
     if (complete) state = " · on the box";
     else if (g.in_library) state = ` · downloading ${done}/${total}`;
-    sub.textContent = `${g.books.length} book(s)` +
-      (nlocked ? ` · ${nlocked} not in subscription` : "") + state;
+    sub.textContent = `${g.books.length} book(s)` + state;
     info.append(name, sub);
     row.append(cb, info);
     box.append(row);

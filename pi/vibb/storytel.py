@@ -592,7 +592,7 @@ def sync(target, count):
     books = grp["books"] if count < 0 else grp["books"][:max(count, 0)]
     for b in books:
         cid = b.get("consumable_id")
-        if not cid or b.get("locked") or b.get("geo"):
+        if not cid:
             continue
         dest = book_path(target, cid)
         if os.path.exists(dest):
@@ -600,11 +600,20 @@ def sync(target, count):
         if _free_bytes(d) < DISK_FLOOR:
             _log(f"disk below floor, stopping before {cid}")
             return
-        # Re-mint the signed url every attempt: it is single-use and
-        # short-lived, and the CDN path is stable, so a resumed .part
-        # sends its Range against a fresh token.
-        url = asset_url(cid)
-        _download(url, dest, timeout=600, resume=True)
+        # Attempt EVERY book. isLockedContent on the shelf does NOT
+        # reliably mean 'you cannot access this' — a Premium/unlimited
+        # account plays locked-flagged books fine (field 2026-08-15). Let
+        # the server be the authority: a book that is genuinely out of
+        # reach fails asset_url here and is skipped, the rest download.
+        # Re-mint the signed url every attempt (single-use, short-lived;
+        # the CDN path is stable, so a resumed .part sends its Range
+        # against a fresh token).
+        try:
+            url = asset_url(cid)
+            _download(url, dest, timeout=600, resume=True)
+        except OSError as e:
+            _log(f"skip {cid} ({b.get('title')}): {e}")
+            continue
         jpg = b.get("cover")
         if jpg:
             try:

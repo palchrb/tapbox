@@ -64,20 +64,45 @@ def fake_download(url, dest, timeout=120, resume=False):
 
 
 storytel.bookshelf = lambda: SHELF
-storytel.asset_url = lambda cid: f"https://fastly/{cid}?token=SIG"
+
+
+def fake_asset(cid):
+    # book 333 is genuinely out of reach: the server refuses a url. The
+    # 'locked' FLAG on the shelf is not trusted — only a real failure
+    # skips a book (field 2026-08-15: locked-flagged books play fine).
+    if cid == "333":
+        raise OSError("403 forbidden")
+    return f"https://fastly/{cid}?token=SIG"
+
+
+storytel.asset_url = fake_asset
 storytel._download = fake_download   # sync uses its OWN inlined download now
 
-# 1. sync with count -1 downloads BOTH unlocked books, skips the locked
-#    one, and writes a shelf.json listing ALL three
+# 1. sync attempts EVERY book regardless of the locked flag, downloads
+#    the ones the server allows, skips only a genuine failure, and writes
+#    a shelf.json listing all three
 storytel.sync(TARGET, -1)
 d = storytel.cache_dir(TARGET)
 assert os.path.exists(os.path.join(d, "111.mp3"))
 assert os.path.exists(os.path.join(d, "222.mp3"))
-assert not os.path.exists(os.path.join(d, "333.mp3")), "a locked book must be skipped"
+assert not os.path.exists(os.path.join(d, "333.mp3")), \
+    "a book the server refuses is skipped — but only on a real failure"
 shelf = storytel.read_shelf(TARGET)
 assert [b["consumable_id"] for b in shelf["books"]] == ["111", "222", "333"], \
     "the listing keeps every book, downloaded or not"
-print("1. sync downloads unlocked books and lists all of them OK")
+print("1. sync attempts every book and skips only a real failure OK")
+
+# 1b. the locked FLAG alone does not skip a book: 333 was attempted (its
+#     asset_url was called) and only failed because the server refused
+attempted = []
+_real_asset = storytel.asset_url
+storytel.asset_url = lambda cid: attempted.append(cid) or _real_asset(cid)
+import shutil as _sh  # noqa: E402
+_sh.rmtree(d)
+storytel.sync(TARGET, -1)
+assert "333" in attempted, "a locked-flagged book must still be ATTEMPTED"
+print("1b. a locked flag does not pre-skip — the server decides OK")
+storytel.asset_url = fake_asset
 
 # 2. the signed url is re-minted per book, and the download asks to resume
 book_dls = [x for x in DOWNLOADS if x["dest"].endswith(".mp3")]
