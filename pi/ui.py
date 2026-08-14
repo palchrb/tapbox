@@ -1401,11 +1401,20 @@ class App:
             landed = (pos is not None
                       and self._pos_expect - SEEK_TOL_S <= pos
                       <= self._pos_expect + SEEK_TOL_S + (now - self._pos_at))
-            if now >= self._pos_until or landed \
-                    or self._track_key(value) != self._pos_key:
-                self._pos_expect = None   # confirmed, expired, or a new
-                self.seek_dir = 0         #   track: the steps start over
-                self.seek_step_i = 0
+            if self._track_key(value) != self._pos_key:
+                # a different book/episode: drop the expectation AND the
+                # ladder, since the next press is a fresh piece of audio
+                self._pos_expect = None
+                self.seek_dir, self.seek_step_i = 0, 0
+            elif now >= self._pos_until or landed:
+                # Confirmed or expired: accept the truth, but LEAVE THE
+                # LADDER ALONE. Confirmation is the normal case and it
+                # arrives fast — the press opens a 0.3s burst window, and
+                # a held seek repeats at 0.35s, so resetting here meant
+                # every repeat started over at 30s and the acceleration
+                # could never build (QA 2026-08-14). Reversal and a cold
+                # card open are what reset the ladder; both already do.
+                self._pos_expect = None
             else:
                 value = {**value, "position": self._pos_expect}
         # A modal popup COVERS the card completely (its box is bigger),

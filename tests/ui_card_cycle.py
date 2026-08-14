@@ -232,6 +232,29 @@ assert back == 780.0, f"a reversal must start over at 30s, got {back}"
 assert app.seek_step_i == 0
 print("9. seek accelerates, and a reversal starts over small OK")
 
+# 9b. AND THE LADDER SURVIVES CONFIRMATION. Every press opens a 0.3s
+#     burst window and a held seek repeats at 0.35s, so a landed jump is
+#     confirmed BETWEEN presses almost every time. Resetting the ladder
+#     there meant the acceleration could never build: a held seek stayed
+#     at 30s forever, which on an 11-hour audiobook is ~660 presses to
+#     reach the middle instead of ~69 (QA 2026-08-14).
+POSTS.clear()
+app = app_now()
+app.handle_now("x")
+app.handle_now("x")                      # seek card
+steps = []
+for _ in range(3):
+    app.handle_now("y")
+    settle(len(steps) + 1)
+    tgt = POSTS[-1][1]["position"]
+    steps.append(tgt)
+    # the poller confirms the jump landed, exactly as it would in life
+    app._set("status", {**app.status, "position": tgt})
+    assert app._pos_expect is None, "a landed jump must be accepted"
+assert steps == [630.0, 690.0, 810.0], \
+    f"confirmation must not reset the ladder, got {steps}"
+print("9b. an acknowledged jump keeps the acceleration building OK")
+
 # 10. the optimistic position holds until a poll CONFIRMS it — and it is
 #     track-scoped, or skipping to the next episode would show 0:00
 #     masked behind the old spot. Confirmation is a window, not equality:
