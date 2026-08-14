@@ -109,8 +109,10 @@ document.querySelectorAll("nav button").forEach((btn) => {
     ["player", "library", "settings"].forEach((t) => {
       $(`#tab-${t}`).hidden = t !== btn.dataset.tab;
     });
-    if (btn.dataset.tab === "library") loadLibrary();
-    if (btn.dataset.tab === "settings") { loadSettings(); loadSystem(); loadBt(); }
+    if (btn.dataset.tab === "library") { loadLibrary(); loadStorytelStatus(); }
+    if (btn.dataset.tab === "settings") {
+      loadSettings(); loadSystem(); loadBt(); loadStorytelStatus();
+    }
   });
 });
 
@@ -336,6 +338,7 @@ const ORDER_LABEL = {
 const CACHE_OPTIONS = [0, 5, 10, 25, 50, -1];  // -1 = keep all offline
 const isSpotify = (t) => /open\.spotify\.com|spotify:|spotify\.link\//.test(t);
 const isLocal = (t) => t.startsWith("/");
+const isStorytel = (t) => t.startsWith("storytel:");
 
 async function loadLibrary() {
   LIB = await api("/library");
@@ -506,14 +509,20 @@ function entryRow(e, sectionName, locked) {
   // the N has no meaning there). Local folders: already offline.
   let cache = null;
   const spot = isSpotify(e.target);
+  const story = isStorytel(e.target);
   if (!isLocal(e.target)) {
     cache = document.createElement("select");
     cache.title = spot ? "Pre-download tracks for instant playback"
-                       : "Episodes kept offline";
-    for (const n of (spot ? [0, -1] : CACHE_OPTIONS)) {
+                : story ? "Books downloaded to the box"
+                : "Episodes kept offline";
+    // storytel is download-only, so there is no 'no offline' choice —
+    // an entry that keeps nothing offline plays nothing
+    for (const n of (spot ? [0, -1] : story ? [-1, 5, 10, 20]
+                     : CACHE_OPTIONS)) {
       const o = document.createElement("option");
       o.value = String(n);
       o.textContent = spot ? (n === 0 ? "no pre-cache" : "pre-cache")
+                    : story ? (n < 0 ? "download all" : `first ${n}`)
                     : n === 0 ? "no offline" : n < 0 ? "keep all"
                     : `keep ${n}`;
       // spotify: ANY non-zero value means pre-cache is on (the sweep
@@ -530,6 +539,8 @@ function entryRow(e, sectionName, locked) {
       });
       toast(spot ? (e.cache ? `${e.name}: pre-caching for instant playback`
                             : `${e.name}: no pre-cache`)
+            : story ? (e.cache < 0 ? `${e.name}: downloading every book`
+                                   : `${e.name}: downloading the first ${e.cache}`)
             : e.cache < 0 ? `${e.name}: keeps every episode offline`
             : e.cache ? `${e.name}: keeps the newest ${e.cache} offline`
                       : `${e.name}: no offline copies`);
@@ -730,6 +741,159 @@ $("#follow-form").addEventListener("submit", async (ev) => {
     loadLibrary();
   }
 });
+
+/* --- Storytel: an account on the box, and a shelf picker -------------------
+   The account lives on the box (download-only), the phone just curates.
+   The picker reads the shelf, groups it into series, and each checked
+   series becomes a normal library entry the sweeper downloads. */
+let STORYTEL_SHELF = [];
+
+async function loadStorytelStatus() {
+  let s;
+  try { s = await api("/storytel/status"); } catch (e) { return; }
+  const cur = $("#storytel-current");
+  if (cur) {
+    cur.textContent = s.configured
+      ? (s.queued ? `Connected — ${s.queued} position(s) waiting to sync`
+                  : "Connected")
+      : "No account yet";
+  }
+  const sync = $("#storytel-sync");
+  if (sync) sync.checked = !!s.sync;
+  const logout = $("#btn-storytel-logout");
+  if (logout) logout.hidden = !s.configured;
+  const libStatus = $("#storytel-lib-status");
+  if (libStatus && s.configured) {
+    libStatus.textContent = "Tap “Show my audiobooks” to pick what goes on the box.";
+  }
+}
+
+if ($("storytel-form")) {
+  $("storytel-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const email = $("storytel-email").value.trim();
+    const password = $("storytel-password").value;
+    if (!email || !password) { toast("E-mail and password, please"); return; }
+    try {
+      const r = await api("/storytel/credentials",
+                          { method: "POST", body: { email, password } });
+      $("storytel-password").value = "";
+      toast(`Storytel connected — ${r.series} series on your shelf`);
+      loadStorytelStatus();
+    } catch (e) { toast(e.message, 8000); }
+  });
+}
+
+if ($("btn-storytel-logout")) {
+  $("btn-storytel-logout").addEventListener("click", async () => {
+    if (!confirm("Forget the Storytel account? Downloaded books stay on " +
+                 "the box until you remove their tiles.")) return;
+    try {
+      await api("/storytel/logout", { method: "POST" });
+      toast("Storytel account forgotten");
+      loadStorytelStatus();
+    } catch (e) { toast(e.message); }
+  });
+}
+
+if ($("storytel-sync")) {
+  $("storytel-sync").addEventListener("change", async (ev) => {
+    try {
+      await api("/settings",
+                { method: "PUT", body: { storytel_sync: ev.target.checked ? 1 : 0 } });
+      toast(ev.target.checked ? "Positions will back up to Storytel"
+                              : "Positions stay on the box");
+    } catch (e) { toast(e.message); loadStorytelStatus(); }
+  });
+}
+
+if ($("btn-storytel-load")) {
+  $("btn-storytel-load").addEventListener("click", async () => {
+    $("btn-storytel-load").disabled = true;
+    try {
+      const r = await api("/storytel/shelf", { method: "POST" });
+      STORYTEL_SHELF = r.series || [];
+      renderStorytelShelf();
+    } catch (e) { toast(e.message, 8000); }
+    finally { $("btn-storytel-load").disabled = false; }
+  });
+}
+
+if ($("storytel-kids")) {
+  $("storytel-kids").addEventListener("change", renderStorytelShelf);
+}
+
+function renderStorytelShelf() {
+  const box = $("storytel-shelf");
+  if (!box) return;
+  box.textContent = "";
+  const kidsOnly = $("storytel-kids").checked;
+  const shown = STORYTEL_SHELF.filter((g) => !kidsOnly || g.kids);
+  if (!shown.length) {
+    const p = document.createElement("p");
+    p.className = "dim small";
+    p.textContent = STORYTEL_SHELF.length
+      ? "No kids' books on the shelf — untick the filter to see all."
+      : "Nothing on your Storytel shelf yet.";
+    box.append(p);
+    return;
+  }
+  const inLib = new Set();
+  for (const s of (LIB.sections || []))
+    for (const e of s.entries) if (isStorytel(e.target)) inLib.add(e.target);
+
+  for (const g of shown) {
+    const row = document.createElement("label");
+    row.className = "entry";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.dataset.target = g.target;
+    cb.checked = inLib.has(g.target);
+    cb.disabled = inLib.has(g.target);
+    const info = document.createElement("div");
+    info.className = "entry-info";
+    const name = document.createElement("strong");
+    name.textContent = g.name;
+    const sub = document.createElement("small");
+    const nlocked = g.books.filter((b) => b.locked).length;
+    sub.textContent = `${g.books.length} book(s)` +
+      (nlocked ? ` · ${nlocked} not in subscription` : "") +
+      (inLib.has(g.target) ? " · already on the box" : "");
+    info.append(name, sub);
+    row.append(cb, info);
+    box.append(row);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.textContent = "Add checked to the box";
+  add.addEventListener("click", addCheckedStorytel);
+  box.append(add);
+}
+
+async function addCheckedStorytel() {
+  const section = $("storytel-section").value.trim() || "Lydbøker";
+  const picks = [...document.querySelectorAll("#storytel-shelf input:checked")]
+    .filter((cb) => !cb.disabled)
+    .map((cb) => STORYTEL_SHELF.find((g) => g.target === cb.dataset.target))
+    .filter(Boolean);
+  if (!picks.length) { toast("Check a series first"); return; }
+  try {
+    await saveLibrary((lib) => {
+      let sec = lib.sections.find(
+        (s) => s.name.toLowerCase() === section.toLowerCase());
+      if (sec && sec.spotify_user) { sec = null; }  // don't touch a follow
+      if (!sec) { sec = { name: section, entries: [] }; lib.sections.push(sec); }
+      for (const g of picks) {
+        if (sec.entries.some((e) => e.target === g.target)) continue;
+        sec.entries.push({ name: g.name, target: g.target,
+                           order: "oldest_first", cache: -1, resume: true });
+      }
+    });
+    toast(`Added ${picks.length} series — downloading to the box`);
+    await loadLibrary();
+    renderStorytelShelf();
+  } catch (e) { toast(e.message, 6000); }
+}
 
 /* --- settings + system ---------------------------------------------------- */
 

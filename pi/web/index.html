@@ -121,6 +121,22 @@
     Liked Songs and Spotify-made editorial lists are never visible. Needs the
     one-time Spotify API setup in install.sh.</p>
   </div>
+  <div class="card">
+    <h2>Storytel audiobooks</h2>
+    <p id="storytel-lib-status" class="dim small">Add your Storytel account
+      under Settings first.</p>
+    <div class="controls">
+      <button id="btn-storytel-load" type="button">Show my audiobooks</button>
+      <label class="small"><input type="checkbox" id="storytel-kids" checked>
+        Kids' books only</label>
+    </div>
+    <input id="storytel-section" list="section-names"
+           placeholder="Section on the box (e.g. Lydbøker)">
+    <div id="storytel-shelf"></div>
+    <p class="dim small">One tile per series. Books download to the box and
+    play offline — the phone only fetches them. Add a book to your shelf in
+    the Storytel app, then check it here to send it to the box.</p>
+  </div>
 </section>
 
 <section id="tab-settings" hidden>
@@ -236,6 +252,26 @@
     take it over. Switch account opens it briefly: pick the box under Devices
     in the Spotify app (same Wi-Fi) with the account you want — it logs in,
     stays remembered, and re-locks on its own.</p>
+  </div>
+  <div class="card">
+    <h2>Storytel</h2>
+    <p id="storytel-current" class="dim">–</p>
+    <form id="storytel-form">
+      <input id="storytel-email" type="email" placeholder="Storytel e-mail"
+             autocomplete="username">
+      <input id="storytel-password" type="password" placeholder="Password"
+             autocomplete="current-password">
+      <button type="submit">Save account</button>
+    </form>
+    <div class="controls">
+      <label class="small"><input type="checkbox" id="storytel-sync">
+        Back up listening positions to Storytel</label>
+      <button id="btn-storytel-logout" class="danger" hidden>Forget account</button>
+    </div>
+    <p class="dim small">Stored only on the box, to download the audiobooks
+    you pick. Positions can sync back as a backup; the box never reads them
+    back, so a book heard on your phone won't move the box. Google/Apple
+    sign-in accounts don't work here — use e-mail and password.</p>
   </div>
   <div class="card">
     <h2>Bluetooth speaker</h2>

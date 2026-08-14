@@ -108,6 +108,9 @@ PKGS=(bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
                                            # renders real emoji sprites
       avahi-daemon ffmpeg netcat-openbsd   # ffmpeg: HLS->m4a episode cache;
                                            # nc: power.sh battery logger
+      openssl                              # storytel.py AES-encrypts the
+                                           # login password (system python
+                                           # has no AES); normally present
       python3-dbus python3-gi)             # BlueZ D-Bus backend (PLAN-bt-dbus.md)
 missing=()
 for p in "${PKGS[@]}"; do have_pkg "$p" || missing+=("$p"); done
