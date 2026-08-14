@@ -220,6 +220,13 @@ RESUME_OVERLAP_MUSIC_S = float(os.environ.get("VIBB_RESUME_OVERLAP_MUSIC",
                                               "1"))
 RESUME_OVERLAP_LONG_S = float(os.environ.get("VIBB_RESUME_OVERLAP_LONG", "8"))
 RESUME_LONG_GAP_S = float(os.environ.get("VIBB_RESUME_LONG_GAP", "120"))
+# Above this duration, prev stops meaning "restart this track" and means
+# only "previous track". Owner's number (2026-08-14). The gap it sits in
+# is an order of magnitude wide — kids' podcast episodes run 10-40 min,
+# audiobooks 8-12 h — so the exact value is not load-bearing; what is
+# load-bearing is that a restart can never be issued against something
+# long enough that losing the position costs hours.
+PREV_RESTART_MAX_S = float(os.environ.get("VIBB_PREV_RESTART_MAX", "1800"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("VIBB_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("VIBB_SETTLE_TOL", "3"))
 # boot resume: silent grace before the speaker popup, and the wait tick
@@ -1974,8 +1981,24 @@ class Orchestrator:
                     # >5s into the episode: restart it (standard player
                     # semantics). A second prev (within 5s of the start)
                     # goes to the PREVIOUS episode.
+                    #
+                    # NOT on long-form audio. The restart writes position
+                    # 0, the player's poll persists it within 33s, and
+                    # nothing protects the old value — so on an audiobook
+                    # a single prev costs hours, and BROWSING backwards
+                    # costs one bookmark per book passed (two presses
+                    # each, every odd one a restart). The rule exists
+                    # because there was no seek; since 2026-08-14 there
+                    # is one, and holding B on the seek card reaches the
+                    # start of a short episode in about two seconds.
+                    # Gated on DURATION, not on where the file came from:
+                    # a three-hour podcast has exactly the same problem.
                     pos = mpv_get("playback-time")
-                    if isinstance(pos, (int, float)) and pos > 5:
+                    dur = mpv_get("duration")
+                    long_form = isinstance(dur, (int, float)) \
+                        and dur > PREV_RESTART_MAX_S
+                    if not long_form and isinstance(pos, (int, float)) \
+                            and pos > 5:
                         cmd = ["seek", 0, "absolute"]
                     else:
                         # Resume ROTATES the queue so the bookmarked

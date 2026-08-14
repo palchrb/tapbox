@@ -52,7 +52,10 @@ orch._mpv_alive = lambda: True
 orch.source = "mpv"                    # a live mpv session owns controls
 daemon._kick_bt_connect = lambda *a, **k: None
 daemon.mpv_get = lambda prop: {"playlist-pos": 1, "playlist-count": 5,
-                               "playback-time": 2}[prop]
+                               "playback-time": 2,
+                               # a short episode: prev keeps its restart
+                               # semantics below PREV_RESTART_MAX_S
+                               "duration": 1500}[prop]
 daemon.mpv_ipc = lambda cmd: {"error": "success"}
 try:
     os.remove(radio.SKIP_FILE)

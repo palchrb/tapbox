@@ -721,7 +721,20 @@ def main():
                 # jump seeks to its saved position just below — 0.0
                 # would make a fault right after a resume-at-5:00
                 # actively rewind the child to the top (QA 2026-08-13).
-                stable = (path, start_pos if was_first else 0.0)
+                # Resolved BEFORE the dead-output check, not after it.
+                # The check CONSUMES `stable`, so anchoring at 0.0 here
+                # and correcting it further down left one path wrong:
+                # a fault at the moment of an in-session jump rolled the
+                # child to the TOP of an episode whose saved spot was
+                # well inside it. On a podcast that costs minutes; on an
+                # audiobook it costs hours, with no user action at all
+                # (QA 2026-08-14).
+                saved = 0.0
+                if not was_first and not no_resume:
+                    saved = episode_pos(load_state(key), ids.get(path), path)
+                    if saved <= RESUME_MIN_S:
+                        saved = 0.0   # never heard, or finished
+                stable = (path, start_pos if was_first else saved)
                 # dead output = mpv chews through the queue erroring
                 # track after track; with the audio path gone there is
                 # no reason to wait for skip #3. ANY track change without
@@ -738,15 +751,12 @@ def main():
                 # where it was left. The first track is already at start_pos,
                 # and a never-heard/finished episode has no saved position, so
                 # a natural advance still plays from the top.
-                if not was_first and not no_resume:
-                    saved = episode_pos(load_state(key), ids.get(path), path)
-                    if saved > RESUME_MIN_S:
-                        try:
-                            ipc(sock, "seek", saved, "absolute")
-                            stable = (path, saved)  # anchor follows the seek
-                            log(f"resuming this episode at {int(saved)}s")
-                        except OSError:
-                            pass
+                if saved:   # resolved above, and `stable` already holds it
+                    try:
+                        ipc(sock, "seek", saved, "absolute")
+                        log(f"resuming this episode at {int(saved)}s")
+                    except OSError:
+                        pass
             # Publish which episode is playing + the pause state (vibbd
             # reads the FILE at shutdown — IPC would race mpv's death);
             # written when the track or pause state changes.
