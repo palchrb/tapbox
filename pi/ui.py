@@ -1079,17 +1079,20 @@ def _bt_glyph(draw, cx, top, bot, color):
 
 
 def _shuffle_glyph(draw, cx, top, bot, color):
-    """Two crossing paths with arrow tips, around the spine x=cx. Only
-    ever drawn when shuffle is ON — its absence is the 'off' state, so
-    the top bar stays quiet for the ordinary case (owner 2026-08-14)."""
-    dx = 5
-    for y0, y1 in ((top, bot), (bot, top)):     # the two crossing paths
-        draw.line([(cx - dx, y0), (cx - 2, y0),
-                   (cx + 2, y1), (cx + dx - 3, y1)], fill=color,
-                  joint="curve")
-        # a small solid head on each right-hand end, pointing out
-        draw.polygon([(cx + dx, y1), (cx + dx - 4, y1 - 2),
-                      (cx + dx - 4, y1 + 2)], fill=color)
+    """Two paths swapping places, around the spine x=cx. Only ever drawn
+    when shuffle is ON — its absence is the 'off' state, so the top bar
+    stays quiet for the ordinary case (owner 2026-08-14).
+
+    No arrow heads, deliberately: at eleven pixels tall a head is three
+    pixels of anything, and every shape tried for one (filled triangle,
+    line barbs, flat wedge) landed as a blob that made the mark HARDER
+    to read, not easier. The bare crossing is unambiguous at actual
+    size, which is the only size that matters."""
+    dx = 9
+    for y0, y1 in ((top, bot), (bot, top)):
+        draw.line([(cx - dx, y0), (cx - dx + 3, y0),
+                   (cx + dx - 3, y1), (cx + dx, y1)],
+                  fill=color, joint="curve")
 
 
 def _conn_icons(draw, system, right_x, y, h):
@@ -1122,9 +1125,9 @@ def _conn_icons(draw, system, right_x, y, h):
     # row still reads nothing but self.system. Present = on; there is
     # no 'off' glyph, by design.
     if (system or {}).get("shuffle"):
-        x -= 9
+        x -= 11
         _shuffle_glyph(draw, x, y + 2, y + h - 2, HILITE)
-        x -= 9
+        x -= 11
     return x
 
 
