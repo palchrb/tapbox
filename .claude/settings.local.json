@@ -211,7 +211,22 @@
       "Bash(ffmpeg -version)",
       "Bash(sudo apt-get install -y -q ffmpeg)",
       "Bash(awk '/vibb-daemon.service *)",
-      "Bash(awk '/vibb-ui.service *)"
+      "Bash(awk '/vibb-ui.service *)",
+      "WebFetch(domain:w1.fi)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:elimo.io)",
+      "WebFetch(domain:git.w1.fi)",
+      "WebFetch(domain:forums.raspberrypi.com)",
+      "WebFetch(domain:community.infineon.com)",
+      "WebFetch(domain:android.googlesource.com)",
+      "WebFetch(domain:os.mbed.com)",
+      "WebFetch(domain:wireless.docs.kernel.org)",
+      "WebFetch(domain:discuss.cachyos.org)",
+      "WebFetch(domain:lkml.iu.edu)",
+      "Bash(echo \"=== exit $? ===\")",
+      "WebFetch(domain:elixir.bootlin.com)",
+      "Bash(awk '{printf \"%d\\\\t%s\\\\n\", $1+99, substr\\($0, index\\($0,$2\\)\\)}')",
+      "Bash(stable)"
     ]
   }
 }

@@ -26,3 +26,9 @@ dist/
 # Build artifacts
 *.img
 *.iso
+
+# Wheels downloaded for offline installs on the box — install.sh pulls
+# these from PyPI itself, so a copy in the tree is 5MB of dead weight
+# in every clone. (Ten of them rode in on a careless `git add -A`
+# during the rename, 2026-08-13.)
+*.whl
