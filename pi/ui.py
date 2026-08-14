@@ -570,6 +570,25 @@ CONTROL_TIMEOUT = 5   # play/pause/next/prev hit the LOCAL daemon — if it
                       # so buttons keep working instead of freezing the UI
 PP_RECONCILE_S = 2.0  # after an optimistic play/pause flip, hold the local
                       # icon state until a poll confirms it (or this expires)
+# The X cycle. One press opens the volume card; further presses walk the
+# tabs. Index 0 is a contract, not a detail: a card that has LAPSED
+# always reopens on volume, because that is the reflex the box has
+# taught for months.
+CARDS = ("vol", "seek", "shuf")
+CARD_TTL_S = 5.0   # the card lives this long past the last press. Three
+#                    seconds could not carry a three-tab cycle: a press
+#                    only counts on RELEASE, must stay under LONG_S, and
+#                    the sampler adds a tick on top — leaving ~2s of
+#                    thinking time per press for a child reading a tab
+#                    strip she has never seen. Combined with 'a lapsed
+#                    card reopens on volume' that made the third tab
+#                    unreachable rather than merely slow (QA 2026-08-14).
+#                    The price is real and deliberate: B/Y are not
+#                    prev/next for those five seconds.
+SEEK_STEPS = (30, 60, 120, 300)  # grows while the presses keep coming
+SEEK_REPEAT_S = 0.35   # hold B/Y on the seek card: the repeat cadence
+SEEK_RECONCILE_S = 4.0  # hold the optimistic position until a poll lands
+SEEK_TOL_S = 2.0        # a report this close to the target = it landed
 # The render loop is single-threaded: any daemon poll it makes blocks
 # every button until it returns. /system + /settings + /library used the
 # 10s default, so a daemon slowed by go-librespot's blocking API (a track
@@ -814,12 +833,13 @@ class GpioInput:
     first chord finger navigate the menu); the cost is one human
     release time of menu latency, same as A/B always had.
 
-    In gesture_mode (the now-playing view) A, B, X and Y resolve
+    In gesture_mode (the now-playing view) B, X and Y resolve
     short-vs-hold: release before LONG_S -> the plain press, held LONG_S
     -> '<name>_long' (fires while still held — but never while the A+B
-    combo is forming). A holds too, even though it is half of that
-    combo — the combo branch below catches 'both down' first, so the
-    two cannot both fire; B has worked exactly this way all along."""
+    combo is forming). A does NOT hold: it is play/pause, the one
+    control a child finds without looking, and it stays a plain press
+    everywhere. Shuffle used to live on a hold here and moved to the
+    card cycle, which shows its state instead of hiding it."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
     HOLD_S = 2.0      # A+B settings combo
@@ -837,7 +857,6 @@ class GpioInput:
         self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._long_sent = {}  # name -> the hold already fired
         self._b_gesture = False   # hold-B armed when B was pressed
-        self._a_gesture = False   # hold-A armed when A was pressed
         self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
@@ -853,12 +872,6 @@ class GpioInput:
             # In menus X/Y are plain presses, fired on RELEASE so the
             # X+Y extras combo can form without navigating the menu.
             self._long_sent[name] = False
-            return
-        if name == "a":
-            self._long_sent["a"] = False
-            # judged by the mode the PRESS started in, like b below —
-            # a_long can change what is playing while still held
-            self._a_gesture = self.gesture_mode
             return
         if name == "b":
             self._long_sent["b"] = False
@@ -898,10 +911,6 @@ class GpioInput:
             if not self._long_sent.get("b"):
                 self.queue.append("b")
             return
-        if name == "a" and self._a_gesture:
-            if not self._long_sent.get("a"):
-                self.queue.append("a")   # a hold already spoke for it
-            return
         self.queue.append(name)
 
     def poll(self, timeout):
@@ -934,15 +943,6 @@ class GpioInput:
             # long press fires while still held — no waiting for release
             self._long_sent["b"] = True
             self.queue.append("b_long")
-        elif (self._a_gesture and "a" in self.down
-                and not self._long_sent.get("a")
-                and now - self.down["a"] >= self.LONG_S):
-            # A holds too (shuffle). Reaching this branch at all means
-            # B is NOT down — the combo branch above owns that case —
-            # so holding both for settings can never toggle shuffle on
-            # the way there.
-            self._long_sent["a"] = True
-            self.queue.append("a_long")
         combo_xy = "x" in self.down and "y" in self.down
         for name in ("x", "y"):
             # the holds only mean something in now-playing, and never
@@ -989,7 +989,6 @@ class LgpioInput(GpioInput):
         self.tainted = set()
         self._long_sent = {}
         self._b_gesture = False
-        self._a_gesture = False
         self.wake = threading.Event()  # set by inherited handlers; unused
         self._level = {n: 1 for n in self.PINS}   # pull-up: 1 = released
         self._edge_at = {n: 0.0 for n in self.PINS}
@@ -1097,6 +1096,20 @@ def _shuffle_glyph(draw, cx, top, bot, color):
                   fill=color, joint="curve")
         draw.point([(cx + dx - 1, y1), (cx + dx - 2, y1),
                     (cx + dx, y1 - ty), (cx + dx, y1 - 2 * ty)], fill=color)
+
+
+def _seek_arrows(draw, x, cy, color, back=False):
+    """The double triangle every player uses for rewind/fast-forward,
+    ten pixels wide from x. Drawn, not typed — DejaVu has no media
+    glyphs, which is why the button markers are shapes too."""
+    s = 5
+    for k in (0, 7):
+        if back:
+            draw.polygon([(x + k + s, cy - s), (x + k + s, cy + s),
+                          (x + k, cy)], fill=color)
+        else:
+            draw.polygon([(x + k, cy - s), (x + k, cy + s),
+                          (x + k + s, cy)], fill=color)
 
 
 def _conn_icons(draw, system, right_x, y, h):
@@ -1314,7 +1327,17 @@ class App:
                          "volume_cap": 100, "local_fallback_cap": 35}
         self.volume_flash = 0.0     # show volume overlay until this time
         self.volume_shown = None
-        self.vol_mode_until = 0.0   # while set: B/Y adjust volume (X opened it)
+        self.vol_mode_until = 0.0   # while set: a card is up and owns B/Y
+        self.card_idx = 0           # which tab of CARDS that card shows
+        self.seek_step_i = 0        # index into SEEK_STEPS (accelerating)
+        self.seek_dir = 0           # -1/+1 of the last seek press
+        self.seek_shown = None      # the step just applied, for the card
+        self.seek_refused = False   # a seek the box could not do
+        self._seek_repeat = None    # (dir, next_at) while B/Y is held down
+        self._pos_expect = None     # optimistic position: where we told
+        self._pos_until = 0.0       #   the user we jumped, held until a
+        self._pos_at = 0.0          #   /status confirms it or this passes
+        self._pos_key = None        #   the track it was true for
         self.output_flash = 0.0     # show the output-switch popup until this
         self.output_shown = ""      # the device name to name in that popup
         self.output_warning = False  # switched to a device with no sound card
@@ -1363,6 +1386,38 @@ class App:
                 self._pp_expect = None  # confirmed or timed out -> accept
             else:
                 value = {**value, "playing": self._pp_expect}
+        # Optimistic position: a seek moves the bar on the press, or the
+        # user over-seeks while /status catches up. Unlike play/pause
+        # this cannot confirm on EQUALITY — position is continuous, and
+        # a correct report is the target PLUS whatever played since. So
+        # the window grows with elapsed time, while the lower bound
+        # stays tight: a pre-seek report (the whole failure mode) sits
+        # far below on a forward seek and far above on a backward one,
+        # and gets overridden either way.
+        if attr == "status" and isinstance(value, dict) \
+                and self._pos_expect is not None:
+            now = time.monotonic()
+            pos = value.get("position")
+            landed = (pos is not None
+                      and self._pos_expect - SEEK_TOL_S <= pos
+                      <= self._pos_expect + SEEK_TOL_S + (now - self._pos_at))
+            if now >= self._pos_until or landed \
+                    or self._track_key(value) != self._pos_key:
+                self._pos_expect = None   # confirmed, expired, or a new
+                self.seek_dir = 0         #   track: the steps start over
+                self.seek_step_i = 0
+            else:
+                value = {**value, "position": self._pos_expect}
+        # A modal popup COVERS the card completely (its box is bigger),
+        # and without this the card would keep owning B/Y underneath it.
+        # Invisible volume is merely odd; an invisible seek loses your
+        # place in a way one press cannot undo.
+        if attr == "status" and isinstance(value, dict) \
+                and self.vol_mode_until and (
+                    value.get("bt_waiting") or value.get("bt_lost")
+                    or (value.get("spotify_offline")
+                        and value.get("source") == "spotify")):
+            self.vol_mode_until = self.volume_flash = 0.0
         # Optimistic new-tile card: after a tap the screen already shows
         # the tapped entry (_play_async). The daemon commits its source
         # switch LATE — until then /status truthfully describes the
@@ -1879,7 +1934,7 @@ class App:
                 and st.get("source") == "spotify":
             self._wifi_reconnect()  # X = get the net back now
             return
-        in_vol = time.monotonic() < self.vol_mode_until
+        card = self._card()
         try:
             if ev == "a":
                 # optimistic: flip the icon NOW (see PP_RECONCILE_S) so it
@@ -1894,38 +1949,171 @@ class App:
                 self.dirty = True
                 self._control_async("/playpause")
             elif ev == "b":
-                if in_vol:  # volume card open: B/Y are - / +
-                    self._volume_mode(delta=-5)
+                if card:        # a card owns B/Y while it shows
+                    self._card_step(-1)
                 else:
                     self._control_async("/prev")
             elif ev == "b_long":
-                self._back_to_episodes()
+                if card == "seek":
+                    self._seek_hold(-1)
+                else:
+                    self._back_to_episodes()
             elif ev == "x":
-                self._volume_mode(delta=None)  # open/extend the volume card
+                if card:
+                    self._card_next()   # cycle while it is up
+                else:
+                    self._volume_mode(delta=None)  # cold open: volume
             elif ev == "x_long":
-                self._output_action()
+                if card:
+                    # X means "the next tab" for as long as a card shows;
+                    # a hold that opened the output picker here would
+                    # bury the card mid-cycle.
+                    self._card_next()
+                else:
+                    self._output_action()
             elif ev == "y":
-                if in_vol:
-                    self._volume_mode(delta=5)
+                if card:
+                    self._card_step(1)
                 else:
                     self._control_async("/next")
             elif ev == "y_long":
-                self._open_episodes()
-            elif ev == "a_long":
-                self._toggle_shuffle()
+                if card == "seek":
+                    self._seek_hold(1)
+                else:
+                    self._open_episodes()
         except OSError as e:
             log(f"control failed: {e}")
 
-    def _toggle_shuffle(self):
-        """Hold play in now-playing: shuffle on/off.
+    def _card(self):
+        """Which card is showing, or None.
+
+        Outside now-playing it is ALWAYS the volume card. X has never
+        meant anything else while browsing, and seek/shuffle have no
+        meaning there — this is also what stops a seek card opened in
+        now-playing from following the user into the carousel and
+        quietly rebinding B/Y away from flipping tiles."""
+        if time.monotonic() >= self.vol_mode_until:
+            return None
+        return CARDS[self.card_idx] if self.view == "now" else "vol"
+
+    def _card_touch(self):
+        """Re-arm the showing card. BOTH timestamps, every time:
+        vol_mode_until is what the handlers read, volume_flash is what
+        the render loop's repaint exception reads. Touch one alone and
+        you get a card that answers buttons while frozen on screen, or
+        one that paints after it stopped listening."""
+        self.vol_mode_until = time.monotonic() + CARD_TTL_S
+        self.volume_flash = self.vol_mode_until
+        self.dirty = True
+
+    def _card_next(self):
+        """X again while a card is up: the next tab, wrapping.
+
+        Wrapping is deliberate — a child who overshoots fixes it by
+        pressing on, not by waiting out five seconds of timeout."""
+        self.card_idx = (self.card_idx + 1) % len(CARDS)
+        self._card_touch()
+        if CARDS[self.card_idx] == "vol":
+            self._volume_mode(delta=None)   # re-read the number
+        else:
+            self.seek_dir, self.seek_step_i = 0, 0   # a fresh visit
+            self.seek_shown = None           #   to seek starts slow
+
+    def _card_step(self, sign):
+        """B and Y, meaning whatever the showing card says they mean."""
+        card = self._card()
+        if card == "seek":
+            self._seek_press(sign)
+        elif card == "shuf":
+            # OFF on B, ON on Y — not a toggle. Spatially the same as
+            # the -/+ above it, and idempotent: a child mashing Y cannot
+            # flip-flop a state whose only feedback is one small glyph.
+            self._set_shuffle(sign > 0)
+            self._card_touch()
+        else:
+            self._volume_mode(delta=5 * sign)
+
+    def _seek_hold(self, dirn):
+        """Holding B or Y on the seek card keeps stepping.
+
+        Holding is the instinct the card invites, and until now it threw
+        the user out of now-playing (B) or opened the episode picker
+        (Y). One step fires here; the render loop repeats it at
+        SEEK_REPEAT_S for as long as the button stays down."""
+        self._seek_press(dirn)
+        self._seek_repeat = (dirn, time.monotonic() + SEEK_REPEAT_S)
+
+    @staticmethod
+    def _track_key(st):
+        """What the optimistic position was true FOR. Position is
+        track-scoped in a way play/pause is not: skip to the next
+        episode right after a seek and, without this, the new track's
+        0:00 would sit masked behind a stale 12:34."""
+        return (st.get("target"), st.get("episode_id") or st.get("title"))
+
+    def _seek_press(self, dirn):
+        """One seek step, growing while the presses keep coming.
+
+        The base is our OWN last commanded target, never the reported
+        position: /status is a second behind (fifteen on a sonos
+        renderer), so basing step N on the poll gives 'every press does
+        nothing, then one works' — the lesson the sonos volume optimism
+        already records from 2026-08-09. Absolute targets are what let
+        the presses compound at all; the daemon does the clamping."""
+        st = self.status or {}
+        if dirn != self.seek_dir:
+            self.seek_step_i = 0   # a reversal means "I overshot" —
+            #   land 30s away, not another five minutes away
+        elif self.seek_dir:
+            self.seek_step_i = min(self.seek_step_i + 1, len(SEEK_STEPS) - 1)
+        self.seek_dir = dirn
+        step = SEEK_STEPS[self.seek_step_i]
+        self.seek_shown = dirn * step
+        self._card_touch()
+        dur = st.get("duration")
+        if dur is None:            # live stream: no duration, nowhere to go
+            self.seek_refused = True
+            return
+        base = self._pos_expect if self._pos_expect is not None \
+            else (st.get("position") or 0.0)
+        target = max(0.0, min(float(base) + dirn * step, float(dur)))
+        self._pos_expect = target
+        self._pos_at = time.monotonic()
+        self._pos_until = self._pos_at + SEEK_RECONCILE_S
+        self._pos_key = self._track_key(st)
+        self.status = {**st, "position": target}
+        self.poll_burst_until = self._pos_at + 3
+
+        def go():
+            try:
+                r = api_post("/seek", {"position": target},
+                             timeout=CONTROL_TIMEOUT)
+            except OSError as e:
+                log(f"seek failed: {e}")
+                r = None
+            if not isinstance(r, dict) or r.get("routed") is None:
+                self._pos_expect = None   # let the truth back in at once
+                self.seek_refused = True
+            elif r.get("position") is not None:
+                # adopt the daemon's number: it carries the end-clamp, so
+                # the card cannot claim a spot past the end of the track
+                self._pos_expect = float(r["position"])
+                self._pos_at = time.monotonic()
+                self.status = {**(self.status or {}),
+                               "position": self._pos_expect}
+                self.dirty = True
+            self._force_poll()
+        threading.Thread(target=go, daemon=True).start()
+
+    def _set_shuffle(self, want):
+        """The shuffle card's B/Y: shuffle off or on.
 
         Nothing is announced on success — neither mpv nor go-librespot
         interrupts the current track to reorder what comes after it, so
         there is no gap to explain. The top-bar glyph carries the state,
         and it flips HERE rather than on the next poll so the press has
         an answer immediately (same contract as the play/pause icon).
-        A card appears only when the box could not shuffle at all."""
-        want = not bool((self.status or {}).get("shuffle"))
+        A message appears only when the box could not shuffle at all."""
         base = self.system if isinstance(self.system, dict) else {}
         self.system = {**base, "shuffle": want}   # atomic swap: the
         #   render thread may be reading this (see _set)
@@ -2295,15 +2483,33 @@ class App:
         self.dirty = True
 
     def _volume_mode(self, delta):
-        """The volume card: X opens it, then B/Y adjust while it shows."""
-        try:
-            r = api_get("/volume") if delta is None                 else api_post("/volume", {"delta": delta})
-        except OSError as e:
-            log(f"volume failed: {e}")
-            return
-        self.volume_shown = r.get("volume")
-        self.vol_mode_until = time.monotonic() + 3.0
-        self.volume_flash = self.vol_mode_until
+        """The volume card — tab 0 of the cycle, and the ONLY card the
+        browse views can reach.
+
+        The HTTP runs off this thread now. Inline was survivable while
+        one press meant one round trip, but the cycle COUNTS presses,
+        and with LgpioInput the pins are sampled inside poll() on this
+        very thread: a press that begins and ends while a slow /volume
+        blocks it changes no level at sample time and is never seen at
+        all. A cycle cannot sit on a press path that drops presses (QA
+        2026-08-14). /volume also takes the daemon's lock, which a slow
+        control can hold for seconds."""
+        self.card_idx = 0
+        self._card_touch()
+        if delta is not None and self.volume_shown is not None:
+            # move the number at press speed; the answer confirms it
+            self.volume_shown = max(0, min(100, self.volume_shown + delta))
+
+        def go():
+            try:
+                r = api_get("/volume") if delta is None \
+                    else api_post("/volume", {"delta": delta})
+            except OSError as e:
+                log(f"volume failed: {e}")
+                return
+            self.volume_shown = r.get("volume")
+            self.dirty = True
+        threading.Thread(target=go, daemon=True).start()
 
     def current_items(self):
         if self.view == "output":
@@ -2980,14 +3186,79 @@ class App:
         return rolls
 
     def _volume_overlay(self, d):
-        """The transient volume card (X opened it; B/Y adjust)."""
-        if time.monotonic() < self.volume_flash:
+        """The transient card X opens, and the tab strip that says there
+        is more than one of them.
+
+        The strip is the whole reason a cycle is acceptable: a hidden
+        sequence of presses has to be LEARNED, whereas three tabs with
+        one lit say 'there are others' the first time you see them. Icons
+        rather than words because 160px cannot hold three legible labels
+        — and the shuffle tab draws the very same glyph that then appears
+        in the top bar, so the symbol teaches itself.
+
+        Drawn ABOVE the progress bar on purpose: on the seek card the bar
+        is the readout. The number here is the size of the jump you just
+        made; the bar below is where you landed."""
+        if time.monotonic() >= self.volume_flash:
+            return
+        card = self._card() or "vol"
+        # Tabs only in now-playing, where the cycle actually exists. The
+        # browse views keep the exact card they always had, at the size
+        # they always had it: X is volume and nothing else there, and a
+        # strip advertising tabs X cannot reach would be a lie.
+        if self.view != "now":
             d.rounded_rectangle([50, 84, 190, 136], radius=8, fill=(30, 30, 45))
             shown = "–" if self.volume_shown is None else self.volume_shown
-            d.text((W // 2, 92), f"Volume {shown}", font=F_MED,
+            d.text((W // 2, 92), f"Volum {shown}", font=F_MED,
                    fill=HILITE, anchor="ma")
             d.text((60, 116), "B  -", font=F_SMALL, fill=DIM)
             d.text((W - 60, 116), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
+            return
+        d.rounded_rectangle([40, 80, 200, 148], radius=8, fill=(30, 30, 45))
+        d.line([(45, 100), (195, 100)], fill=(60, 60, 75))
+        for i, cx in enumerate((70, 120, 170)):
+            on = CARDS[i] == card
+            self._card_icon(d, CARDS[i], cx, HILITE if on else DIM)
+            if on:
+                d.rectangle([cx - 22, 99, cx + 22, 100], fill=HILITE)
+        y1, y2, xl, xr = 107, 134, 54, 186
+        if card == "seek":
+            if self.seek_shown is None:
+                d.text((W // 2, y1), "Spol", font=F_MED, fill=DIM, anchor="ma")
+            else:
+                sign = "+" if self.seek_shown > 0 else "-"
+                d.text((W // 2, y1), f"{sign} {fmt_time(abs(self.seek_shown))}",
+                       font=F_MED, fill=HILITE, anchor="ma")
+            _seek_arrows(d, xl, y2 + 7, DIM, back=True)
+            d.text((xl + 20, y2), "B", font=F_SMALL, fill=DIM)
+            d.text((xr - 20, y2), "Y", font=F_SMALL, fill=DIM, anchor="ra")
+            _seek_arrows(d, xr - 14, y2 + 7, DIM, back=False)
+        elif card == "shuf":
+            on = bool((self.status or {}).get("shuffle"))
+            d.text((W // 2, y1), f"Shuffle {'på' if on else 'av'}",
+                   font=F_MED, fill=HILITE if on else DIM, anchor="ma")
+            d.text((xl, y2), "B  av", font=F_SMALL, fill=DIM)
+            d.text((xr, y2), "på  Y", font=F_SMALL, fill=DIM, anchor="ra")
+        else:
+            shown = "–" if self.volume_shown is None else self.volume_shown
+            d.text((W // 2, y1), f"Volum {shown}", font=F_MED,
+                   fill=HILITE, anchor="ma")
+            d.text((xl, y2), "B  -", font=F_SMALL, fill=DIM)
+            d.text((xr, y2), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
+
+    @staticmethod
+    def _card_icon(d, kind, cx, colour):
+        """One tab icon, centred on cx, occupying y 82-94. Shapes, not
+        glyphs: DejaVu has no media characters (same reason the button
+        markers are drawn by hand)."""
+        if kind == "vol":
+            d.polygon([(cx - 7, 86), (cx - 3, 86), (cx + 2, 82),
+                       (cx + 2, 94), (cx - 3, 90), (cx - 7, 90)], fill=colour)
+            d.arc([cx + 3, 82, cx + 9, 94], -60, 60, fill=colour)
+        elif kind == "seek":
+            _seek_arrows(d, cx - 6, 88, colour, back=False)
+        else:
+            _shuffle_glyph(d, cx, 83, 93, colour)
 
     def _output_overlay(self, d):
         """Hold-X output-switch confirmation, in the SAME rounded-box shape
@@ -3558,12 +3829,29 @@ class App:
         threading.Thread(target=self._poller, daemon=True).start()  # P1
         while True:
             self._loop_beat = time.monotonic()
-            if self.shuffle_refused:
-                # _toggle_shuffle's POST came back with nothing routed:
-                # sonos, or no session at all. Drawing belongs on this
-                # thread, never on the poster's — same rule as below.
-                self.shuffle_refused = False
-                self.draw_message("Kan ikke stokke om her")
+            if self._seek_repeat is not None:
+                # B/Y held on the seek card: keep stepping while it is
+                # down. The input layer fires a hold ONCE by design, so
+                # the repeat is timed here, against the pin state the
+                # sampler refreshes every poll.
+                dirn, at = self._seek_repeat
+                if self._card() != "seek" \
+                        or ("b" if dirn < 0 else "y") not in self.inputs.down:
+                    self._seek_repeat = None
+                elif time.monotonic() >= at:
+                    self._seek_press(dirn)
+                    self._seek_repeat = (dirn,
+                                         time.monotonic() + SEEK_REPEAT_S)
+            if self.shuffle_refused or self.seek_refused:
+                # a card's POST came back with nothing routed: sonos, a
+                # live stream, or no session at all. Drawing belongs on
+                # this thread, never on the poster's — same rule as below.
+                msg = ("Kan ikke stokke om her" if self.shuffle_refused
+                       else "Kan ikke spole her")
+                self.shuffle_refused = self.seek_refused = False
+                self.vol_mode_until = self.volume_flash = 0.0  # the card
+                #   would otherwise outlive the message that replaced it
+                self.draw_message(msg)
                 time.sleep(1.4)
                 self.dirty = True
             if self.play_offline:

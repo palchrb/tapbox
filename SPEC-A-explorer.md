@@ -90,8 +90,13 @@ v1 — per-track browsing inside Spotify collections is a later addition).
 | Context | A (upper left) | X (upper right) | B (lower left) | Y (lower right) |
 |---|---|---|---|---|
 | Menu | select | up | back | down |
-| Now playing | press: play/pause · hold: back to menu | volume card | previous | next |
-| Volume card (3s, opened by X) | — | extend | volume − | volume + |
+| Now playing | press: play/pause | press: card cycle · hold: output picker | press: previous · hold: back to menu | press: next · hold: episode picker |
+| Card cycle (5s, opened by X) | play/pause (never rebound) | next tab: volume → seek → shuffle → volume | volume − · seek back (hold repeats) · shuffle off | volume + · seek forward (hold repeats) · shuffle on |
+
+The card is a strip of three tabs with one lit, so the cycle is visible
+rather than learned. A card that has LAPSED always reopens on volume —
+X has meant volume since the first build and that reflex must not land
+somewhere else. In the browse menus X stays volume-only.
 
 DECIDED + BUILT (2026-07-07, second iteration with user): all three
 transport actions (pause/prev/next) are INSTANT single presses — no
