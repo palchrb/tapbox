@@ -504,3 +504,82 @@ def outbox_flush():
     if len(remaining) != len(box):
         _outbox_save(remaining)
     return len(remaining)
+
+
+# --- downloads: runs as a nice-19 subprocess off the sweeper ----------------
+DISK_FLOOR = int(os.environ.get("VIBB_STORYTEL_FLOOR", str(1_500_000_000)))
+
+
+def _free_bytes(path):
+    try:
+        import shutil
+        return shutil.disk_usage(path).free
+    except OSError:
+        return 1 << 62      # unknown -> don't block on a phantom full disk
+
+
+def sync(target, count):
+    """Download a target's books. `count` books in reading order, or all
+    when count < 0. Writes shelf.json (the FULL listing, so the picker
+    shows every book) but downloads only the requested prefix.
+
+    Raises on an auth/network failure so the supervising _sync_one sees a
+    non-zero exit; a killed mid-download leaves a .part that the next run
+    resumes. Skips locked/geo books (they 403) and stops on a low disk
+    rather than filling the card. One book at a time — the radio budget is
+    the sweeper's, not ours to widen."""
+    parsed = parse_target(target)
+    if not parsed:
+        return
+    grp = next((g for g in normalize_shelf(bookshelf())
+                if g["target"] == target), None)
+    if not grp:
+        _log(f"{target} is not on the shelf")
+        return
+    write_shelf(target, grp["name"], grp["books"])
+    d = cache_dir(target)
+    os.makedirs(d, exist_ok=True)
+    from vibb import content        # lazy: content imports us, avoid a cycle
+    cover_url = grp.get("cover")
+    cover = os.path.join(d, "cover.jpg")
+    if cover_url and not os.path.exists(cover):
+        try:
+            content._download(cover_url, cover)
+        except OSError as e:
+            _log(f"cover {target}: {e}")
+    books = grp["books"] if count < 0 else grp["books"][:max(count, 0)]
+    for b in books:
+        cid = b.get("consumable_id")
+        if not cid or b.get("locked") or b.get("geo"):
+            continue
+        dest = book_path(target, cid)
+        if os.path.exists(dest):
+            continue                # already downloaded — incremental
+        if _free_bytes(d) < DISK_FLOOR:
+            _log(f"disk below floor, stopping before {cid}")
+            return
+        # Re-mint the signed url every attempt: it is single-use and
+        # short-lived, and the CDN path is stable, so a resumed .part
+        # sends its Range against a fresh token.
+        url = asset_url(cid)
+        content._download(url, dest, timeout=600, resume=True)
+        jpg = b.get("cover")
+        if jpg:
+            try:
+                content._download(jpg, os.path.join(d, f"{cid}.jpg"))
+            except OSError:
+                pass
+        _log(f"downloaded {cid} ({b.get('title')})")
+
+
+if __name__ == "__main__":
+    # The sweep runs this as: python3 storytel.py sync <target> <count>
+    if len(sys.argv) >= 4 and sys.argv[1] == "sync":
+        try:
+            sync(sys.argv[2], int(sys.argv[3]))
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log(f"sync failed: {exc}")
+            sys.exit(1)
+    else:
+        _log("usage: storytel.py sync <target> <count>")
+        sys.exit(2)

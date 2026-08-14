@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-from vibb import content, spotify, spotify_web
+from vibb import content, spotify, spotify_web, storytel
 from vibb.paths import ART_DIR, CACHE_DIR, STATE_DIR
 from vibb.spotify import is_spotify
 
@@ -80,6 +80,10 @@ def normalize_library(obj):
             if not isinstance(cache, int) or not (cache == -1 or 0 <= cache <= 100):
                 raise ValueError("cache must be -1 (all) or 0-100 (episodes "
                                  "to keep offline)")
+            if cache == 0 and storytel.is_storytel(target):
+                cache = -1   # storytel is download-only: cache 0 would be an
+                #              entry that plays nothing. 'in the library' means
+                #              'downloaded'. The PWA still picks all vs first-N.
             resume = e.get("resume", True)  # False = always play from the start
             if not isinstance(resume, bool):
                 raise ValueError("resume must be true or false")
@@ -300,14 +304,14 @@ def _stamp_sweep():
         pass
 
 
-def _sync_one(args):
+def _sync_one(args, mod=None):
     """Run one content.py sync, kept off the audio's back: nice-19, and
     pinned to a single core (taskset) so the ffmpeg transcode can't take
     both cores from playback. Downloads are sequential (one at a time).
     Watched: if playback starts MID-download the child is terminated and
     SweepYield raised — the radio belongs to the music, and the next
     sweep re-runs the (incremental) sync for pennies."""
-    cmd = [sys.executable, content.__file__, *args]
+    cmd = [sys.executable, mod or content.__file__, *args]
     if _TASKSET:
         cmd = [_TASKSET, "-c", "1"] + cmd
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
@@ -558,6 +562,31 @@ def _cache_sweeper():
                             "abandoned — retried next sweep)")
                     except (OSError, subprocess.TimeoutExpired) as exc:
                         log(f"cache sweep failed for {e['name']}: {exc!r}")
+                    _sync_wake.wait(SYNC_STAGGER_S)
+                    _sync_wake.clear()
+                    continue
+                if n != 0 and storytel.is_storytel(e["target"]):
+                    # storytel downloads run storytel.py, not content.py:
+                    # bearer auth, a 302 to a signed url, one big file per
+                    # book. Otherwise IDENTICAL to the path below — the
+                    # busy-yield, SweepYield and new-badge all apply.
+                    while _busy():
+                        _sync_wake.wait(SYNC_BUSY_RECHECK_S)
+                        _sync_wake.clear()
+                    log(f"cache sweep: {e['name']} (storytel {n})")
+                    try:
+                        _sync_one(["sync", e["target"], str(n)],
+                                  mod=storytel.__file__)
+                    except SweepYield:
+                        log(f"cache sweep yields to playback ({e['name']} "
+                            "abandoned — retried next sweep)")
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        log(f"cache sweep failed for {e['name']}: {exc!r}")
+                    try:
+                        _mark_new_seen(e["target"],
+                                       content.newest_episode_id(e["target"]))
+                    except Exception:
+                        pass
                     _sync_wake.wait(SYNC_STAGGER_S)
                     _sync_wake.clear()
                     continue
