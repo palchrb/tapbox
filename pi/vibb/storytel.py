@@ -495,12 +495,25 @@ def outbox_pending():
 def push_bookmark(consumable_id, position_s):
     """updateBookmarkPositional. Fire-and-forget: returns True on a 2xx,
     False on anything else, and NEVER raises — a permanently-failing
-    account must be invisible to the listener. Position is converted to
-    MILLISECONDS here; our local bookmark is in seconds."""
+    account must be invisible to the listener.
+
+    The body must carry the FULL shape the reference client sends, not
+    just the position: the server accepts a bare {consumableId, position}
+    with a 200 but does not record a bookmark the app will read — the
+    fields that make it stick are `action: player_paused` and `type:
+    abook` (field 2026-08-15: a few hours of listening never appeared in
+    the iOS app). Position is MILLISECONDS; our local bookmark is in
+    seconds."""
     try:
-        body = json.dumps({"consumableId": str(consumable_id),
-                           "position": int(position_s * 1000),
-                           "deviceId": device_id()}).encode()
+        body = json.dumps({
+            "deviceId": device_id(),
+            "action": "player_paused",
+            "secondsSinceCreated": 0,
+            "position": int(position_s * 1000),
+            "type": "abook",
+            "kidsMode": False,
+            "consumableId": str(consumable_id),
+        }).encode()
         status, _h, _b = _api(BOOKMARK, method="POST", data=body,
                               headers={"Content-Type": "application/json"})
         return 200 <= status < 300

@@ -190,6 +190,11 @@ assert st.push_bookmark("160661", 12.5) is True
 assert called["body"]["position"] == 12500, "seconds -> ms at the boundary"
 assert called["body"]["consumableId"] == "160661"
 assert called["body"]["deviceId"] == st.device_id(), "stable device id"
+# the FULL shape the server needs to actually record the bookmark — a
+# bare {consumableId, position} 200s but never appears in the app
+assert called["body"]["action"] == "player_paused", "the recording action"
+assert called["body"]["type"] == "abook", "the recording type"
+assert called["body"]["kidsMode"] is False
 
 st._request = lambda *a, **k: (500, {}, b"")
 assert st.push_bookmark("160661", 12.5) is False, "a 500 is False, not a raise"
