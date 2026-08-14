@@ -46,6 +46,13 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /spotify/logout   forget the Spotify login (drop credentials +
                          restart go-librespot) — the new account then picks
                          the box under Devices in the Spotify app
+  POST /storytel/credentials {"email","password"} save the audiobook
+                         account (or {"email":null} to clear); privileged,
+                         never echoes the password
+  POST /storytel/shelf   the account's audiobooks grouped into series, for
+                         the PWA picker (privileged: reveals the library)
+  POST /storytel/logout  forget the Storytel account
+  GET  /storytel/status  {configured, queued, sync} — booleans/counts only
   POST /wifi/hotspot  {"enabled": bool} — the setup hotspot (Vibb-<host>).
                       Also auto-starts on fresh boxes: no saved wifi network
                       and nothing connected. A :80 redirect server + wildcard
@@ -118,6 +125,7 @@ for _p in (_here, "/usr/local/lib/vibb-py"):
 from vibb import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from vibb import renderer as _renderer  # noqa: E402 — sonos axis+client
 from vibb import spotify_web as _spotify_web  # noqa: E402
+from vibb import storytel as _storytel  # noqa: E402 — audiobook source
 from vibb.bookmarks import (episode_pos as _bm_episode_pos,  # noqa: E402
                               load_state as _bm_load,
                               save_state as _bm_save)
@@ -723,6 +731,9 @@ class Orchestrator:
             args += ["--cache", str(cache)]
         args.append(target)
         if is_spotify(target) or target.startswith(("http://", "https://")):
+            # NOT storytel: it is download-only, so a play is a local file,
+            # not a CDN pull — the network-heavy moment is the sweeper's
+            # download, which already yields to playback via _busy().
             _radio.touch_busy()  # network-heavy start: blind BT pages yield
             _PS_KICK.set()       # and wifi power save flips off NOW
         # Own process group: _stop_child can then SIGKILL the WHOLE tree
@@ -2828,6 +2839,14 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     log(f"profile preview failed for {user}: {e!r}")
                     self._send(502, {"error": str(e)})
+        elif url.path == "/storytel/status":
+            # SAFE["GET"] is True, so the whole LAN reads this: booleans
+            # and counts ONLY, never the email, the jwt or the password.
+            self._send(200, {
+                "configured": _storytel.configured(),
+                "queued": _storytel.outbox_pending(),
+                "sync": bool(load_settings().get("storytel_sync", 1)),
+            })
         elif url.path == "/expand":
             q = urllib.parse.parse_qs(url.query)
             entry_id = (q.get("id") or [None])[0]
@@ -3187,6 +3206,46 @@ class Handler(BaseHTTPRequestHandler):
                 _spotify.clear_all_bookmarks()
                 r = _spotify.logout()
                 self._send(200 if r.get("ok") else 500, r)
+            elif self.path == "/storytel/credentials":
+                # Privileged by default-deny (not in SAFE). Store the
+                # account, or clear it when email is null. NEVER echo the
+                # password. A probe login validates it synchronously.
+                email = body.get("email")
+                if email and not isinstance(body.get("password"), str):
+                    self._send(400, {"error": "password (string) required"})
+                    return
+                _storytel.save_credentials(email, body.get("password") or "")
+                if not email:
+                    self._send(200, {"configured": False})
+                    return
+                try:
+                    n = len(_storytel.normalize_shelf(_storytel.bookshelf()))
+                    _sync_wake.set()   # start downloading what's curated
+                    self._send(200, {"configured": True, "series": n})
+                except RuntimeError:
+                    _storytel.save_credentials(None, None)
+                    self._send(401, {"error": "Storytel refused that "
+                                     "email/password"})
+                except OSError as e:
+                    self._send(502, {"error": f"could not reach Storytel: {e}"})
+            elif self.path == "/storytel/logout":
+                _storytel.save_credentials(None, None)
+                self._send(200, {"configured": False})
+            elif self.path == "/storytel/shelf":
+                # The picker: the account's audiobooks grouped into series.
+                if not _storytel.configured():
+                    self._send(503, {"error": (
+                        "No Storytel account on this box yet — add one in "
+                        "the Storytel panel first.")})
+                    return
+                try:
+                    self._send(200, {"series": _storytel.normalize_shelf(
+                        _storytel.bookshelf())})
+                except RuntimeError:
+                    self._send(401, {"error": "Storytel login failed — "
+                                     "the saved password may be stale"})
+                except OSError as e:
+                    self._send(502, {"error": f"could not reach Storytel: {e}"})
             elif self.path == "/library/section-logo":
                 # Upload (base64/data-URI) or remove (data: null) a home-
                 # screen logo for one section. The PWA downsizes client-side.

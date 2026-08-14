@@ -62,6 +62,12 @@ we want behind a trust gate:
 - `POST /system/shutdown`, `/system/wifi`
 - `POST /wifi/connect|forget|add|reconnect|hotspot|scan`
 - `POST /spotify/logout`
+- `POST /storytel/credentials|shelf|logout` — the credentials store a
+  RECOVERABLE account password (`/etc/vibb/storytel.json`, 0600,
+  root-owned): the login flow returns a jwt with no refresh token, so an
+  expired session re-encrypts the plaintext. A genuinely new class of
+  secret on the box — the Spotify secret is an app credential, this is a
+  user's account password. No endpoint ever returns it.
 - `PUT /library`, `POST /library/section-logo`, `POST /settings`
 - `POST /bt/scan|pair|connect|forget|rename|visible`
 - `POST /output`

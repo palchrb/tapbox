@@ -55,6 +55,9 @@ SETTING_SPECS = {
     # 0 = stay off until the PWA/screen reconnect button
     "simple_nav": (0, 0, 2),  # browse: 0 text menus, 1 flat cover carousel,
                               # 2 category carousel -> per-category carousel
+    "storytel_sync": (1, 0, 1),  # 1 = mirror local audiobook positions back
+    # to Storytel as a backup (a fresh signed device, one-way out, queued
+    # when offline); 0 = the box keeps positions to itself. Default on.
 }
 
 
