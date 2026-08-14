@@ -586,7 +586,7 @@ CARD_TTL_S = 5.0   # the card lives this long past the last press. Three
 #                    The price is real and deliberate: B/Y are not
 #                    prev/next for those five seconds.
 SEEK_STEPS = (30, 60, 120, 300)  # grows while the presses keep coming
-SEEK_REPEAT_S = 0.35   # hold B/Y on the seek card: the repeat cadence
+CARD_REPEAT_S = 0.35   # hold B/Y on a card: the repeat cadence
 SEEK_RECONCILE_S = 4.0  # hold the optimistic position until a poll lands
 SEEK_TOL_S = 2.0        # a report this close to the target = it landed
 # The render loop is single-threaded: any daemon poll it makes blocks
@@ -1333,7 +1333,7 @@ class App:
         self.seek_dir = 0           # -1/+1 of the last seek press
         self.seek_shown = None      # the step just applied, for the card
         self.seek_refused = False   # a seek the box could not do
-        self._seek_repeat = None    # (dir, next_at) while B/Y is held down
+        self._card_repeat = None    # (dir, next_at) while B/Y is held down
         self._pos_expect = None     # optimistic position: where we told
         self._pos_until = 0.0       #   the user we jumped, held until a
         self._pos_at = 0.0          #   /status confirms it or this passes
@@ -1963,8 +1963,8 @@ class App:
                 else:
                     self._control_async("/prev")
             elif ev == "b_long":
-                if card == "seek":
-                    self._seek_hold(-1)
+                if card:
+                    self._card_hold(-1)
                 else:
                     self._back_to_episodes()
             elif ev == "x":
@@ -1986,8 +1986,8 @@ class App:
                 else:
                     self._control_async("/next")
             elif ev == "y_long":
-                if card == "seek":
-                    self._seek_hold(1)
+                if card:
+                    self._card_hold(1)
                 else:
                     self._open_episodes()
         except OSError as e:
@@ -2042,15 +2042,21 @@ class App:
         else:
             self._volume_mode(delta=5 * sign)
 
-    def _seek_hold(self, dirn):
-        """Holding B or Y on the seek card keeps stepping.
+    def _card_hold(self, dirn):
+        """A held B or Y belongs to the CARD, never to navigation.
 
-        Holding is the instinct the card invites, and until now it threw
-        the user out of now-playing (B) or opened the episode picker
-        (Y). One step fires here; the render loop repeats it at
-        SEEK_REPEAT_S for as long as the button stays down."""
-        self._seek_press(dirn)
-        self._seek_repeat = (dirn, time.monotonic() + SEEK_REPEAT_S)
+        Holding is the instinct a card invites — keep spooling, keep
+        turning it down — and until now it threw the user out to the
+        carousel (B) or opened the episode picker (Y) instead. Seek and
+        volume repeat; shuffle is binary, so it only swallows the hold,
+        which is still the point: a gesture that means nothing here must
+        not mean something drastic. One step fires now, and the render
+        loop repeats it at CARD_REPEAT_S while the button stays down."""
+        if self._card() == "shuf":
+            self._card_touch()
+            return
+        self._card_step(dirn)
+        self._card_repeat = (dirn, time.monotonic() + CARD_REPEAT_S)
 
     @staticmethod
     def _track_key(st):
@@ -3838,19 +3844,19 @@ class App:
         threading.Thread(target=self._poller, daemon=True).start()  # P1
         while True:
             self._loop_beat = time.monotonic()
-            if self._seek_repeat is not None:
-                # B/Y held on the seek card: keep stepping while it is
-                # down. The input layer fires a hold ONCE by design, so
-                # the repeat is timed here, against the pin state the
-                # sampler refreshes every poll.
-                dirn, at = self._seek_repeat
-                if self._card() != "seek" \
+            if self._card_repeat is not None:
+                # B/Y held on a card: keep stepping while it is down. The
+                # input layer fires a hold ONCE by design, so the repeat
+                # is timed here, against the pin state the sampler
+                # refreshes every poll.
+                dirn, at = self._card_repeat
+                if not self._card() \
                         or ("b" if dirn < 0 else "y") not in self.inputs.down:
-                    self._seek_repeat = None
+                    self._card_repeat = None
                 elif time.monotonic() >= at:
-                    self._seek_press(dirn)
-                    self._seek_repeat = (dirn,
-                                         time.monotonic() + SEEK_REPEAT_S)
+                    self._card_step(dirn)
+                    self._card_repeat = (dirn,
+                                         time.monotonic() + CARD_REPEAT_S)
             if self.shuffle_refused or self.seek_refused:
                 # a card's POST came back with nothing routed: sonos, a
                 # live stream, or no session at all. Drawing belongs on

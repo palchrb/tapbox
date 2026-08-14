@@ -255,6 +255,46 @@ assert steps == [630.0, 690.0, 810.0], \
     f"confirmation must not reset the ladder, got {steps}"
 print("9b. an acknowledged jump keeps the acceleration building OK")
 
+# 9c. A HELD B/Y BELONGS TO THE CARD, and must never ALSO fire the
+#     navigation it means when no card is up. Holding is exactly the
+#     instinct a seek card invites, and it used to throw the child out
+#     to the carousel (B) or open the episode picker (Y) instead. The
+#     volume card had the same trap and is fixed with it: once a child
+#     learns "hold to keep going" on one card, she will try it on the
+#     other.
+NAV = []
+for cards, want_nav in ((0, True), (1, False), (2, False), (3, False)):
+    app = app_now()
+    app._back_to_episodes = lambda: NAV.append("carousel")
+    app._open_episodes = lambda: NAV.append("picker")
+    NAV.clear()
+    POSTS.clear()
+    for _ in range(cards):
+        app.handle_now("x")
+    app.handle_now("b_long")
+    app.handle_now("y_long")
+    if want_nav:
+        assert NAV == ["carousel", "picker"], \
+            f"with no card up the holds must still navigate, got {NAV}"
+    else:
+        assert NAV == [], \
+            f"a card was up ({app._card()}) but the hold navigated: {NAV}"
+print("9c. a held B/Y is owned by the card and never navigates too OK")
+
+# 9d. and the repeat STOPS when the button comes up. The input layer
+#     fires a hold once by design, so the repeat is timed in the render
+#     loop against the pin state — a repeat that outlived the finger
+#     would seek away on its own.
+app = app_now()
+app.handle_now("x")
+app.handle_now("x")                      # seek card
+app.inputs.down = {"b": 1.0}
+app.handle_now("b_long")
+assert app._card_repeat is not None, "holding must arm the repeat"
+app.inputs.down = {}                     # finger up
+assert ("b" not in app.inputs.down)
+print("9d. holding arms a repeat that the release can clear OK")
+
 # 10. the optimistic position holds until a poll CONFIRMS it — and it is
 #     track-scoped, or skipping to the next episode would show 0:00
 #     masked behind the old spot. Confirmation is a window, not equality:
