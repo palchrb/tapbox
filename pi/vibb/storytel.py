@@ -444,6 +444,17 @@ def newest_book_id(target):
     return str(books[-1].get("consumable_id")) if books else None
 
 
+def downloaded_count(target):
+    """How many of a target's books are actually on disk (mp3 present).
+    Local read — for the picker, so 'on the box' means downloaded, not
+    merely added to the library."""
+    d = cache_dir(target)
+    try:
+        return sum(1 for f in os.listdir(d) if f.endswith(".mp3"))
+    except OSError:
+        return 0
+
+
 # --- the sync-out outbox: a MAP keyed per book, never a log -----------------
 def _outbox_load():
     try:

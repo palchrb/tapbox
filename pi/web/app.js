@@ -838,27 +838,32 @@ function renderStorytelShelf() {
     box.append(p);
     return;
   }
-  const inLib = new Set();
-  for (const s of (LIB.sections || []))
-    for (const e of s.entries) if (isStorytel(e.target)) inLib.add(e.target);
-
   for (const g of shown) {
+    // 'in_library' = the parent picked it; 'downloaded' = books actually
+    // on disk. A series can be added but not yet (or never) downloaded,
+    // so the two are shown separately — checked+disabled only once it is
+    // fully on the box, so a stalled download stays re-checkable.
+    const total = g.books.filter((b) => !b.locked).length;
+    const done = g.downloaded || 0;
+    const complete = g.in_library && done >= total && total > 0;
     const row = document.createElement("label");
     row.className = "entry";
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.dataset.target = g.target;
-    cb.checked = inLib.has(g.target);
-    cb.disabled = inLib.has(g.target);
+    cb.checked = g.in_library;
+    cb.disabled = complete;
     const info = document.createElement("div");
     info.className = "entry-info";
     const name = document.createElement("strong");
     name.textContent = g.name;
     const sub = document.createElement("small");
     const nlocked = g.books.filter((b) => b.locked).length;
+    let state = "";
+    if (complete) state = " · on the box";
+    else if (g.in_library) state = ` · downloading ${done}/${total}`;
     sub.textContent = `${g.books.length} book(s)` +
-      (nlocked ? ` · ${nlocked} not in subscription` : "") +
-      (inLib.has(g.target) ? " · already on the box" : "");
+      (nlocked ? ` · ${nlocked} not in subscription` : "") + state;
     info.append(name, sub);
     row.append(cb, info);
     box.append(row);

@@ -3240,8 +3240,20 @@ class Handler(BaseHTTPRequestHandler):
                         "the Storytel panel first.")})
                     return
                 try:
-                    self._send(200, {"series": _storytel.normalize_shelf(
-                        _storytel.bookshelf())})
+                    series = _storytel.normalize_shelf(_storytel.bookshelf())
+                    in_lib = {e["target"]
+                              for s in load_library().get("sections", [])
+                              for e in s.get("entries", [])
+                              if _storytel.is_storytel(e["target"])}
+                    for g in series:
+                        # 'on the box' must mean DOWNLOADED, not merely
+                        # added to the library — else a series whose
+                        # download failed still reads as present (field
+                        # 2026-08-15)
+                        g["in_library"] = g["target"] in in_lib
+                        g["downloaded"] = _storytel.downloaded_count(
+                            g["target"])
+                    self._send(200, {"series": series})
                 except RuntimeError:
                     self._send(401, {"error": "Storytel login failed — "
                                      "the saved password may be stale"})

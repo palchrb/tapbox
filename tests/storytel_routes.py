@@ -102,6 +102,10 @@ assert st == 200, (st, body)
 series = json.loads(body)["series"]
 assert series[0]["target"] == "storytel:series:26175"
 assert series[0]["books"][0]["consumable_id"] == "111"
+# the picker must distinguish 'added to the library' from 'downloaded' —
+# a series added but not yet downloaded must not read as on the box
+assert series[0]["in_library"] is False, "not added to the library here"
+assert series[0]["downloaded"] == 0, "nothing downloaded"
 print("4. the shelf picker groups the account's books into series OK")
 
 # 5. logout clears the account, and a bad password is refused cleanly
