@@ -54,29 +54,37 @@ print("2. target parsing is pure and rejects junk OK")
 # --- a scripted HTTP seam: nothing here touches the network -----------------
 CALLS = []
 STATE = {"bookshelf_401_once": False}
+# The format id DELIBERATELY differs from model.id here: the audio is
+# keyed by model.id, and using the format id played a Swedish adult book
+# under a Harry Potter tile (field 2026-08-15). model.id is what must
+# survive into consumable_id.
 SHELF = {"items": {
     "160661": {"model": {
+        "id": "160661",
         "title": "Kokosbananas og godteristøvsugeren", "kidsBook": True,
         "seriesInfo": {"id": "26175", "name": "Kokosbananas",
                        "orderInSeries": 1},
-        "formats": [{"type": "abook", "id": "160661",
+        "formats": [{"type": "abook", "id": "fmt-1",
                      "durationInMilliseconds": 721893,
                      "cover": {"url": "http://c/1.jpg"},
                      "isLockedContent": False, "isGeoRestricted": False}]}},
     "160662": {"model": {
+        "id": "160662",
         "title": "Kokosbananas og tomattorsken", "kidsBook": True,
         "seriesInfo": {"id": "26175", "name": "Kokosbananas",
                        "orderInSeries": 2},
-        "formats": [{"type": "abook", "id": "160662",
+        "formats": [{"type": "abook", "id": "fmt-2",
                      "durationInMilliseconds": 700000,
                      "isLockedContent": False, "isGeoRestricted": False}]}},
     "999": {"model": {                         # a locked standalone book
+        "id": "999",
         "title": "Voksenkrim", "kidsBook": False,
         "seriesInfo": {},
-        "formats": [{"type": "abook", "id": "999",
+        "formats": [{"type": "abook", "id": "fmt-9",
                      "durationInMilliseconds": 1,
                      "isLockedContent": True, "isGeoRestricted": False}]}},
     "888": {"model": {                         # an ebook-only entry: skipped
+        "id": "888",
         "title": "Bare tekst", "formats": [{"type": "ebook", "id": "888"}]}},
 }}
 
@@ -145,13 +153,15 @@ groups = st.normalize_shelf(SHELF)
 by_target = {g["target"]: g for g in groups}
 series = by_target["storytel:series:26175"]
 assert [b["consumable_id"] for b in series["books"]] == ["160661", "160662"], \
-    "series books must be in orderInSeries"
+    "consumable_id must be model.id (160661/160662), NOT the format id " \
+    "(fmt-1/fmt-2) — the format id resolves to a different book entirely"
 assert series["name"] == "Kokosbananas" and series["kids"] is True
 standalone = by_target["storytel:book:999"]
+assert standalone["books"][0]["consumable_id"] == "999", "model.id, not fmt-9"
 assert standalone["books"][0]["locked"] is True, "locked carried as data"
 assert "storytel:book:888" not in by_target, "ebook-only row must be dropped"
 assert len(groups) == 2, groups
-print("6. shelf groups into series + standalone, ordered, nothing dropped silently OK")
+print("6. shelf groups by model.id (not the format id), ordered, nothing dropped OK")
 
 # 7. the outbox is last-value-wins per book: three positions for one book
 #    leave ONE entry, holding the newest

@@ -40,7 +40,7 @@ storytel._request = lambda url, method="GET", headers=None, data=None, \
         (200, {}, json.dumps({"accountInfo": {"jwt": "J"}}).encode())
         if "login.action" in url else
         (200, {}, json.dumps({"items": {"a": {"model": {
-            "title": "En", "kidsBook": True,
+            "id": "111", "title": "En", "kidsBook": True,
             "seriesInfo": {"id": "26175", "name": "Kokosbananas",
                            "orderInSeries": 1},
             "formats": [{"type": "abook", "id": "111",

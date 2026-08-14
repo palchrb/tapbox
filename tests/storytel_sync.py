@@ -33,20 +33,20 @@ from vibb import storytel, content, library  # noqa: E402
 
 TARGET = "storytel:series:26175"
 SHELF = {"items": {
-    "a": {"model": {"title": "En", "kidsBook": True,
+    "a": {"model": {"id": "111", "title": "En", "kidsBook": True,
                     "seriesInfo": {"id": "26175", "name": "Kokosbananas",
                                    "orderInSeries": 1},
                     "formats": [{"type": "abook", "id": "111",
                                  "durationInMilliseconds": 700000,
                                  "cover": {"url": "http://c/1.jpg"},
                                  "isLockedContent": False}]}},
-    "b": {"model": {"title": "To", "kidsBook": True,
+    "b": {"model": {"id": "222", "title": "To", "kidsBook": True,
                     "seriesInfo": {"id": "26175", "name": "Kokosbananas",
                                    "orderInSeries": 2},
                     "formats": [{"type": "abook", "id": "222",
                                  "durationInMilliseconds": 700000,
                                  "isLockedContent": False}]}},
-    "c": {"model": {"title": "Tre (låst)", "kidsBook": True,
+    "c": {"model": {"id": "333", "title": "Tre (låst)", "kidsBook": True,
                     "seriesInfo": {"id": "26175", "name": "Kokosbananas",
                                    "orderInSeries": 3},
                     "formats": [{"type": "abook", "id": "333",

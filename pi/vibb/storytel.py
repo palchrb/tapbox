@@ -336,7 +336,15 @@ def normalize_shelf(raw):
         si = model.get("seriesInfo") or {}
         sid = si.get("id")
         entry = {
-            "consumable_id": book.get("id"),
+            # THE AUDIO KEY IS model.id, NOT the abook format's id. The
+            # reference client maps consumableId = String(model.id) and
+            # feeds that to the asset endpoint; the format id is a
+            # separate id-space that, for a multi-edition title like
+            # Harry Potter, resolves to a COMPLETELY DIFFERENT book — a
+            # kid's HP tile played a Swedish adult book (field
+            # 2026-08-15). They happen to coincide for single-edition
+            # books like Kokosbananas, which is why it looked fine there.
+            "consumable_id": str(model.get("id")),
             "title": model.get("title"),
             "order": si.get("orderInSeries") or 0,
             "duration_ms": book.get("durationInMilliseconds") or 0,
