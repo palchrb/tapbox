@@ -1083,16 +1083,20 @@ def _shuffle_glyph(draw, cx, top, bot, color):
     when shuffle is ON — its absence is the 'off' state, so the top bar
     stays quiet for the ordinary case (owner 2026-08-14).
 
-    No arrow heads, deliberately: at eleven pixels tall a head is three
-    pixels of anything, and every shape tried for one (filled triangle,
-    line barbs, flat wedge) landed as a blob that made the mark HARDER
-    to read, not easier. The bare crossing is unambiguous at actual
-    size, which is the only size that matters."""
+    The heads are four pixels each, and WHERE they sit is the whole
+    trick: a head on a horizontal exit stub reads as a plus sign, so
+    the stub is gone and the diagonal runs all the way to the tip. Four
+    pixels then form an L-corner pointing the way the path travels,
+    which is enough to read as an arrow at eleven pixels tall. Bigger
+    heads were tried first — filled triangles, line barbs, flat wedges —
+    and every one of them landed as a blob."""
     dx = 9
     for y0, y1 in ((top, bot), (bot, top)):
-        draw.line([(cx - dx, y0), (cx - dx + 3, y0),
-                   (cx + dx - 3, y1), (cx + dx, y1)],
+        ty = 1 if y1 > y0 else -1
+        draw.line([(cx - dx, y0), (cx - dx + 3, y0), (cx + dx, y1)],
                   fill=color, joint="curve")
+        draw.point([(cx + dx - 1, y1), (cx + dx - 2, y1),
+                    (cx + dx, y1 - ty), (cx + dx, y1 - 2 * ty)], fill=color)
 
 
 def _conn_icons(draw, system, right_x, y, h):
