@@ -768,24 +768,24 @@ async function loadStorytelStatus() {
   }
 }
 
-if ($("storytel-form")) {
-  $("storytel-form").addEventListener("submit", async (ev) => {
+if ($("#storytel-form")) {
+  $("#storytel-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const email = $("storytel-email").value.trim();
-    const password = $("storytel-password").value;
+    const email = $("#storytel-email").value.trim();
+    const password = $("#storytel-password").value;
     if (!email || !password) { toast("E-mail and password, please"); return; }
     try {
       const r = await api("/storytel/credentials",
                           { method: "POST", body: { email, password } });
-      $("storytel-password").value = "";
+      $("#storytel-password").value = "";
       toast(`Storytel connected — ${r.series} series on your shelf`);
       loadStorytelStatus();
     } catch (e) { toast(e.message, 8000); }
   });
 }
 
-if ($("btn-storytel-logout")) {
-  $("btn-storytel-logout").addEventListener("click", async () => {
+if ($("#btn-storytel-logout")) {
+  $("#btn-storytel-logout").addEventListener("click", async () => {
     if (!confirm("Forget the Storytel account? Downloaded books stay on " +
                  "the box until you remove their tiles.")) return;
     try {
@@ -796,8 +796,8 @@ if ($("btn-storytel-logout")) {
   });
 }
 
-if ($("storytel-sync")) {
-  $("storytel-sync").addEventListener("change", async (ev) => {
+if ($("#storytel-sync")) {
+  $("#storytel-sync").addEventListener("change", async (ev) => {
     try {
       await api("/settings",
                 { method: "PUT", body: { storytel_sync: ev.target.checked ? 1 : 0 } });
@@ -807,27 +807,27 @@ if ($("storytel-sync")) {
   });
 }
 
-if ($("btn-storytel-load")) {
-  $("btn-storytel-load").addEventListener("click", async () => {
-    $("btn-storytel-load").disabled = true;
+if ($("#btn-storytel-load")) {
+  $("#btn-storytel-load").addEventListener("click", async () => {
+    $("#btn-storytel-load").disabled = true;
     try {
       const r = await api("/storytel/shelf", { method: "POST" });
       STORYTEL_SHELF = r.series || [];
       renderStorytelShelf();
     } catch (e) { toast(e.message, 8000); }
-    finally { $("btn-storytel-load").disabled = false; }
+    finally { $("#btn-storytel-load").disabled = false; }
   });
 }
 
-if ($("storytel-kids")) {
-  $("storytel-kids").addEventListener("change", renderStorytelShelf);
+if ($("#storytel-kids")) {
+  $("#storytel-kids").addEventListener("change", renderStorytelShelf);
 }
 
 function renderStorytelShelf() {
-  const box = $("storytel-shelf");
+  const box = $("#storytel-shelf");
   if (!box) return;
   box.textContent = "";
-  const kidsOnly = $("storytel-kids").checked;
+  const kidsOnly = $("#storytel-kids").checked;
   const shown = STORYTEL_SHELF.filter((g) => !kidsOnly || g.kids);
   if (!shown.length) {
     const p = document.createElement("p");
@@ -871,7 +871,7 @@ function renderStorytelShelf() {
 }
 
 async function addCheckedStorytel() {
-  const section = $("storytel-section").value.trim() || "Lydbøker";
+  const section = $("#storytel-section").value.trim() || "Lydbøker";
   const picks = [...document.querySelectorAll("#storytel-shelf input:checked")]
     .filter((cb) => !cb.disabled)
     .map((cb) => STORYTEL_SHELF.find((g) => g.target === cb.dataset.target))
