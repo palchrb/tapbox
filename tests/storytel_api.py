@@ -226,6 +226,43 @@ assert left == 1, "an offline flush must keep the entry"
 assert st.outbox_pending() == 1
 print("10. an offline flush queues rather than loses OK")
 
+# 10b. A REFUSED login parks a one-hour cooldown: the second attempt is
+#      rejected locally with NO network call. Without this, a changed
+#      password meant every sweep, bookmark flush and PWA open hammered
+#      Storytel's login with the stale password — hundreds of failures a
+#      day, the exact pattern that gets an account locked. A new password
+#      (save_credentials) clears it for an immediate retry.
+st.save_credentials("k@vibb.me", "stale-pw")
+REFUSALS = []
+
+
+def refuse(url, method="GET", headers=None, data=None, timeout=15,
+           follow=True):
+    REFUSALS.append(url)
+    return 403, {}, b"no"
+
+
+st._request = refuse
+try:
+    st.login()
+    raise AssertionError("a 403 login must raise")
+except RuntimeError:
+    pass
+n = len(REFUSALS)
+try:
+    st.login()
+    raise AssertionError("the cooldown must refuse locally")
+except RuntimeError:
+    pass
+assert len(REFUSALS) == n, "the second attempt must not touch the network"
+st.save_credentials("k@vibb.me", "fresh-pw")
+try:
+    st.login()
+except RuntimeError:
+    pass
+assert len(REFUSALS) == n + 1, "a new password must retry immediately"
+print("10b. a refused login backs off, a new password retries at once OK")
+
 # 11. no credentials -> configured() False and login() refuses cleanly
 st.save_credentials(None, None)
 assert st.configured() is False

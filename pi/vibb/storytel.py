@@ -168,9 +168,11 @@ def save_credentials(email, password):
             except OSError:
                 pass
         _jwt["value"] = None
+        _cooldown_clear()
         return
     _write_private(CREDS_FILE, {"email": email, "password": password})
     _jwt["value"] = None   # force a fresh login with the new account
+    _cooldown_clear()      # a new password deserves an immediate try
 
 
 def device_id():
@@ -237,19 +239,56 @@ def _request(url, method="GET", headers=None, data=None, timeout=15,
 
 # --- auth (login, getApiBearer) ---------------------------------------------
 _jwt = {"value": None, "expires": 0.0}
+# A REFUSED login (wrong/stale password) parks a cooldown on disk so the
+# box does not hammer Storytel's login with a bad password from every
+# sweep, bookmark flush and PWA open — hundreds of failures a day is the
+# exact pattern that gets an account locked. On disk, not in-process:
+# every sync subprocess starts fresh and would otherwise not know.
+# Cleared by save_credentials (a new password deserves a fresh try).
+_LOGIN_COOLDOWN_S = 3600.0
+_COOLDOWN_FILE = os.path.join(STATE_DIR, "storytel-login-refused.json")
+
+
+def _cooldown_active():
+    try:
+        with open(_COOLDOWN_FILE, encoding="utf-8") as f:
+            at = float(json.load(f).get("at", 0))
+        return 0 < time.time() - at < _LOGIN_COOLDOWN_S
+    except (OSError, ValueError):
+        return False
+
+
+def _cooldown_set():
+    try:
+        _write_private(_COOLDOWN_FILE, {"at": time.time()})
+    except OSError:
+        pass
+
+
+def _cooldown_clear():
+    try:
+        os.remove(_COOLDOWN_FILE)
+    except OSError:
+        pass
 
 
 def login():
     """login.action -> a fresh jwt. Raises OSError when unreachable,
-    RuntimeError when unconfigured or refused."""
+    RuntimeError when unconfigured, refused, or inside the refused-login
+    cooldown."""
     creds = credentials()
     if not creds:
         raise RuntimeError("storytel: not configured")
+    if _cooldown_active():
+        raise RuntimeError("storytel: login recently refused — waiting "
+                           "before retrying (update the password in the "
+                           "PWA to retry now)")
     email, pw = creds
     q = urllib.parse.urlencode({"m": 1, "uid": email,
                                 "pwd": _encrypt_password(pw)})
     status, _h, body = _request(f"{LOGIN_URL}?{q}", timeout=20)
     if status != 200:
+        _cooldown_set()      # a refusal, not an outage: back off
         raise RuntimeError(f"storytel: login refused ({status})")
     jwt = ((json.loads(body or b"{}").get("accountInfo") or {}).get("jwt"))
     if not jwt:
