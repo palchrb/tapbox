@@ -49,9 +49,18 @@ import urllib.parse
 import urllib.request
 import uuid
 
-try:                                    # importable as a bare subprocess
+# Self-contained as a bare script, exactly like content.py — the sweep
+# runs this as `python3 .../vibb/storytel.py sync ...`, where sys.path[0]
+# is the vibb/ dir itself. That means NO `from vibb import <module>`
+# anywhere reachable from sync(): it would need the package parent on the
+# path AND would let vibb/token.py shadow stdlib `token` (via
+# concurrent.futures), which is exactly how a whole series "synced" in
+# six seconds and downloaded nothing — the ModuleNotFoundError died into
+# _sync_one's discarded stderr (field 2026-08-15). Downloads are inlined
+# below; only vibb.paths is imported, with the same fallback content uses.
+try:
     from vibb.paths import CACHE_DIR, STATE_DIR
-except ImportError:                     # (the sweep runs python3 .../storytel.py)
+except ImportError:                     # bare subprocess: vibb not importable
     CACHE_DIR = os.environ.get("VIBB_CACHE", "/var/lib/vibb/cache")
     STATE_DIR = os.environ.get("VIBB_STATE", "/var/lib/vibb/state")
 
@@ -518,6 +527,29 @@ def _free_bytes(path):
         return 1 << 62      # unknown -> don't block on a phantom full disk
 
 
+def _download(url, dest, timeout=120, resume=False):
+    """Stream url -> dest via a .part temp then atomic rename. Inlined
+    rather than borrowed from content.py so this module stays a
+    self-contained bare script (see the import note at the top).
+
+    resume continues an existing .part with a Range request; the caller
+    re-mints the single-use signed url first, and a server that ignores
+    the Range (answers 200) restarts cleanly instead of corrupting."""
+    tmp = dest + ".part"
+    have = os.path.getsize(tmp) if resume and os.path.exists(tmp) else 0
+    req = urllib.request.Request(
+        url, headers={"Range": f"bytes={have}-"} if have else {})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        append = have and getattr(r, "status", 200) == 206
+        with open(tmp, "ab" if append else "wb") as f:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+    os.replace(tmp, dest)
+
+
 def sync(target, count):
     """Download a target's books. `count` books in reading order, or all
     when count < 0. Writes shelf.json (the FULL listing, so the picker
@@ -539,12 +571,11 @@ def sync(target, count):
     write_shelf(target, grp["name"], grp["books"])
     d = cache_dir(target)
     os.makedirs(d, exist_ok=True)
-    from vibb import content        # lazy: content imports us, avoid a cycle
     cover_url = grp.get("cover")
     cover = os.path.join(d, "cover.jpg")
     if cover_url and not os.path.exists(cover):
         try:
-            content._download(cover_url, cover)
+            _download(cover_url, cover)
         except OSError as e:
             _log(f"cover {target}: {e}")
     books = grp["books"] if count < 0 else grp["books"][:max(count, 0)]
@@ -562,11 +593,11 @@ def sync(target, count):
         # short-lived, and the CDN path is stable, so a resumed .part
         # sends its Range against a fresh token.
         url = asset_url(cid)
-        content._download(url, dest, timeout=600, resume=True)
+        _download(url, dest, timeout=600, resume=True)
         jpg = b.get("cover")
         if jpg:
             try:
-                content._download(jpg, os.path.join(d, f"{cid}.jpg"))
+                _download(jpg, os.path.join(d, f"{cid}.jpg"))
             except OSError:
                 pass
         _log(f"downloaded {cid} ({b.get('title')})")

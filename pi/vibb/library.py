@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -314,13 +315,28 @@ def _sync_one(args, mod=None):
     cmd = [sys.executable, mod or content.__file__, *args]
     if _TASKSET:
         cmd = [_TASKSET, "-c", "1"] + cmd
+    # stderr to a temp file, not DEVNULL: a subprocess that dies (a bad
+    # import, an auth failure) used to vanish without a trace — a whole
+    # storytel series "synced" in six seconds and downloaded nothing,
+    # invisibly (field 2026-08-15). A real file can't deadlock a pipe,
+    # and we surface its tail on a non-zero exit.
+    errf = tempfile.TemporaryFile()
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stderr=errf,
                             preexec_fn=lambda: os.nice(19))
     deadline = time.monotonic() + 3600
     while True:
         try:
             proc.wait(timeout=2)
+            if proc.returncode:
+                try:
+                    errf.seek(0)
+                    tail = errf.read()[-400:].decode("utf-8", "replace").strip()
+                except OSError:
+                    tail = ""
+                log(f"sync exited {proc.returncode} ({' '.join(args[:2])})"
+                    + (f": {tail}" if tail else ""))
+            errf.close()
             return
         except subprocess.TimeoutExpired:
             pass

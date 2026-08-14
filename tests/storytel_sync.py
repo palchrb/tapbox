@@ -56,7 +56,7 @@ SHELF = {"items": {
 DOWNLOADS = []
 
 
-def fake_download(url, dest, timeout=120, *, headers=None, resume=False):
+def fake_download(url, dest, timeout=120, resume=False):
     DOWNLOADS.append({"url": url, "dest": os.path.basename(dest),
                       "resume": resume})
     with open(dest, "wb") as f:
@@ -65,7 +65,7 @@ def fake_download(url, dest, timeout=120, *, headers=None, resume=False):
 
 storytel.bookshelf = lambda: SHELF
 storytel.asset_url = lambda cid: f"https://fastly/{cid}?token=SIG"
-content._download = fake_download
+storytel._download = fake_download   # sync uses its OWN inlined download now
 
 # 1. sync with count -1 downloads BOTH unlocked books, skips the locked
 #    one, and writes a shelf.json listing ALL three
@@ -120,6 +120,8 @@ CMDS = []
 
 
 class FakePopen:
+    returncode = 0
+
     def __init__(self, cmd, **k):
         CMDS.append(cmd)
 
