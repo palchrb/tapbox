@@ -335,6 +335,9 @@ def newest_episode_id(target):
     """The id of the newest episode in a podcast/series' CACHED listing,
     or None (not a feed, or nothing cached yet). Reads only local files —
     the sweeper calls it right after a sync to spot fresh content."""
+    if target.startswith("storytel:"):
+        from vibb import storytel
+        return storytel.newest_book_id(target)
     slug = _nrk_slug(target)
     if slug:
         for prefix in ("catalog", "catalog-series"):
@@ -365,6 +368,12 @@ def cache_key_for(target):
     slug = _nrk_slug(target)
     if slug:
         return slug
+    if target.startswith("storytel:"):
+        # CRITICAL: without this, cache_key_for returns None for a
+        # storytel target, prune_cache finds the download dir ownerless,
+        # and shutil.rmtree deletes gigabytes of audiobooks on the NEXT
+        # PUT /library. Must match storytel.cache_dir's basename exactly.
+        return "storytel-" + hashlib.sha1(target.encode()).hexdigest()[:12]
     if target.startswith(("http://", "https://")):
         return feed_key(target)
     return None
@@ -495,6 +504,9 @@ def collection_image(target):
     if _is_spotify(target):
         p = spotify_art_path(target)
         return p if os.path.exists(p) else None
+    if target.startswith("storytel:"):
+        from vibb import storytel
+        return storytel.local_cover(target)   # local file only, per contract
     m = re.match(r"https?://radio\.nrk\.no/podkast/([a-z0-9_-]+)", target, re.I)
     if m:
         return _catalog_image(m.group(1), "podcast")
@@ -734,14 +746,34 @@ def podcast_slug(target):
     return m.group(1) if m else None
 
 
-def _download(url, dest, timeout=120):
+def _download(url, dest, timeout=120, *, headers=None, resume=False):
+    """Stream url -> dest via a .part temp then atomic rename.
+
+    `resume`: continue an existing .part with a Range request rather than
+    starting over. A podcast episode is ~20MB and re-fetching is pennies;
+    a 128k audiobook is 200-500MB and the sweep kills every download the
+    moment playback starts, so without resume a big book on a Zero 2 W's
+    shared radio might never finish. The signed url is single-use per
+    call, so the CALLER re-mints a fresh url before resuming (the CDN
+    path is stable; only the token changes). `headers` is keyword-only so
+    the existing monkeypatched test stubs (lambda url, dest, **k) absorb
+    it untouched."""
     tmp = dest + ".part"
-    with urllib.request.urlopen(url, timeout=timeout) as r, open(tmp, "wb") as f:
-        while True:
-            chunk = r.read(1 << 16)
-            if not chunk:
-                break
-            f.write(chunk)
+    have = os.path.getsize(tmp) if resume and os.path.exists(tmp) else 0
+    hdrs = dict(headers or {})
+    if have:
+        hdrs["Range"] = f"bytes={have}-"
+    req = urllib.request.Request(url, headers=hdrs)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        # a server that ignored the Range answers 200 from the top — then
+        # appending would corrupt the file, so restart in that case
+        append = have and r.status == 206
+        with open(tmp, "ab" if append else "wb") as f:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
     os.replace(tmp, dest)
 
 
@@ -964,6 +996,13 @@ def expand_entries(target):
     always just play whatever comes back.
     """
     passthrough = [{"url": target, "title": None, "id": None, "image": None}]
+    if target.startswith("storytel:"):
+        # storytel owns its own on-disk format (shelf.json + local mp3s).
+        # A LOCAL read only: download-only content, so a book not on disk
+        # is omitted rather than streamed from an expiring signed url —
+        # which keeps this branch network-free on the playback path.
+        from vibb import storytel
+        return storytel.entries_for(target)
     if os.path.isdir(target):
         # Local folder (e.g. a DRM-free audiobook): sorted playlist of audio
         # files, each keyed on its filename so resume survives moves/renames

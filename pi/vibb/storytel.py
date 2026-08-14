@@ -357,6 +357,84 @@ def normalize_shelf(raw):
     return out
 
 
+# --- on-disk layout: storytel owns its own cache format ---------------------
+# CACHE_DIR/storytel-<hash>/ holds, for one target:
+#   shelf.json                 the book list (title/order/duration), written
+#                              at sync time so expand needs no network
+#   <consumableId>.mp3         a downloaded book (absent until downloaded)
+#   <consumableId>.jpg         per-book cover;  cover.jpg = the series face
+_SHELF_JSON = "shelf.json"
+
+
+def write_shelf(target, name, books):
+    """Persist the book list for a target so expand_entries reads it with
+    NO network — the same discipline as the RSS feed.json cache. `books`
+    is the normalize_shelf 'books' list. Best-effort."""
+    d = cache_dir(target)
+    try:
+        os.makedirs(d, exist_ok=True)
+        tmp = os.path.join(d, _SHELF_JSON + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"target": target, "name": name, "books": books}, f)
+        os.replace(tmp, os.path.join(d, _SHELF_JSON))
+    except OSError as e:
+        _log(f"write_shelf {target}: {e}")
+
+
+def read_shelf(target):
+    """The persisted book list, or None. Local read, never raises."""
+    try:
+        with open(os.path.join(cache_dir(target), _SHELF_JSON),
+                  encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def book_path(target, consumable_id):
+    return os.path.join(cache_dir(target), f"{consumable_id}.mp3")
+
+
+def local_cover(target):
+    """The series' cover file if downloaded, else None. Local only — for
+    collection_image, which must never touch the network."""
+    p = os.path.join(cache_dir(target), "cover.jpg")
+    return p if os.path.exists(p) else None
+
+
+def entries_for(target):
+    """target -> [{'url','title','id','image'}] for its DOWNLOADED books.
+
+    Download-only by design: a signed CDN url expires and cannot be
+    cached, so a book that is not on disk is OMITTED rather than streamed.
+    Reads shelf.json and the local mp3s — ZERO network, so this is safe on
+    the playback path (STALE_OK) and offline, exactly like a cached feed.
+    Books come back in reading order."""
+    shelf = read_shelf(target)
+    if not shelf:
+        return []
+    d = cache_dir(target)
+    rows = []
+    for b in shelf.get("books") or []:
+        cid = b.get("consumable_id")
+        mp3 = os.path.join(d, f"{cid}.mp3")
+        if not cid or not os.path.exists(mp3):
+            continue                       # not downloaded yet -> omit
+        jpg = os.path.join(d, f"{cid}.jpg")
+        cover = jpg if os.path.exists(jpg) else local_cover(target)
+        rows.append({"url": mp3, "title": b.get("title"), "id": str(cid),
+                     "image": cover})
+    return rows
+
+
+def newest_book_id(target):
+    """The last book (highest orderInSeries) in the persisted shelf, for
+    the 'new content' badge. Local read, or None."""
+    shelf = read_shelf(target)
+    books = (shelf or {}).get("books") or []
+    return str(books[-1].get("consumable_id")) if books else None
+
+
 # --- the sync-out outbox: a MAP keyed per book, never a log -----------------
 def _outbox_load():
     try:

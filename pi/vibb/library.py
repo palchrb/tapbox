@@ -612,6 +612,8 @@ def _natural_order(target):
         return "newest_first"
     if re.match(r"https?://radio\.nrk\.no/serie/", target, re.I):
         return "oldest_first"   # serial stories play from the beginning
+    if target.startswith("storytel:"):
+        return "oldest_first"   # a book series is read book 1 first
     if os.path.isdir(target):
         return "oldest_first"   # sorted filenames, part 1 first
     return "newest_first"       # RSS convention
