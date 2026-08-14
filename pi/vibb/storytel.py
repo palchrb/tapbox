@@ -336,6 +336,44 @@ def bookshelf():
     return json.loads(body or b"{}")
 
 
+_RAW_SHELF_FILE = os.path.join(STATE_DIR, "storytel-shelf-raw.json")
+RAW_SHELF_TTL_S = 300.0
+
+
+def bookshelf_cached(ttl=RAW_SHELF_TTL_S):
+    """The shelf, via a short-lived disk cache shared across processes.
+
+    The sweep runs one sync SUBPROCESS per storytel entry (the per-entry
+    model it inherits from podcasts, where every feed is a different
+    URL) — but the shelf is the same account-wide document for all of
+    them, so two series meant two identical logins + fetches seconds
+    apart. The first sync in a sweep fetches and writes; the rest read
+    the file and touch the network not at all. Five minutes of staleness
+    is irrelevant against a six-hour sweep cadence. A fetch failure
+    falls back to the cached copy whatever its age — a stale listing
+    beats a dead sweep."""
+    try:
+        st = os.stat(_RAW_SHELF_FILE)
+        if time.time() - st.st_mtime < ttl:
+            with open(_RAW_SHELF_FILE, encoding="utf-8") as f:
+                return json.load(f)
+    except (OSError, ValueError):
+        pass
+    try:
+        raw = bookshelf()
+    except (OSError, RuntimeError) as fetch_err:
+        try:                          # offline/refused: stale beats dead
+            with open(_RAW_SHELF_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            raise fetch_err           # no cache either — report the fetch
+    try:
+        _write_private(_RAW_SHELF_FILE, raw)
+    except OSError:
+        pass
+    return raw
+
+
 def asset_url(consumable_id):
     """getAudioStreamUrl. The signed CDN mp3 for one book, from the 302
     Location — NOT followed, so the bearer never rides to the CDN. Raises
@@ -649,7 +687,7 @@ def sync(target, count):
     parsed = parse_target(target)
     if not parsed:
         return
-    grp = next((g for g in normalize_shelf(bookshelf())
+    grp = next((g for g in normalize_shelf(bookshelf_cached())
                 if g["target"] == target), None)
     if not grp:
         _log(f"{target} is not on the shelf")

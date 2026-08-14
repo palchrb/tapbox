@@ -165,6 +165,23 @@ assert storytel.__file__ in CMDS[0], "mod= must run storytel.py"
 assert content.__file__ in CMDS[1], "the default must still be content.py"
 print("6. _sync_one runs the right module for each source OK")
 
+# 6b. two syncs inside one sweep share ONE shelf fetch: the sweep runs a
+#     subprocess per entry, but the shelf is the same account document,
+#     so entry two must read the disk cache and touch the network zero
+#     times (the box used to log in + fetch once per series, per sweep)
+FETCHES = []
+_real_shelf = storytel.bookshelf
+storytel.bookshelf = lambda: FETCHES.append(1) or SHELF
+try:
+    os.remove(storytel._RAW_SHELF_FILE)
+except OSError:
+    pass
+storytel.sync(TARGET, 1)                      # entry one: fetches
+storytel.sync("storytel:series:26175", 1)     # entry two: cache hit
+assert len(FETCHES) == 1, f"one sweep must fetch the shelf once, got {len(FETCHES)}"
+storytel.bookshelf = _real_shelf
+print("6b. one sweep fetches the shelf once, however many series OK")
+
 # 7. a storytel entry with cache 0 is coerced to -1 (download-only: 'in
 #    the library' means downloaded), while a podcast keeps cache 0
 lib = library.normalize_library({"sections": [{"name": "Lyd", "entries": [
