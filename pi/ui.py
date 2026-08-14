@@ -814,10 +814,12 @@ class GpioInput:
     first chord finger navigate the menu); the cost is one human
     release time of menu latency, same as A/B always had.
 
-    In gesture_mode (the now-playing view) B, X and Y resolve
+    In gesture_mode (the now-playing view) A, B, X and Y resolve
     short-vs-hold: release before LONG_S -> the plain press, held LONG_S
     -> '<name>_long' (fires while still held — but never while the A+B
-    combo is forming)."""
+    combo is forming). A holds too, even though it is half of that
+    combo — the combo branch below catches 'both down' first, so the
+    two cannot both fire; B has worked exactly this way all along."""
 
     PINS = {"a": 5, "b": 6, "x": 16, "y": 24}
     HOLD_S = 2.0      # A+B settings combo
@@ -835,6 +837,7 @@ class GpioInput:
         self.tainted = set()  # a/b releases to swallow (combo attempt)
         self._long_sent = {}  # name -> the hold already fired
         self._b_gesture = False   # hold-B armed when B was pressed
+        self._a_gesture = False   # hold-A armed when A was pressed
         self.wake = threading.Event()  # any button activity ends poll()
         for name, btn in self.buttons.items():
             btn.when_pressed = lambda n=name: self._pressed(n)
@@ -850,6 +853,12 @@ class GpioInput:
             # In menus X/Y are plain presses, fired on RELEASE so the
             # X+Y extras combo can form without navigating the menu.
             self._long_sent[name] = False
+            return
+        if name == "a":
+            self._long_sent["a"] = False
+            # judged by the mode the PRESS started in, like b below —
+            # a_long can change what is playing while still held
+            self._a_gesture = self.gesture_mode
             return
         if name == "b":
             self._long_sent["b"] = False
@@ -889,6 +898,10 @@ class GpioInput:
             if not self._long_sent.get("b"):
                 self.queue.append("b")
             return
+        if name == "a" and self._a_gesture:
+            if not self._long_sent.get("a"):
+                self.queue.append("a")   # a hold already spoke for it
+            return
         self.queue.append(name)
 
     def poll(self, timeout):
@@ -921,6 +934,15 @@ class GpioInput:
             # long press fires while still held — no waiting for release
             self._long_sent["b"] = True
             self.queue.append("b_long")
+        elif (self._a_gesture and "a" in self.down
+                and not self._long_sent.get("a")
+                and now - self.down["a"] >= self.LONG_S):
+            # A holds too (shuffle). Reaching this branch at all means
+            # B is NOT down — the combo branch above owns that case —
+            # so holding both for settings can never toggle shuffle on
+            # the way there.
+            self._long_sent["a"] = True
+            self.queue.append("a_long")
         combo_xy = "x" in self.down and "y" in self.down
         for name in ("x", "y"):
             # the holds only mean something in now-playing, and never
@@ -967,6 +989,7 @@ class LgpioInput(GpioInput):
         self.tainted = set()
         self._long_sent = {}
         self._b_gesture = False
+        self._a_gesture = False
         self.wake = threading.Event()  # set by inherited handlers; unused
         self._level = {n: 1 for n in self.PINS}   # pull-up: 1 = released
         self._edge_at = {n: 0.0 for n in self.PINS}
@@ -1055,6 +1078,20 @@ def _bt_glyph(draw, cx, top, bot, color):
         draw.line([a, b], fill=color)
 
 
+def _shuffle_glyph(draw, cx, top, bot, color):
+    """Two crossing paths with arrow tips, around the spine x=cx. Only
+    ever drawn when shuffle is ON — its absence is the 'off' state, so
+    the top bar stays quiet for the ordinary case (owner 2026-08-14)."""
+    dx = 5
+    for y0, y1 in ((top, bot), (bot, top)):     # the two crossing paths
+        draw.line([(cx - dx, y0), (cx - 2, y0),
+                   (cx + 2, y1), (cx + dx - 3, y1)], fill=color,
+                  joint="curve")
+        # a small solid head on each right-hand end, pointing out
+        draw.polygon([(cx + dx, y1), (cx + dx - 4, y1 - 2),
+                      (cx + dx - 4, y1 + 2)], fill=color)
+
+
 def _conn_icons(draw, system, right_x, y, h):
     """Wi-Fi + Bluetooth status, just left of the battery. Always shown:
     GOOD when connected, DIM + a slash when not — so 'why won't it play'
@@ -1080,7 +1117,15 @@ def _conn_icons(draw, system, right_x, y, h):
     _wifi_glyph(draw, x, cy, GOOD if wifi_on else DIM)
     if not wifi_on:
         draw.line([x - 7, y + h + 1, x + 7, y - 1], fill=DIM)
-    return x - 8
+    x -= 8
+    # Shuffle rides in on the /status fold (see App._set) so the icon
+    # row still reads nothing but self.system. Present = on; there is
+    # no 'off' glyph, by design.
+    if (system or {}).get("shuffle"):
+        x -= 9
+        _shuffle_glyph(draw, x, y + 2, y + h - 2, HILITE)
+        x -= 9
+    return x
 
 
 def battery_corner(draw, system):
@@ -1270,6 +1315,7 @@ class App:
         self.wifi_connecting_until = 0.0  # X pressed: wifi reconnect running
         self.catch_up_until = 0.0   # repaint every tick until this time
         self.play_offline = False   # _play_async parked a no-internet verdict
+        self.shuffle_refused = False  # a shuffle the box could not do
         self._pp_expect = None      # optimistic play/pause: expected playing
         self._pp_until = 0.0        #   state, held until a poll confirms it
         self._expect_target = None  # optimistic new-tile card: only /status
@@ -1339,7 +1385,11 @@ class App:
                 # in-place write could be read half-updated by the render
                 # thread. An atomic reference swap can't be.
                 base = self.system if isinstance(self.system, dict) else {}
-                self.system = {**base, "bt_ready": value["bt_connected"]}
+                self.system = {**base, "bt_ready": value["bt_connected"],
+                               # same trick for the shuffle glyph: the
+                               # icon row reads self.system only, so the
+                               # daemon's shuffle state rides along
+                               "shuffle": bool(value.get("shuffle"))}
 
     def _poller(self):
         """P1: owns ALL daemon HTTP so the render/input loop never blocks on
@@ -1854,8 +1904,41 @@ class App:
                     self._control_async("/next")
             elif ev == "y_long":
                 self._open_episodes()
+            elif ev == "a_long":
+                self._toggle_shuffle()
         except OSError as e:
             log(f"control failed: {e}")
+
+    def _toggle_shuffle(self):
+        """Hold play in now-playing: shuffle on/off.
+
+        Nothing is announced on success — neither mpv nor go-librespot
+        interrupts the current track to reorder what comes after it, so
+        there is no gap to explain. The top-bar glyph carries the state,
+        and it flips HERE rather than on the next poll so the press has
+        an answer immediately (same contract as the play/pause icon).
+        A card appears only when the box could not shuffle at all."""
+        want = not bool((self.status or {}).get("shuffle"))
+        base = self.system if isinstance(self.system, dict) else {}
+        self.system = {**base, "shuffle": want}   # atomic swap: the
+        #   render thread may be reading this (see _set)
+        self.status = {**(self.status or {}), "shuffle": want}
+        self.dirty = True
+
+        def go():
+            try:
+                r = api_post("/shuffle", {"enabled": want},
+                             timeout=CONTROL_TIMEOUT)
+            except OSError as e:
+                log(f"shuffle failed: {e}")
+                r = None
+            if not isinstance(r, dict) or r.get("routed") is None:
+                # nothing to shuffle (sonos, or no session): put the
+                # glyph back and say so — a silent no-op reads as a
+                # broken button
+                self.shuffle_refused = True
+            self._force_poll()
+        threading.Thread(target=go, daemon=True).start()
 
     def _control_async(self, path):
         """POST a transport control off the UI thread. A slow control
@@ -3468,6 +3551,14 @@ class App:
         threading.Thread(target=self._poller, daemon=True).start()  # P1
         while True:
             self._loop_beat = time.monotonic()
+            if self.shuffle_refused:
+                # _toggle_shuffle's POST came back with nothing routed:
+                # sonos, or no session at all. Drawing belongs on this
+                # thread, never on the poster's — same rule as below.
+                self.shuffle_refused = False
+                self.draw_message("Kan ikke stokke om her")
+                time.sleep(1.4)
+                self.dirty = True
             if self.play_offline:
                 # _play_async's background POST came back 'no-internet'.
                 # The reconnect flow DRAWS (and sleeps), so it belongs on

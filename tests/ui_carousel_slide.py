@@ -213,6 +213,7 @@ try:
     inp.tainted = set()
     inp._long_sent = {}
     inp._b_gesture = False
+    inp._a_gesture = False
     inp.wake = ui.threading.Event()
     inp._edge_at = {n: 0.0 for n in ui.GpioInput.PINS}
     inp._level = {n: 1 for n in ui.GpioInput.PINS}  # pull-up idle

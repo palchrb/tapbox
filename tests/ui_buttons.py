@@ -24,6 +24,7 @@ def fresh(gesture):
     inp.tainted = set()
     inp._long_sent = {}
     inp._b_gesture = False
+    inp._a_gesture = False
     inp.wake = threading.Event()
     return inp
 

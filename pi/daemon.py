@@ -1554,6 +1554,16 @@ class Orchestrator:
         """mpv: reshuffle/restore the playlist order (current track keeps
         playing). Spotify: shuffle_context — enabling BEFORE /play makes
         playback start on a random track, so the PWA can pre-arm it."""
+        if _renderer.is_sonos():
+            # Without this the fall-through below sends shuffle to
+            # go-librespot while the audio is coming out of a Sonos
+            # speaker — invisible, and wrong in a second room. The
+            # sidecar sets play_mode NORMAL deliberately (sonosd.py:
+            # "kills family shuffle/repeat leftovers"), and every
+            # positional queue jump depends on that order, so shuffling
+            # there is a real feature, not a one-liner.
+            log("shuffle: not supported on a sonos renderer")
+            return {"routed": None, "shuffle": None}
         with self.lock:
             if self._mpv_alive() and self.source == "mpv":
                 cmd = ["playlist-shuffle"] if enabled else ["playlist-unshuffle"]
