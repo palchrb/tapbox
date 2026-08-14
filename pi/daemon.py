@@ -633,6 +633,7 @@ class Orchestrator:
         return self.child is not None and self.child.poll() is None
 
     def _stop_child(self):
+        _storytel_wake.set()   # a book just stopped/switched — mirror it now
         if self._mpv_alive():
             child = self.child
             child.terminate()
@@ -3907,6 +3908,55 @@ def _sonos_poller():
                     pass
 
 
+_storytel_wake = threading.Event()
+_STORYTEL_MIRRORED = {}   # consumableId -> pos_ms last noted, in-process
+#                           dedup so a steady position pushes nothing
+
+
+def _storytel_bookmarker():
+    """Mirror local audiobook positions OUT to Storytel as a backup.
+
+    One-way only: it READS the local bookmark file (the source of truth,
+    written by player.py) and queues changed positions to the outbox,
+    which drains when online and holds when not. It never reads a
+    position back — the box has no RTC, so a last-writer-wins merge has
+    no trustworthy clock, and v1 sidesteps that entirely. Off the play
+    path start to finish; a dead account is invisible to the listener.
+
+    A 60s heartbeat, plus a poke on stop/switch. The in-process dedup
+    map means steady-state notes nothing and the flush is a cheap no-op
+    with no network — only a CHANGED position is ever pushed."""
+    while True:
+        _storytel_wake.wait(60)
+        _storytel_wake.clear()
+        try:
+            _storytel_mirror_tick()
+        except Exception:
+            pass
+
+
+def _storytel_mirror_tick():
+    """One pass of the mirror: note changed local positions, then flush."""
+    if not load_settings().get("storytel_sync", 1):
+        _STORYTEL_MIRRORED.clear()
+        return
+    for s in load_library().get("sections", []):
+        for e in s.get("entries", []):
+            t = e["target"]
+            if not _storytel.is_storytel(t):
+                continue
+            st = _bm_load(state_key(t)) or {}
+            for cid, rec in (st.get("episodes") or {}).items():
+                pos = rec.get("pos")
+                if not isinstance(pos, (int, float)) or pos <= 0:
+                    continue
+                ms = int(pos * 1000)
+                if _STORYTEL_MIRRORED.get(cid) != ms:
+                    _storytel.outbox_note(cid, pos)
+                    _STORYTEL_MIRRORED[cid] = ms
+    _storytel.outbox_flush()
+
+
 def _spotify_bookmarker():
     """Spotify's cloud remembers positions for ITS clients only — so we
     bookkeep like we do for mpv: while Spotify plays, snapshot the track,
@@ -5160,6 +5210,7 @@ def main():
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()
     threading.Thread(target=_spotify_bookmarker, daemon=True).start()
+    threading.Thread(target=_storytel_bookmarker, daemon=True).start()
     threading.Thread(target=_sonos_poller, daemon=True).start()
     # off the bind path (review 2026-07-18 B1): the re-enable forks
     # rfkill/iw/nmcli probes with up-to-5s timeouts, and running it
