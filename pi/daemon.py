@@ -13,6 +13,9 @@ coherently instead of guessing at each other. HTTP API on 127.0.0.1:3679:
   POST /volume     {"volume": 0-100} or {"delta": +/-n} — routes to the
                    active source (mpv softvol / go-librespot volume)
   GET  /volume     current volume of the active source (0-100)
+  POST /seek       {"position": <seconds>} or {"delta": +/-n} — absolute
+                   wins; both clamp short of the end. Live streams and a
+                   sonos renderer with no snapshot refuse with routed:null
   GET  /status     unified now-playing (source, title, position, ...)
   GET  /library    the parent-curated library (sections -> named links)
   PUT  /library    replace the library (validated, atomic write)
@@ -350,6 +353,10 @@ class Orchestrator:
         # last spotify control timeout; far past, NOT 0.0 — on a young
         # monotonic clock 0.0 would read as 'timed out seconds ago'
         self._spot_cmd_timeout_at = -1e9
+        self._seek_at = -1e9         # last DELIBERATE seek; releases the
+        # resume hold in _settle_position (same far-past reasoning above)
+        self._sonos_seek_want = None  # coalesced mash target, like the
+        self._sonos_seeking = False   # positional step above it
         self._crash_respawns = 0  # crashed-child heals this boot (max 2)
         threading.Thread(target=self._arbiter, daemon=True).start()
         threading.Thread(target=self._stall_watchdog, daemon=True).start()
@@ -1581,6 +1588,120 @@ class Orchestrator:
             except OSError:
                 return {"routed": None, "shuffle": None}
 
+    SEEK_TAIL_S = 5.0   # never land ON the end of a track
+
+    def seek(self, position=None, delta=None):
+        """Jump to a point in what is playing: mpv, spotify or sonos.
+
+        Every branch resolves to an ABSOLUTE target and returns it, and
+        the screen only ever sends absolute. With an accelerating press
+        the UI fires several jumps inside a second, and every source's
+        reported position is cached or polled (go_status caches 1s, a
+        sonos snapshot can be 15s old), so N RELATIVE jumps would all
+        resolve against the same stale base and land as one. Absolute
+        targets compound by construction. `delta` stays for the PWA and
+        anything else with no position state of its own.
+
+        Clamped short of the end on every branch. mpv's seek past EOF
+        ends the file and steps the playlist, and the player's
+        dead-output watchdog reads that as a skip — the same path that
+        rolled a kid back to an earlier episode three times (field
+        2026-08-12), which is also why the branch stamps
+        touch_user_skip() before the command rather than after."""
+        def target(base, dur):
+            """Absolute seconds, or None when there is nothing to seek in."""
+            if dur is None:
+                return None      # live stream: no duration, no destination
+            want = position if position is not None else (base or 0.0) + delta
+            return max(0.0, min(float(want), float(dur) - self.SEEK_TAIL_S))
+
+        if _renderer.is_sonos():
+            # First, and never falling through: with a sonos renderer the
+            # audio is in another room, and the fall-through below would
+            # seek go-librespot instead — invisible and wrong, exactly
+            # the hole shuffle() closes above.
+            snap = self._sonos_fresh() or {}
+            tgt = target(self._sonos_position(), snap.get("dur_s"))
+            if tgt is None:
+                return {"routed": None, "position": None, "reason": "live"}
+            # Coalesce like sonos_step: one SOAP jump costs ~1s and a
+            # mash queued them serially until the UI timed out 15 times
+            # in a row (field 2026-08-09). One worker, latest target wins.
+            with self._sonos_step_lock:
+                self._sonos_seek_want = tgt
+                if not self._sonos_seeking:
+                    self._sonos_seeking = True
+                    threading.Thread(target=self._sonos_seek_worker,
+                                     daemon=True).start()
+            # Optimistic, and HELD: without patching the snapshot the
+            # next /status extrapolates from the pre-seek rel_s and the
+            # bar snaps back for a poll (same fix as the transport flip).
+            if self.sonos_snap:
+                self.sonos_snap = dict(self.sonos_snap, rel_s=tgt, stale_s=0)
+                self.sonos_snap_at = time.monotonic()
+            self.sonos_bm_hold = None  # that hold protects a bookmark from
+            # a REFUSED start-seek; a deliberate one outranks it
+            self._seek_at = time.monotonic()
+            log(f"seek -> sonos {tgt:.0f}s")
+            return {"routed": "sonos", "position": tgt}
+
+        with self.lock:
+            if self._mpv_alive() and self.source == "mpv":
+                tgt = target(mpv_get("playback-time"), mpv_get("duration"))
+                if tgt is None:
+                    return {"routed": None, "position": None,
+                            "reason": "live"}
+                _radio.touch_user_skip()
+                try:
+                    res = mpv_ipc(["seek", tgt, "absolute"])
+                except OSError:
+                    res = {}
+                if res.get("error") != "success":
+                    # A live mpv session OWNS the transport (see command()):
+                    # a refusal must not fall through and seek a paused
+                    # spotify session in the background instead.
+                    return {"routed": None, "position": None,
+                            "reason": res.get("error") or "mpv-refused"}
+                self._seek_at = time.monotonic()
+                _bm_wake.set()
+                log(f"seek -> mpv {tgt:.0f}s")
+                return {"routed": "mpv", "position": tgt}
+
+        # Spotify, OFF the lock: go_status can take seconds and every
+        # /status reader queues behind it (review 2026-07-18 R2).
+        try:
+            track = (go_status() or {}).get("track") or {}
+        except OSError:
+            track = {}
+        dur_ms = track.get("duration")
+        tgt = target((track.get("position") or 0) / 1000.0,
+                     dur_ms / 1000.0 if dur_ms else None)
+        if tgt is None:
+            return {"routed": None, "position": None, "reason": "no-session"}
+        try:
+            go("/player/seek", body={"position": int(tgt * 1000)})
+        except OSError:
+            return {"routed": None, "position": None, "reason": "spotify-down"}
+        self._seek_at = time.monotonic()
+        _bm_wake.set()
+        log(f"seek -> spotify {tgt:.0f}s")
+        return {"routed": "spotify", "position": tgt}
+
+    def _sonos_seek_worker(self):
+        while True:
+            with self._sonos_step_lock:
+                want, self._sonos_seek_want = self._sonos_seek_want, None
+                if want is None:
+                    self._sonos_seeking = False
+                    return
+            try:
+                _renderer.post("/seek", {"s": want,
+                                         "if_uid": _renderer.read().get("uid")})
+            except _renderer.SidecarDown:
+                pass      # the poller re-reads the truth within a beat
+            _sonos_wake.set()
+            _bm_wake.set()
+
     def _sonos_command(self, action):
         """Transport controls for the remote renderer. Runs OFF the lock:
         a SOAP round to a sleeping speaker takes seconds, and every
@@ -2014,6 +2135,13 @@ class Orchestrator:
         landed), then track live — bounded to the first
         POSITION_SETTLE_MAX_S after spawn so a target that can never be
         reached can't freeze the bar forever."""
+        if self._seek_at > self.child_started:
+            # The user moved the position DELIBERATELY since this child
+            # started. Holding at the resume bookmark now would fight
+            # them: seek back inside the first 20s of a resumed episode
+            # and the bar would jump forward and lie until the settle
+            # window expired, while the audio sat where they put it.
+            return live
         try:
             rp = float(now.get("resume_pos")) if now else 0.0
         except (TypeError, ValueError, AttributeError):
@@ -3001,6 +3129,18 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, ORCH.volume(absolute=body.get("volume"),
                                             delta=body.get("delta")))
+            elif self.path == "/seek":
+                if body.get("position") is None and body.get("delta") is None:
+                    self._send(400, {"error": "position or delta required"})
+                    return
+                try:
+                    pos, dl = body.get("position"), body.get("delta")
+                    pos = None if pos is None else float(pos)
+                    dl = None if dl is None else float(dl)
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "position/delta must be numeric"})
+                    return
+                self._send(200, ORCH.seek(position=pos, delta=dl))
             elif self.path == "/output":
                 r = ORCH.set_output(body.get("device"),
                                     fallback=bool(body.get("fallback")),
@@ -3252,7 +3392,7 @@ SAFE = {
     # separately inside the handler (it can put arbitrary content in a
     # kid's room, so it needs the token).
     "POST": frozenset({"/play", "/playpause", "/next", "/prev", "/pause",
-                       "/resume", "/shuffle", "/volume", "/stop"}),
+                       "/resume", "/shuffle", "/volume", "/stop", "/seek"}),
     # PUT /library replaces the entire library and PUT /settings rewrites
     # config — both privileged.
     "PUT": frozenset(),

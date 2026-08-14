@@ -55,7 +55,7 @@ kid's music. Keep these open so the zero-setup "Hey Siri, pause Vibb"
 shortcut keeps working:
 - `GET /status`, `/system`, `/settings`, `/library`, `/artwork`
 - `POST /playpause`, `/next`, `/prev`, `/pause`, `/volume`, `/shuffle`,
-  `/stop`
+  `/stop`, `/seek`
 
 **Privileged** — device control, config, or destructive. These are what
 we want behind a trust gate:

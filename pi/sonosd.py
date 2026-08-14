@@ -510,6 +510,8 @@ class Session:
         elif name == "seek":
             spk.avTransport.Seek([("InstanceID", 0), ("Unit", "REL_TIME"),
                                   ("Target", _hms(float(body["s"])))])
+            self._wake.set()  # like pause/resume above: the cached rel_s
+            # still says the OLD position, and the cruise cadence is 15s
         elif name == "volume":
             v = max(0, min(100, int(body["v"])))
             spk.volume = v

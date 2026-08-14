@@ -88,7 +88,7 @@ print("3. wrong token: 401 token_invalid (distinct from token_required) OK")
 for path, body in (("/playpause", None), ("/next", None), ("/prev", None),
                    ("/pause", None), ("/stop", None),
                    ("/shuffle", {"enabled": True}),
-                   ("/volume", {"delta": 5})):
+                   ("/volume", {"delta": 5}), ("/seek", {"delta": 30})):
     st, _ = call(path, body=body)
     assert st != 401, f"{path} must stay open (Siri shortcut), got {st}"
 print("4. playback controls still work with no token (Siri shortcut) OK")
