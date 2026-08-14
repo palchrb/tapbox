@@ -571,14 +571,29 @@ def _download(url, dest, timeout=120, resume=False):
     have = os.path.getsize(tmp) if resume and os.path.exists(tmp) else 0
     req = urllib.request.Request(
         url, headers={"Range": f"bytes={have}-"} if have else {})
+    name = os.path.basename(dest)
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        append = have and getattr(r, "status", 200) == 206
+        code = getattr(r, "status", 200)
+        clen = r.headers.get("Content-Length")
+        total = (have + int(clen)) if (have and code == 206 and clen) \
+            else (int(clen) if clen else None)
+        _log(f"{name}: HTTP {code}"
+             + (f", resume from {have // 1_000_000}MB" if have else "")
+             + (f", {int(total) // 1_000_000}MB total" if total else ""))
+        append = have and code == 206
+        got = have
+        last = have
         with open(tmp, "ab" if append else "wb") as f:
             while True:
                 chunk = r.read(1 << 16)
                 if not chunk:
                     break
                 f.write(chunk)
+                got += len(chunk)
+                if got - last >= 20_000_000:   # a heartbeat every ~20MB so a
+                    last = got                 # long book shows live progress
+                    _log(f"{name}: {got // 1_000_000}MB"
+                         + (f"/{int(total) // 1_000_000}" if total else ""))
     os.replace(tmp, dest)
 
 
@@ -611,6 +626,9 @@ def sync(target, count):
         except OSError as e:
             _log(f"cover {target}: {e}")
     books = grp["books"] if count < 0 else grp["books"][:max(count, 0)]
+    _log(f"{grp['name']}: {len(books)} book(s) to check "
+         f"({sum(1 for b in books if os.path.exists(book_path(target, b.get('consumable_id'))))} "
+         "already on disk)")
     for b in books:
         cid = b.get("consumable_id")
         if not cid:
@@ -621,6 +639,8 @@ def sync(target, count):
         if _free_bytes(d) < DISK_FLOOR:
             _log(f"disk below floor, stopping before {cid}")
             return
+        _log(f"downloading {cid} ({b.get('title')})...")   # visible BEFORE
+        #   the download, so a book that yields mid-way is not invisible
         # Attempt EVERY book. isLockedContent on the shelf does NOT
         # reliably mean 'you cannot access this' — a Premium/unlimited
         # account plays locked-flagged books fine (field 2026-08-15). Let
@@ -641,7 +661,8 @@ def sync(target, count):
                 _download(jpg, os.path.join(d, f"{cid}.jpg"))
             except OSError:
                 pass
-        _log(f"downloaded {cid} ({b.get('title')})")
+        mb = os.path.getsize(dest) // 1_000_000
+        _log(f"downloaded {cid} ({b.get('title')}) — {mb}MB")
 
 
 if __name__ == "__main__":

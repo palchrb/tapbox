@@ -321,6 +321,18 @@ def _sync_one(args, mod=None):
     # invisibly (field 2026-08-15). A real file can't deadlock a pipe,
     # and we surface its tail on a non-zero exit.
     errf = tempfile.TemporaryFile()
+
+    def tail():
+        """The last of the subprocess's stderr, for the journal. A large
+        storytel download narrates its progress there, so this is how a
+        yielded-mid-book download shows how far it got — otherwise a
+        big book looks stuck when it is actually filling in."""
+        try:
+            errf.seek(0)
+            return errf.read()[-600:].decode("utf-8", "replace").strip()
+        except OSError:
+            return ""
+
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=errf,
                             preexec_fn=lambda: os.nice(19))
@@ -329,13 +341,9 @@ def _sync_one(args, mod=None):
         try:
             proc.wait(timeout=2)
             if proc.returncode:
-                try:
-                    errf.seek(0)
-                    tail = errf.read()[-400:].decode("utf-8", "replace").strip()
-                except OSError:
-                    tail = ""
+                t = tail()
                 log(f"sync exited {proc.returncode} ({' '.join(args[:2])})"
-                    + (f": {tail}" if tail else ""))
+                    + (f": {t}" if t else ""))
             errf.close()
             return
         except subprocess.TimeoutExpired:
@@ -346,6 +354,10 @@ def _sync_one(args, mod=None):
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+            t = tail()               # surface progress-so-far on a yield too,
+            errf.close()             # or a big book looks stuck when it isn't
+            if t:
+                log(f"sync yielded ({' '.join(args[:2])}): {t}")
             if time.monotonic() > deadline:
                 raise subprocess.TimeoutExpired(cmd, 3600)
             raise SweepYield()
