@@ -53,14 +53,6 @@ from vibb.paths import STATE_DIR, read_settings  # noqa: E402
 
 is_spotify = spotify.is_spotify
 POLL_S = 3
-# A track sitting in its first BM_TOP_S seconds does not overwrite a
-# stored position larger than BM_TOP_KEEP_S. Keyed on WHERE playback is,
-# not on how far it moved: a human going backwards lands where they
-# aimed, while every accidental loss lands at the top. Playing on past
-# BM_TOP_S releases it, so a genuine start-over is still remembered —
-# just not its first minute and a half.
-BM_TOP_S = float(os.environ.get("VIBB_BM_TOP", "90"))
-BM_TOP_KEEP_S = float(os.environ.get("VIBB_BM_TOP_KEEP", "300"))
 
 
 def log(msg):
@@ -795,34 +787,7 @@ def main():
                 # entry's per-tap flag says. That flag is enforced on the
                 # READ side (clear_state + st=None above), so a tap still
                 # starts such an entry at track 1.
-                # A POSITION AT THE VERY TOP MAY NOT OVERWRITE A REAL ONE.
-                # Every way this box has lost a child's place looks the
-                # same from here: something restarts the track and the
-                # next tick persists a few seconds over an hour. mpv's
-                # own respawn, a rolled-back watchdog, a refused resume
-                # seek, a renderer handover — the causes differ, the
-                # signature does not (field 2026-08-15, repeatedly).
-                # So: while we are still in the first BM_TOP_S of a track
-                # whose stored position is substantial, do not write.
-                # Once playback climbs past that — a genuine restart the
-                # child is actually listening to — writing resumes, and
-                # the only cost is not bookmarking the first minute and a
-                # half of it. The guard needs no cross-process signal,
-                # which is why it is here and not driven from the daemon.
-                top_guard = False
-                if not live and pos < BM_TOP_S:
-                    try:
-                        stored = episode_pos(load_state(key) or {},
-                                             ids.get(path), path)
-                    except Exception:
-                        stored = 0.0
-                    if stored > BM_TOP_KEEP_S:
-                        top_guard = True
-                        if time.monotonic() - last_beat > 30:
-                            log(f"keeping the bookmark at {int(stored)}s — "
-                                f"this track is at {int(pos)}s and nothing "
-                                "asked to start it over")
-                if not live and not top_guard:
+                if not live:
                     if (path != bm_last[1] or bool(paused) != bm_last[2]
                             or time.monotonic() - bm_last[0] >= bm_flush_s):
                         save_state(key, path, pos, ids.get(path), dur)

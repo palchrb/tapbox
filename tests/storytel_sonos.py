@@ -447,9 +447,14 @@ print("18. the sonos play path expands remote-aware without a race OK")
 #     be Storytel's number rather than the speaker's. If it is short by
 #     half a minute against the real file, a ten-hour book loses its
 #     place near the end. Good enough to draw a bar, not to delete data.
-assert 'episode_id=ep.get("id"), duration=None)' in src, \
-    "the sonos bookmark write must not pass a shelf-derived duration"
-print("19. the shelf length cannot delete a bookmark OK")
+# provenance, not a blanket None: a Sonos reports a real duration for an
+# ordinary podcast (field: 1352s) and the finished-rule reset depends on
+# it, while a SHELF length short by half a minute would destroy a
+# ten-hour book's place near its end.
+assert 'duration=None if snap.get("dur_from_shelf")' in src, \
+    "pass the speaker's duration, never our own shelf-derived one"
+assert 'dur_from_shelf=True' in src, "and mark the shelf-supplied ones"
+print("19. only a SPEAKER-measured duration may decide 'finished' OK")
 
 # 20. and the poller tick is guarded WHOLESALE: a ValueError from a bad
 #     url or an OSError from a full SD card inside the bookmark write

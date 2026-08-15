@@ -1134,15 +1134,18 @@ class Orchestrator:
                 f"{int(rel)}s) and nothing asked for it — keeping the "
                 "bookmark")
             return
-        # duration=None ON PURPOSE. save_state DELETES an episode slot
-        # when pos > duration - RESUME_MIN_S, and our dur_s may be the
-        # SHELF's length, not the speaker's. If Storytel's number is
-        # short by half a minute against the real file, the bookmark of a
-        # ten-hour book is destroyed near its end. The shelf length is
-        # good enough to draw a bar with and not good enough to delete
-        # data with (QA 2026-08-15).
+        # Pass the duration ONLY when the SPEAKER measured it. save_state
+        # deletes an episode slot when pos > duration - RESUME_MIN_S, and
+        # a shelf-supplied length short by half a minute would destroy
+        # the bookmark of a ten-hour book near its end. Blanket-None was
+        # too blunt the other way: a Sonos reports a real duration for an
+        # ordinary podcast (field 2026-08-15: 1352s), and dropping it
+        # meant an episode played to the end kept its bookmark instead of
+        # resetting for the next tap.
         _bm_save(state_key(self.target), ep["url"], float(rel),
-                 episode_id=ep.get("id"), duration=None)
+                 episode_id=ep.get("id"),
+                 duration=None if snap.get("dur_from_shelf")
+                 else snap.get("dur_s"))
 
     def _sonos_body(self, ep, uid, start_s):
         """/play body for one queue entry (contract: tests/sonos_contract).
@@ -1268,6 +1271,7 @@ class Orchestrator:
             # but no duration, so it draws the times and NO progress bar
             # until the speaker reports one
             "dur_s": ep.get("dur_s"),
+            "dur_from_shelf": bool(ep.get("dur_s")),
             # and the uri WITH it — the poller may only carry a duration
             # forward for the SAME track, and a seed with no uri could
             # never be matched (which would silently lose the length again)
@@ -4039,7 +4043,8 @@ def _sonos_poller():
                                 "dur_s")
                             if known:
                                 ORCH.sonos_snap = dict(ORCH.sonos_snap,
-                                                       dur_s=known)
+                                                       dur_s=known,
+                                                       dur_from_shelf=True)
                     except Exception:
                         pass
                 elif ORCH.target:
@@ -4146,7 +4151,9 @@ def _sonos_poller():
                     # ours exists at all.
                     known = ORCH._sonos_known_duration(snap.get("uri"))
                     if known:
-                        snap = dict(snap, dur_s=known)
+                        # flagged: good enough to draw a bar with, not to
+                        # decide "finished" with (see _sonos_bookmark_now)
+                        snap = dict(snap, dur_s=known, dur_from_shelf=True)
                     else:
                         prev = ORCH.sonos_snap or {}
                         kept = prev.get("dur_s")
