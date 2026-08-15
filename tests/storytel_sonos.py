@@ -138,9 +138,21 @@ print("6. storytel rows survive the http-only playable filter OK")
 #    a None index silently disables bookmarks and queue advance
 k = src.index("ORCH.sonos_idx = next(")
 window = src[k - 800:k + 400]
-assert 'e["id"] in str(uri)' in window, \
-    "a signed url can never equal the queue's url — match on the id"
-print("7. the restart reconcile matches a signed url by book id OK")
+assert 'e["id"] == want' in window and "consumableId" in window, \
+    "match the signed url's consumableId QUERY PARAM, not a substring"
+# and prove why: a bare substring also hits the 75-char token by luck,
+# and next() would then adopt the WRONG book and bookmark onto it
+import urllib.parse as _up  # noqa: E402
+
+_uri = ("https://fastly-ng.storytel.net/mp3encoder-128/uuid"
+        "?consumableId=331854&isbn=9788&token=aBc331767xyz")
+_ids = ["331854", "331855", "331767"]
+assert [i for i in _ids if i in _uri] == ["331854", "331767"], \
+    "the substring form is genuinely ambiguous"
+_want = (_up.parse_qs(_up.urlsplit(_uri).query).get("consumableId")
+         or [None])[0]
+assert [i for i in _ids if i == _want] == ["331854"]
+print("7. the restart reconcile matches a signed url by consumableId OK")
 
 # 8. the expand cache is cleared on every renderer switch: entries differ
 #    by renderer, and a stale one makes the box play the WRONG book

@@ -3863,12 +3863,19 @@ def _sonos_poller():
                             # The speaker holds a SIGNED url minted by the
                             # previous daemon process — string equality can
                             # never match it, and a None index silently
-                            # disables bookmarks (1016) and queue advance
-                            # for the rest of the session. Match on the
-                            # book id, which is in the signed url's query.
+                            # disables bookmarks and queue advance for the
+                            # rest of the session. Match on the book id,
+                            # which the signed url carries as a QUERY
+                            # PARAM. Not as a substring: the 75-char token
+                            # can contain a six-digit run by luck, and
+                            # next() would then adopt the wrong book and
+                            # bookmark this position onto it.
+                            want = (urllib.parse.parse_qs(
+                                urllib.parse.urlsplit(str(uri)).query)
+                                .get("consumableId") or [None])[0]
                             ORCH.sonos_idx = next(
                                 (i for i, e in enumerate(ORCH.sonos_queue)
-                                 if e["id"] and e["id"] in str(uri)), None)
+                                 if want and e["id"] == want), None)
                         else:
                             ORCH.sonos_idx = next(
                                 (i for i, e in enumerate(ORCH.sonos_queue)
