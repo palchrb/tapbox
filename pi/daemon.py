@@ -1086,7 +1086,14 @@ class Orchestrator:
             try:
                 body.update(kind="url",
                             uri=_storytel.asset_url(ep["id"], timeout=6),
-                            art=ep.get("art_url") or art)
+                            art=ep.get("art_url") or art,
+                            # We KNOW the length from the shelf; a Sonos
+                            # asked to derive it from a signed url with no
+                            # file extension reports 0:00 until it has
+                            # buffered, and the screen draws no progress
+                            # bar without a duration (field 2026-08-15:
+                            # right seconds, no orange).
+                            duration_s=ep.get("dur_s"))
             except (OSError, RuntimeError) as e:
                 return {"error": f"storytel url unavailable: {e}"}
         else:
@@ -1158,7 +1165,12 @@ class Orchestrator:
         self.sonos_snap = {
             "armed": True, "uid": rd["uid"], "kind": self.sonos_kind,
             "transport": "PLAYING", "rel_s": float(start_s),
-            "dur_s": None, "ours": True, "reachable": True, "seq": -1,
+            # seed the length when the entry carries one (storytel knows
+            # it from the shelf): without it the screen has a position
+            # but no duration, so it draws the times and NO progress bar
+            # until the speaker reports one
+            "dur_s": ep.get("dur_s"),
+            "ours": True, "reachable": True, "seq": -1,
             "stale_s": 0.0,
             "volume": (self.sonos_snap or {}).get("volume")}
         self.sonos_snap_at = time.monotonic()
@@ -3907,6 +3919,16 @@ def _sonos_poller():
                         track_art=old_s.get("track_art"))
             ORCH.sonos_snap = snap
         else:
+            if snap.get("dur_s") is None:
+                # Keep a length we already know. A Sonos handed a signed
+                # url with no file extension reports 0:00 until it has
+                # buffered, and letting that None overwrite the seeded
+                # duration made the progress bar appear and then vanish
+                # (field 2026-08-15). The speaker's own value wins the
+                # moment it has one.
+                kept = (ORCH.sonos_snap or {}).get("dur_s")
+                if kept:
+                    snap = dict(snap, dur_s=kept)
             ORCH.sonos_snap = snap
             ORCH.sonos_snap_at = time.monotonic()
         opt = ORCH.sonos_opt_tr

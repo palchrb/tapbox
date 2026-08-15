@@ -41,9 +41,9 @@ from vibb import storytel, content  # noqa: E402
 TARGET = "storytel:series:26175"
 BOOKS = [
     {"consumable_id": "111", "title": "En", "order": 1,
-     "cover": "https://covers.storytel.com/1.jpg"},
+     "duration_ms": 721893, "cover": "https://covers.storytel.com/1.jpg"},
     {"consumable_id": "222", "title": "To", "order": 2,
-     "cover": "https://covers.storytel.com/2.jpg"},
+     "duration_ms": 700000, "cover": "https://covers.storytel.com/2.jpg"},
 ]
 storytel.write_shelf(TARGET, "Kokosbananas", BOOKS)
 d = storytel.cache_dir(TARGET)
@@ -147,6 +147,29 @@ print("7. the restart reconcile matches a signed url by book id OK")
 assert src.count("_EXPAND_CACHE.clear()") >= 3, \
     "clear the expand cache wherever PREFER_REMOTE flips"
 print("8. a renderer switch clears the expand cache OK")
+
+# 9. THE DURATION RIDES ALONG. A Sonos handed a signed url with no file
+#    extension reports 0:00 until it has buffered, and the screen draws
+#    the times but NO progress bar without a duration (field 2026-08-15:
+#    "right seconds, no orange"). We know the length from the shelf, so
+#    we send it in the DIDL and seed our own snapshot with it.
+content.PREFER_REMOTE = True
+rows = content.expand_entries(TARGET)
+content.PREFER_REMOTE = False
+assert rows[0]["dur_s"], "the shelf's length must reach the queue row"
+ep2 = dict(ep, dur_s=721.9)
+storytel.asset_url = fake_asset
+body = orch._sonos_body(ep2, "RINCON_1", 0.0)
+assert body["duration_s"] == 721.9, \
+    "the length must ride in the /play body, or Sonos has to guess it"
+print("9. the known length is sent to the speaker, not guessed OK")
+
+# 10. and a speaker that reports NO duration must not erase one we have —
+#     letting that None through made the bar appear and then vanish
+src_p = src[src.index("if snap.get(\"dur_s\") is None:"):][:900]
+assert "kept" in src_p and "dict(snap, dur_s=kept)" in src_p, \
+    "a None duration from the speaker must not overwrite a known one"
+print("10. a speaker's missing duration cannot erase a known one OK")
 
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")

@@ -532,7 +532,10 @@ def entries_for(target, remote=False):
         jpg = os.path.join(d, f"{cid}.jpg")
         cover = jpg if os.path.exists(jpg) else local_cover(target)
         rows.append({"url": mp3, "title": b.get("title"), "id": str(cid),
-                     "image": cover, "art_url": b.get("cover")})
+                     "image": cover, "art_url": b.get("cover"),
+                     # the shelf knows the length; the speaker would
+                     # otherwise have to derive it from a signed url
+                     "dur_s": (b.get("duration_ms") or 0) / 1000.0 or None})
     return rows
 
 
