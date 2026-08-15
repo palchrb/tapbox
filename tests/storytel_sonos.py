@@ -169,12 +169,40 @@ print("9. the known length is sent to the speaker, not guessed OK")
 #     reports TrackDuration "0:00:00", which the sidecar turns into 0 —
 #     and an `is None` check let that zero through, so the screen showed
 #     a 0:00 duration and drew no bar (field 2026-08-15, the second time).
-src_p = src[src.index('if not snap.get("dur_s"):'):][:1000]
+src_p = src[src.index('if not snap.get("dur_s"):'):][:1400]
 assert "kept" in src_p and "dict(snap, dur_s=kept)" in src_p, \
     "a missing/zero duration from the speaker must not overwrite a known one"
 assert 'if not snap.get("dur_s"):' in src_p, \
     "the guard must be falsy — the speaker sends 0, not None"
 print("10. a speaker's zero duration cannot erase a known one OK")
+
+# 10b. AND IT MUST NOT CARRY ACROSS A TRACK CHANGE. This one destroys
+#      data, not pixels: save_state DELETES an episode's bookmark when
+#      pos > duration - RESUME_MIN_S ("finished"). A 12-minute
+#      Kokosbananas length dragged into an 8-hour Harry Potter wiped the
+#      child's place the moment it passed 11:40 — and the rule was only
+#      reachable at all because we made duration truthy that same day
+#      (field 2026-08-15).
+assert 'prev["uri"] == snap.get("uri")' in src_p, \
+    "a duration may only be carried forward for the SAME track"
+# the url-kind seed (the one storytel uses) is the LAST of the two
+seed = src[src.rindex('"dur_s": ep.get("dur_s")'):][:400]
+assert '"uri": body.get("uri")' in seed, \
+    "the seeded snapshot needs its uri, or the carry-forward can never match"
+print("10b. a duration is never carried across a track change OK")
+
+# 10c. and the deletion it guards is real: prove save_state drops the
+#      episode when the duration is wrong-and-short, so the guard above
+#      is protecting something that actually bites
+from vibb import bookmarks as _bm  # noqa: E402
+
+_k = "sonos-dur-probe"
+_bm.save_state(_k, "/x/hp1.mp3", 3000.0, "hp1", 28800.0)   # 50min into 8h
+assert (_bm.load_state(_k).get("episodes") or {}).get("hp1"), "kept"
+_bm.save_state(_k, "/x/hp1.mp3", 3000.0, "hp1", 720.0)     # wrong short dur
+assert not (_bm.load_state(_k).get("episodes") or {}).get("hp1"), \
+    "a short wrong duration DELETES the bookmark — that is what 10b stops"
+print("10c. a wrong short duration really does delete the bookmark OK")
 
 # 11. PAUSE MUST NOT REWIND THE BAR. While PLAYING the position is
 #     extrapolated forward by the snapshot's age plus the sidecar's own

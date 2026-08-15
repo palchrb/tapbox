@@ -1170,6 +1170,10 @@ class Orchestrator:
             # but no duration, so it draws the times and NO progress bar
             # until the speaker reports one
             "dur_s": ep.get("dur_s"),
+            # and the uri WITH it — the poller may only carry a duration
+            # forward for the SAME track, and a seed with no uri could
+            # never be matched (which would silently lose the length again)
+            "uri": body.get("uri"),
             "ours": True, "reachable": True, "seq": -1,
             "stale_s": 0.0,
             "volume": (self.sonos_snap or {}).get("volume")}
@@ -3938,11 +3942,18 @@ def _sonos_poller():
                 # the sidecar turns into 0, NOT None. Testing `is None`
                 # let that zero through and it erased the seeded duration,
                 # so the screen showed 0:00 and drew no bar at all (field
-                # 2026-08-15, twice: first no duration, then a zero one).
-                # Falsy is the correct test. The speaker's own value still
-                # wins the moment it reports a real one.
-                kept = (ORCH.sonos_snap or {}).get("dur_s")
-                if kept:
+                # 2026-08-15). Falsy is the correct test; the speaker's
+                # own value wins the moment it reports a real one.
+                #
+                # ONLY FOR THE SAME TRACK. Carrying a duration across a
+                # track change is destructive, not cosmetic: save_state
+                # DELETES an episode's bookmark when pos > duration - 20
+                # ("finished"), so a 12-minute Kokosbananas length dragged
+                # into an 8-hour Harry Potter wiped the child's place the
+                # moment it passed 11:40 (field 2026-08-15).
+                prev = ORCH.sonos_snap or {}
+                kept = prev.get("dur_s")
+                if kept and prev.get("uri") and prev["uri"] == snap.get("uri"):
                     snap = dict(snap, dur_s=kept)
             ORCH.sonos_snap = snap
             ORCH.sonos_snap_at = time.monotonic()
