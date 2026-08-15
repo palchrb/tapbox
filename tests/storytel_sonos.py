@@ -353,17 +353,25 @@ def bm_orch(rel, seek_at=-1e9):
     return o
 
 
-_bm.save_state(bm_key, "/c/331854.mp3", 3120.0, "331854", 33666.0)
-bm_orch(0.0)._sonos_bookmark_now()
-assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3120.0, \
-    "a speaker reporting 0 must not move the bookmark back"
-bm_orch(3200.0)._sonos_bookmark_now()
-assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3200.0, \
-    "ordinary forward progress must still write"
-bm_orch(60.0, seek_at=daemon.time.monotonic())._sonos_bookmark_now()
-assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 60.0, \
-    "a DELIBERATE seek back must be honoured"
-print("15. a bookmark cannot fall backwards unless something asked OK")
+def bm_run(prev, rel, seeked=False):
+    _bm.save_state(bm_key, "/c/331854.mp3", prev, "331854", 33666.0)
+    o = bm_orch(rel, seek_at=daemon.time.monotonic() if seeked else -1e9)
+    o._sonos_bookmark_now()
+    return _bm.load_state(bm_key)["episodes"]["331854"]["pos"]
+
+
+# the bug: the speaker restarted the track and nothing asked for it
+assert bm_run(3120.0, 5.0) == 3120.0, "a speaker restart must not win"
+# ...but every legitimate way backwards MUST still write. Keying on the
+# SIZE of the drop would have fought all three of these — the seek card
+# alone steps up to five minutes — which is why the guard keys on
+# landing at the TOP instead.
+assert bm_run(3120.0, 2400.0) == 2400.0, "a 12-minute manual step back"
+assert bm_run(10800.0, 9000.0) == 9000.0, "a 30-minute seek from hour 3"
+assert bm_run(3120.0, 5.0, seeked=True) == 5.0, "a deliberate seek to the top"
+assert bm_run(3120.0, 3200.0) == 3200.0, "ordinary forward listening"
+assert bm_run(200.0, 5.0) == 5.0, "a restart with little to lose"
+print("15. a track restart cannot eat the bookmark, and real seeks still write OK")
 
 # 16. PLAY AFTER A RESTART MUST RESUME, NOT RESTART. With no live
 #     session of ours, playpause used to send a bare /resume to a

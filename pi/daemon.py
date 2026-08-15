@@ -235,12 +235,22 @@ RESUME_LONG_GAP_S = float(os.environ.get("VIBB_RESUME_LONG_GAP", "120"))
 # load-bearing is that a restart can never be issued against something
 # long enough that losing the position costs hours.
 PREV_RESTART_MAX_S = float(os.environ.get("VIBB_PREV_RESTART_MAX", "1800"))
-# A saved position may not fall back further than this on its own. Only a
-# fault or an explicit user action can move a bookmark backwards, and the
-# explicit ones announce themselves (a /seek stamps _seek_at, starting an
-# episode arms the bookmark hold). Generous enough that a resume overlap
-# or a few seconds of poll jitter still writes normally.
-BM_REGRESS_MAX_S = float(os.environ.get("VIBB_BM_REGRESS_MAX", "120"))
+# A bookmark may not collapse to the TOP of a track on its own. The
+# signature of every way we have lost a position is the same: the
+# speaker reports a few seconds in, because it restarted the track
+# (a forgotten session, a blind resume, a refused seek). A human moving
+# backwards does not look like that — seeking ten minutes back from hour
+# three lands at 2h50m, not at 0 — so keying on "landed at the top"
+# rather than on the SIZE of the drop is what makes this guard sharp
+# instead of a threshold that fights real seeks.
+BM_RESTART_FLOOR_S = float(os.environ.get("VIBB_BM_RESTART_FLOOR", "90"))
+# ...and only when there was something substantial to lose.
+BM_REGRESS_MIN_S = float(os.environ.get("VIBB_BM_REGRESS_MIN", "300"))
+# How long an explicit user action (a /seek) keeps the guard open. The
+# speaker can take a while to report the new position, and 30s was too
+# tight — a deliberate seek back whose confirmation landed late would
+# have been refused, and then every write after it too.
+BM_USER_GRACE_S = float(os.environ.get("VIBB_BM_USER_GRACE", "180"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("VIBB_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("VIBB_SETTLE_TOL", "3"))
 # boot resume: silent grace before the speaker popup, and the wait tick
@@ -1060,26 +1070,30 @@ class Orchestrator:
         if hold and hold[0] == ep.get("id") and float(rel) < hold[1]:
             return  # refused seek: never overwrite the good position
         self.sonos_bm_hold = None
-        # NEVER LET A POSITION FALL BACKWARDS ON ITS OWN. Belt and braces
-        # over the hold above, because the hold only covers the one cause
-        # we know about: a refused seek. Every other way the speaker can
-        # report a near-zero position — a session it forgot, a restart
-        # that re-queued from the top, a track it re-opened — silently
-        # destroyed the child's place in an audiobook, repeatedly (field
-        # 2026-08-15). Playback only ever moves forward, so a large drop
-        # is never listening; it is always a fault or an explicit user
-        # action, and the explicit ones announce themselves: ORCH.seek
-        # stamps _seek_at, and starting an episode sets the hold.
+        # A BOOKMARK MAY NOT COLLAPSE TO THE TOP OF A TRACK ON ITS OWN.
+        # Belt and braces over the hold above, which only covers the one
+        # cause we know by name (a refused seek); the speaker found three
+        # other ways to report a few seconds in — a session it forgot, a
+        # blind resume onto an empty queue, a track it re-opened — and
+        # each silently destroyed the child's place (field 2026-08-15).
+        #
+        # Keyed on WHERE it landed, not on how far it fell. A human going
+        # backwards does not land at the top: seeking ten minutes back
+        # from hour three lands at 2h50m. So a threshold on the size of
+        # the drop would fight real seeks (the seek card steps up to five
+        # minutes) while this does not. And the deliberate ways to reach
+        # the top announce themselves — ORCH.seek stamps _seek_at, and
+        # starting an episode arms the hold above.
         try:
             prev = _bm_episode_pos(_bm_load(state_key(self.target)) or {},
                                    ep.get("id"), ep["url"])
         except Exception:
             prev = 0.0
-        if (prev - float(rel) > BM_REGRESS_MAX_S
-                and time.monotonic() - self._seek_at > 30):
-            log(f"sonos: refusing to move the bookmark back "
-                f"{int(prev - float(rel))}s ({int(prev)}s -> {int(rel)}s) — "
-                "nothing asked for that")
+        if (float(rel) < BM_RESTART_FLOOR_S and prev > BM_REGRESS_MIN_S
+                and time.monotonic() - self._seek_at > BM_USER_GRACE_S):
+            log(f"sonos: the speaker restarted the track ({int(prev)}s -> "
+                f"{int(rel)}s) and nothing asked for it — keeping the "
+                "bookmark")
             return
         _bm_save(state_key(self.target), ep["url"], float(rel),
                  episode_id=ep.get("id"), duration=snap.get("dur_s"))
