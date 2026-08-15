@@ -235,6 +235,12 @@ RESUME_LONG_GAP_S = float(os.environ.get("VIBB_RESUME_LONG_GAP", "120"))
 # load-bearing is that a restart can never be issued against something
 # long enough that losing the position costs hours.
 PREV_RESTART_MAX_S = float(os.environ.get("VIBB_PREV_RESTART_MAX", "1800"))
+# A saved position may not fall back further than this on its own. Only a
+# fault or an explicit user action can move a bookmark backwards, and the
+# explicit ones announce themselves (a /seek stamps _seek_at, starting an
+# episode arms the bookmark hold). Generous enough that a resume overlap
+# or a few seconds of poll jitter still writes normally.
+BM_REGRESS_MAX_S = float(os.environ.get("VIBB_BM_REGRESS_MAX", "120"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("VIBB_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("VIBB_SETTLE_TOL", "3"))
 # boot resume: silent grace before the speaker popup, and the wait tick
@@ -1054,6 +1060,27 @@ class Orchestrator:
         if hold and hold[0] == ep.get("id") and float(rel) < hold[1]:
             return  # refused seek: never overwrite the good position
         self.sonos_bm_hold = None
+        # NEVER LET A POSITION FALL BACKWARDS ON ITS OWN. Belt and braces
+        # over the hold above, because the hold only covers the one cause
+        # we know about: a refused seek. Every other way the speaker can
+        # report a near-zero position — a session it forgot, a restart
+        # that re-queued from the top, a track it re-opened — silently
+        # destroyed the child's place in an audiobook, repeatedly (field
+        # 2026-08-15). Playback only ever moves forward, so a large drop
+        # is never listening; it is always a fault or an explicit user
+        # action, and the explicit ones announce themselves: ORCH.seek
+        # stamps _seek_at, and starting an episode sets the hold.
+        try:
+            prev = _bm_episode_pos(_bm_load(state_key(self.target)) or {},
+                                   ep.get("id"), ep["url"])
+        except Exception:
+            prev = 0.0
+        if (prev - float(rel) > BM_REGRESS_MAX_S
+                and time.monotonic() - self._seek_at > 30):
+            log(f"sonos: refusing to move the bookmark back "
+                f"{int(prev - float(rel))}s ({int(prev)}s -> {int(rel)}s) — "
+                "nothing asked for that")
+            return
         _bm_save(state_key(self.target), ep["url"], float(rel),
                  episode_id=ep.get("id"), duration=snap.get("dur_s"))
 
@@ -1679,6 +1706,30 @@ class Orchestrator:
             except OSError:
                 return {"routed": None, "shuffle": None}
 
+    def _sonos_known_duration(self, uri):
+        """The length of the book in `uri`, from our own queue — or None.
+
+        A Sonos handed a signed url reports TrackDuration 0:00:00 and
+        never works the real length out, so the card had no progress bar
+        whenever we had not seeded one: after a daemon restart, and
+        whenever playback was started FROM THE SPEAKER rather than from
+        vibb (field 2026-08-15, "right sometimes"). Carrying the last
+        known value forward only helps when there IS one, which is why
+        it was intermittent. This looks the answer up instead, keyed on
+        the consumableId the signed url carries — exact, so it can never
+        put one book's length on another."""
+        if not _storytel.is_storytel(self.target or "") or not uri:
+            return None
+        want = (urllib.parse.parse_qs(
+            urllib.parse.urlsplit(str(uri)).query).get("consumableId")
+            or [None])[0]
+        if not want:
+            return None
+        for e in self.sonos_queue or []:
+            if e.get("id") == want:
+                return e.get("dur_s")
+        return None
+
     SEEK_TAIL_S = 5.0   # never land ON the end of a track
 
     def seek(self, position=None, delta=None):
@@ -1804,6 +1855,18 @@ class Orchestrator:
             if action in ("next", "prev"):
                 return self.sonos_step(1 if action == "next" else -1)
             if action == "playpause":
+                if not snap.get("ours") and self.target:
+                    # NO LIVE SESSION OF OURS. A bare /resume here is sent
+                    # to a speaker that no longer has our queue, so it
+                    # plays whatever it has from the top — which is how
+                    # pressing play right after a daemon restart made an
+                    # audiobook start over, while going out and back in
+                    # (a real /play) resumed correctly (field 2026-08-15).
+                    # Start the target properly instead: that reads the
+                    # bookmark and resumes where the child was.
+                    log("sonos: no live session — starting from the "
+                        "bookmark instead of a blind resume")
+                    return self.sonos_start_target(self.target)
                 if snap.get("transport") == "PLAYING":
                     self._sonos_bookmark_now()
                     code, _r = _renderer.post("/pause", guard)
@@ -3992,10 +4055,20 @@ def _sonos_poller():
                 # ("finished"), so a 12-minute Kokosbananas length dragged
                 # into an 8-hour Harry Potter wiped the child's place the
                 # moment it passed 11:40 (field 2026-08-15).
-                prev = ORCH.sonos_snap or {}
-                kept = prev.get("dur_s")
-                if kept and prev.get("uri") and prev["uri"] == snap.get("uri"):
-                    snap = dict(snap, dur_s=kept)
+                # Authoritative first: the shelf knows this book's length,
+                # keyed on the consumableId in the url. That covers the
+                # cases carrying-forward cannot — a restart, and playback
+                # started from the SPEAKER, where no earlier snapshot of
+                # ours exists at all.
+                known = ORCH._sonos_known_duration(snap.get("uri"))
+                if known:
+                    snap = dict(snap, dur_s=known)
+                else:
+                    prev = ORCH.sonos_snap or {}
+                    kept = prev.get("dur_s")
+                    if kept and prev.get("uri") \
+                            and prev["uri"] == snap.get("uri"):
+                        snap = dict(snap, dur_s=kept)
             ORCH.sonos_snap = snap
             ORCH.sonos_snap_at = time.monotonic()
         opt = ORCH.sonos_opt_tr

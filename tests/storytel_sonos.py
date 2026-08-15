@@ -181,7 +181,7 @@ print("9. the known length is sent to the speaker, not guessed OK")
 #     reports TrackDuration "0:00:00", which the sidecar turns into 0 —
 #     and an `is None` check let that zero through, so the screen showed
 #     a 0:00 duration and drew no bar (field 2026-08-15, the second time).
-src_p = src[src.index('if not snap.get("dur_s"):'):][:1400]
+src_p = src[src.index('if not snap.get("dur_s"):'):][:2200]
 assert "kept" in src_p and "dict(snap, dur_s=kept)" in src_p, \
     "a missing/zero duration from the speaker must not overwrite a known one"
 assert 'if not snap.get("dur_s"):' in src_p, \
@@ -257,6 +257,7 @@ o3.sonos_kind = "url"
 o3.sonos_idx = 0
 o3.sonos_queue = [{"url": "/c/331854.mp3", "id": "331854", "title": "HP1"}]
 o3._sonos_bm_last = 0.0
+o3._seek_at = -1e9
 o3.sonos_snap = {"rel_s": 39.0, "dur_s": 28800.0, "transport": "PLAYING",
                  "stale_s": 0, "ours": True}
 o3.sonos_snap_at = daemon.time.monotonic()
@@ -266,11 +267,13 @@ o3._sonos_bookmark_now(force=True)
 kept_pos = _bm.load_state(bm_key)["episodes"]["331854"]["pos"]
 assert kept_pos == 3120.0, f"the held bookmark must survive, got {kept_pos}"
 
-o3.sonos_bm_hold = None                     # the unguarded old behaviour
+# and with the hold gone the REGRESSION guard still catches it — belt
+# and braces, because the hold only knows about a refused seek
+o3.sonos_bm_hold = None
 o3._sonos_bm_last = 0.0
 o3._sonos_bookmark_now(force=True)
-assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 39.0, \
-    "without the hold it really is overwritten — that is the bug"
+assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3120.0, \
+    "the regression guard must catch what the hold does not"
 
 # and playback passing the held point releases it, so normal listening
 # still bookmarks
@@ -300,6 +303,90 @@ assert 'not (ORCH.sonos_snap or {}).get("dur_s")' in adopt, \
 assert 'ORCH.sonos_queue[ORCH.sonos_idx].get(' in adopt and "dur_s" in adopt, \
     "the length must come from the matched queue row"
 print("13. adopting a live session restores the book's length OK")
+
+# 14. AND THE LENGTH IS LOOKED UP, NOT INHERITED. Carrying the last
+#     known duration forward only works when there IS one — so the bar
+#     was right after vibb started a book and wrong after a restart or
+#     when playback was started FROM THE SPEAKER (field 2026-08-15:
+#     "right sometimes, not always"). The shelf knows every book's
+#     length; look it up by the consumableId the signed url carries.
+o4 = object.__new__(daemon.Orchestrator)
+o4.target = "storytel:series:113290"
+o4.sonos_queue = [{"id": "331854", "dur_s": 33666.0},
+                  {"id": "331855", "dur_s": 30000.0}]
+# the url names book 2, and book 1's id also appears inside the token
+u = ("https://fastly-ng.storytel.net/mp3encoder-128/uuid"
+     "?consumableId=331855&token=abc331854xyz")
+assert o4._sonos_known_duration(u) == 30000.0, \
+    "must key on the consumableId param, not a substring of the token"
+assert o4._sonos_known_duration("https://x/y?consumableId=999") is None
+assert o4._sonos_known_duration(None) is None
+o4.target = "https://radio.nrk.no/podkast/x"
+assert o4._sonos_known_duration(u) is None, "scoped to storytel targets"
+# and the poller prefers the lookup over the carry-forward
+poll = src[src.index("# Authoritative first:"):][:700]
+assert "_sonos_known_duration(snap.get(\"uri\"))" in poll and "else:" in poll, \
+    "look the length up first, fall back to carrying forward"
+print("14. the length is looked up per book, not inherited OK")
+
+# 15. A BOOKMARK MAY NOT FALL BACKWARDS ON ITS OWN. Belt and braces over
+#     the refused-seek hold, which only covers the one cause we know
+#     about. Every other way a speaker can report a near-zero position —
+#     a session it forgot, a restart that re-queued from the top, a
+#     re-opened track — destroyed the child's place, repeatedly (field
+#     2026-08-15, three separate reports). Playback only moves forward,
+#     so a large drop is a fault; the legitimate ways back announce
+#     themselves (a /seek stamps _seek_at, an episode start arms the
+#     hold).
+def bm_orch(rel, seek_at=-1e9):
+    o = object.__new__(daemon.Orchestrator)
+    o.target = BM_T
+    o.sonos_kind = "url"
+    o.sonos_idx = 0
+    o._sonos_bm_last = 0.0
+    o.sonos_bm_hold = None
+    o._seek_at = seek_at
+    o.sonos_queue = [{"url": "/c/331854.mp3", "id": "331854"}]
+    o.sonos_snap = {"rel_s": rel, "dur_s": 33666.0, "transport": "PLAYING",
+                    "stale_s": 0, "ours": True}
+    o.sonos_snap_at = daemon.time.monotonic()
+    return o
+
+
+_bm.save_state(bm_key, "/c/331854.mp3", 3120.0, "331854", 33666.0)
+bm_orch(0.0)._sonos_bookmark_now()
+assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3120.0, \
+    "a speaker reporting 0 must not move the bookmark back"
+bm_orch(3200.0)._sonos_bookmark_now()
+assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3200.0, \
+    "ordinary forward progress must still write"
+bm_orch(60.0, seek_at=daemon.time.monotonic())._sonos_bookmark_now()
+assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 60.0, \
+    "a DELIBERATE seek back must be honoured"
+print("15. a bookmark cannot fall backwards unless something asked OK")
+
+# 16. PLAY AFTER A RESTART MUST RESUME, NOT RESTART. With no live
+#     session of ours, playpause used to send a bare /resume to a
+#     speaker that no longer had our queue — so it played from the top.
+#     That is why pressing play right after a daemon restart started an
+#     audiobook over, while going out and back in (a real /play, which
+#     reads the bookmark) resumed correctly (field 2026-08-15).
+pp = []
+o5 = object.__new__(daemon.Orchestrator)
+o5.target = BM_T
+o5.sonos_snap, o5.sonos_snap_at = {}, 0.0          # stale / no session
+o5.sonos_start_target = lambda t, episode=None: pp.append(("start", t)) or {}
+daemon._renderer.read = lambda: {"renderer": "sonos", "uid": "U"}
+daemon._renderer.post = lambda p, b=None, **k: pp.append(("post", p)) or (200, {})
+o5._sonos_command("playpause")
+assert pp == [("start", BM_T)], f"must start from the bookmark, got {pp}"
+
+pp.clear()
+o5.sonos_snap = {"ours": True, "transport": "PAUSED_PLAYBACK", "rel_s": 10.0}
+o5.sonos_snap_at = daemon.time.monotonic()
+o5._sonos_command("playpause")
+assert pp == [("post", "/resume")], f"a live session still just resumes: {pp}"
+print("16. play with no live session resumes from the bookmark OK")
 
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")
