@@ -243,6 +243,12 @@ PREV_RESTART_MAX_S = float(os.environ.get("VIBB_PREV_RESTART_MAX", "1800"))
 # three lands at 2h50m, not at 0 — so keying on "landed at the top"
 # rather than on the SIZE of the drop is what makes this guard sharp
 # instead of a threshold that fights real seeks.
+# How close the speaker must land for a seek to count as confirmed, and
+# how long we hold our own value while it gets there. A SOAP seek plus
+# the poll cadence is a couple of seconds; 12 is slack without being a
+# window in which a real divergence hides.
+SONOS_SEEK_TOL_S = float(os.environ.get("VIBB_SONOS_SEEK_TOL", "6"))
+SONOS_SEEK_HOLD_S = float(os.environ.get("VIBB_SONOS_SEEK_HOLD", "12"))
 BM_RESTART_FLOOR_S = float(os.environ.get("VIBB_BM_RESTART_FLOOR", "90"))
 # ...and only when there was something substantial to lose.
 BM_REGRESS_MIN_S = float(os.environ.get("VIBB_BM_REGRESS_MIN", "300"))
@@ -386,6 +392,8 @@ class Orchestrator:
         self._spot_cmd_timeout_at = -1e9
         self._seek_at = -1e9         # last DELIBERATE seek; releases the
         # resume hold in _settle_position (same far-past reasoning above)
+        self.sonos_opt_pos = None    # (position, at): our own seek, held
+        # until the speaker lands near it — the twin of sonos_opt_tr
         self._sonos_seek_want = None  # coalesced mash target, like the
         self._sonos_seeking = False   # positional step above it
         self._crash_respawns = 0  # crashed-child heals this boot (max 2)
@@ -1795,6 +1803,10 @@ class Orchestrator:
             if self.sonos_snap:
                 self.sonos_snap = dict(self.sonos_snap, rel_s=tgt, stale_s=0)
                 self.sonos_snap_at = time.monotonic()
+            # ...and HOLD it: the poller replaces the snapshot wholesale
+            # every few seconds, and the speaker needs a moment to get
+            # there, so without this the bar snaps back mid-seek
+            self.sonos_opt_pos = (tgt, time.monotonic())
             self.sonos_bm_hold = None  # that hold protects a bookmark from
             # a REFUSED start-seek; a deliberate one outranks it
             self._seek_at = time.monotonic()
@@ -4093,6 +4105,25 @@ def _sonos_poller():
             else:
                 ORCH.sonos_snap = dict(ORCH.sonos_snap,
                                        transport=opt[0])
+        # The same hold for POSITION, and for the same reason. A seek
+        # patches the snapshot optimistically, then this poller replaces
+        # it wholesale with the speaker's report — and the speaker needs
+        # a second or two to actually get there. So the bar jumped to the
+        # target, snapped back to the old spot, then jumped forward
+        # again: the box and the speaker visibly disagreeing mid-seek
+        # (field 2026-08-15). Hold our value until the speaker lands
+        # near it, or the window passes.
+        optp = ORCH.sonos_opt_pos
+        if optp:
+            rel_now = snap.get("rel_s")
+            landed = (rel_now is not None
+                      and abs(float(rel_now) - optp[0]) <= SONOS_SEEK_TOL_S)
+            if landed or time.monotonic() - optp[1] > SONOS_SEEK_HOLD_S:
+                ORCH.sonos_opt_pos = None
+            else:
+                ORCH.sonos_snap = dict(ORCH.sonos_snap, rel_s=optp[0],
+                                       stale_s=0)
+                ORCH.sonos_snap_at = time.monotonic()
         stale = snap.get("stale_s")
         fresh = stale is not None and stale < 12
         if not fresh or not snap.get("ours"):

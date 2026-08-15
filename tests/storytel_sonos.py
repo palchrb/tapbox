@@ -396,5 +396,20 @@ o5._sonos_command("playpause")
 assert pp == [("post", "/resume")], f"a live session still just resumes: {pp}"
 print("16. play with no live session resumes from the bookmark OK")
 
+# 17. A SEEK MUST NOT SNAP BACK. The seek patches the snapshot
+#     optimistically, but the poller replaces it wholesale every few
+#     seconds and the speaker needs a moment to actually get there — so
+#     the bar jumped to the target, snapped back to the old spot, then
+#     jumped forward again: the box and the speaker visibly disagreeing
+#     mid-seek (field 2026-08-15). Held until the speaker lands near it,
+#     exactly like the transport flip already is.
+assert "sonos_opt_pos" in src, "a seek needs an optimistic position hold"
+hold = src[src.index("optp = ORCH.sonos_opt_pos"):][:600]
+assert "SONOS_SEEK_TOL_S" in hold and "SONOS_SEEK_HOLD_S" in hold, \
+    "release the hold when the speaker lands near it, or the window passes"
+assert "self.sonos_opt_pos = (tgt, time.monotonic())" in src, \
+    "ORCH.seek must arm the hold, not only patch the snapshot"
+print("17. a sonos seek holds its position instead of snapping back OK")
+
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")
