@@ -247,6 +247,10 @@ PREV_RESTART_MAX_S = float(os.environ.get("VIBB_PREV_RESTART_MAX", "1800"))
 # how long we hold our own value while it gets there. A SOAP seek plus
 # the poll cadence is a couple of seconds; 12 is slack without being a
 # window in which a real divergence hides.
+# How long a refused-seek hold may silence bookmark writes. Past this
+# much real playback the listening outranks the position we failed to
+# resume to — an unbounded hold loses the place just as surely.
+BM_HOLD_MAX_S = float(os.environ.get("VIBB_BM_HOLD_MAX", "120"))
 SONOS_SEEK_TOL_S = float(os.environ.get("VIBB_SONOS_SEEK_TOL", "6"))
 SONOS_SEEK_HOLD_S = float(os.environ.get("VIBB_SONOS_SEEK_HOLD", "12"))
 BM_RESTART_FLOOR_S = float(os.environ.get("VIBB_BM_RESTART_FLOOR", "90"))
@@ -332,6 +336,15 @@ bt_scan = _bt.bt_scan
 # --- the orchestrator ----------------------------------------------------------
 
 class Orchestrator:
+    # Class-level defaults for optional state read on hot paths. Tests
+    # build orchestrators with object.__new__ and set fields by hand, so
+    # anything read outside __init__'s reach needs a default here or a
+    # fixture somewhere gets an AttributeError — which on the poller
+    # thread would be fatal, not just noisy.
+    sonos_opt_pos = None
+    sonos_bm_hold = None
+    _seek_at = -1e9
+
     def __init__(self):
         self.lock = threading.Lock()
         self.child = None
@@ -1005,6 +1018,15 @@ class Orchestrator:
         """Last MEASURED position (+ extrapolation while PLAYING). Never
         extrapolates past ~60s of staleness, never invents from STOPPED."""
         snap = self.sonos_snap
+        # A seek we issued but the speaker has not reached yet: show the
+        # target, PINNED — no extrapolation on top, or the bar creeps
+        # forward between ticks and snaps back on each one. Dropped the
+        # moment the track changes, so a stale target can never be
+        # painted onto (or bookmarked as) the next book.
+        opt = self.sonos_opt_pos
+        if opt and time.monotonic() - opt[1] <= SONOS_SEEK_HOLD_S \
+                and opt[2] == snap.get("uri"):
+            return opt[0]
         rel = snap.get("rel_s")
         if rel is None or snap.get("transport") not in ("PLAYING",
                                                         "PAUSED_PLAYBACK"):
@@ -1076,7 +1098,16 @@ class Orchestrator:
         # finally hurt enough to see.
         hold = self.sonos_bm_hold
         if hold and hold[0] == ep.get("id") and float(rel) < hold[1]:
-            return  # refused seek: never overwrite the good position
+            # BOUNDED. Unbounded, a resume refused at 50 minutes meant no
+            # bookmark for the next 50 minutes of real listening — and
+            # switching back to the box then jumped FORWARD over what the
+            # child had just heard. Losing the place wearing the other
+            # hat (QA 2026-08-15). Past BM_HOLD_MAX_S of actual playback
+            # the listening is real and outranks the stale position.
+            if len(hold) < 3 or time.monotonic() - hold[2] < BM_HOLD_MAX_S:
+                return  # refused seek: never overwrite the good position
+            log("sonos: the refused-seek hold expired — this is real "
+                "listening now, bookmarking it")
         self.sonos_bm_hold = None
         # A BOOKMARK MAY NOT COLLAPSE TO THE TOP OF A TRACK ON ITS OWN.
         # Belt and braces over the hold above, which only covers the one
@@ -1103,8 +1134,15 @@ class Orchestrator:
                 f"{int(rel)}s) and nothing asked for it — keeping the "
                 "bookmark")
             return
+        # duration=None ON PURPOSE. save_state DELETES an episode slot
+        # when pos > duration - RESUME_MIN_S, and our dur_s may be the
+        # SHELF's length, not the speaker's. If Storytel's number is
+        # short by half a minute against the real file, the bookmark of a
+        # ten-hour book is destroyed near its end. The shelf length is
+        # good enough to draw a bar with and not good enough to delete
+        # data with (QA 2026-08-15).
         _bm_save(state_key(self.target), ep["url"], float(rel),
-                 episode_id=ep.get("id"), duration=snap.get("dur_s"))
+                 episode_id=ep.get("id"), duration=None)
 
     def _sonos_body(self, ep, uid, start_s):
         """/play body for one queue entry (contract: tests/sonos_contract).
@@ -1246,7 +1284,8 @@ class Orchestrator:
             # passes where we meant to resume: 52 minutes into a Harry
             # Potter book became 39 seconds without this (field
             # 2026-08-15). Same guard the sharelink path has had.
-            self.sonos_bm_hold = (ep.get("id"), start_s)
+            self.sonos_bm_hold = (ep.get("id"), start_s,
+                                  time.monotonic())
             log(f"sonos: seek refused — playing from the top, bookmark "
                 f"held at {int(start_s)}s")
         log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
@@ -1338,7 +1377,8 @@ class Orchestrator:
             if start_s >= 5 and not resp.get("sought"):
                 # seek refused: playback runs from 0 — the poller must
                 # NOT overwrite the good bookmark until we pass it
-                self.sonos_bm_hold = (rows[idx]["id"], start_s)
+                self.sonos_bm_hold = (rows[idx]["id"], start_s,
+                                      time.monotonic())
                 log("sonos: seek refused — bookmark held")
             self._persist()
         _sonos_wake.set()
@@ -1353,6 +1393,16 @@ class Orchestrator:
             return {"error": "renderer is not sonos"}
         if is_spotify(target):
             return self._sonos_start_spotify(target, rd, episode)
+        # We KNOW the renderer here — do not depend on a module global
+        # that a DIFFERENT THREAD sets at startup. The poller flips
+        # PREFER_REMOTE, so a play issued before that thread has run
+        # expanded to the downloaded books only; a book being streamed
+        # was then missing from the queue, the bookmark's episode id
+        # matched nothing, idx fell back to 0 — and the series restarted
+        # at book one from zero, bookmarking zero on the way (field
+        # 2026-08-15: "restart vibbd under sonos, play again, bookmark
+        # nulled").
+        content.PREFER_REMOTE = True
         entries = content.expand_entries(target)
         # A storytel row's url is a LOCAL path (the bookmark key); its
         # playable uri is minted per-play in _sonos_body, so it gets the
@@ -1797,16 +1847,16 @@ class Orchestrator:
                     self._sonos_seeking = True
                     threading.Thread(target=self._sonos_seek_worker,
                                      daemon=True).start()
-            # Optimistic, and HELD: without patching the snapshot the
-            # next /status extrapolates from the pre-seek rel_s and the
-            # bar snaps back for a poll (same fix as the transport flip).
-            if self.sonos_snap:
-                self.sonos_snap = dict(self.sonos_snap, rel_s=tgt, stale_s=0)
-                self.sonos_snap_at = time.monotonic()
-            # ...and HOLD it: the poller replaces the snapshot wholesale
-            # every few seconds, and the speaker needs a moment to get
-            # there, so without this the bar snaps back mid-seek
-            self.sonos_opt_pos = (tgt, time.monotonic())
+            # The optimistic position is a DISPLAY fact, and it is kept
+            # out of sonos_snap on purpose: that snapshot is also the
+            # bookmark's source of truth, so anything we write into it
+            # for the screen becomes a candidate for the disk. A held
+            # guess persisted as a real position is how a seek the
+            # speaker silently refused could bookmark a place it never
+            # went (QA 2026-08-15). _sonos_position() applies this; the
+            # snapshot stays measured-only.
+            self.sonos_opt_pos = (tgt, time.monotonic(),
+                                  (self.sonos_snap or {}).get("uri"))
             self.sonos_bm_hold = None  # that hold protects a bookmark from
             # a REFUSED start-seek; a deliberate one outranks it
             self._seek_at = time.monotonic()
@@ -4049,138 +4099,148 @@ def _sonos_poller():
         except _renderer.SidecarDown:
             continue  # keep the LAST snapshot — it goes stale honestly,
             #           and stale reads as not-playing; never zeroed
-        pend = ORCH.sonos_pending
-        turi_now = snap.get("track_spotify_uri")
-        if (pend and turi_now and turi_now != pend[0]
-                and time.monotonic() - pend[1] < 8):
-            # settle: the speaker still reports the PREVIOUS track.
-            # The index guard existed, but rel/dur leaked through and
-            # the bar showed 2:31 on the new title before snapping to
-            # 0:03 — on EVERY sharelink press (QA §1B). Keep the seeded
-            # position fields and extrapolation base.
-            old_s = ORCH.sonos_snap or {}
-            snap = dict(snap, rel_s=old_s.get("rel_s"),
-                        dur_s=old_s.get("dur_s"),
-                        track_title=old_s.get("track_title"),
-                        track_art=old_s.get("track_art"))
-            ORCH.sonos_snap = snap
-        else:
-            if not snap.get("dur_s"):
-                # Keep a length we already know. A Sonos handed a signed
-                # url with no file extension does not work the length out
-                # for itself — it reports TrackDuration "0:00:00", which
-                # the sidecar turns into 0, NOT None. Testing `is None`
-                # let that zero through and it erased the seeded duration,
-                # so the screen showed 0:00 and drew no bar at all (field
-                # 2026-08-15). Falsy is the correct test; the speaker's
-                # own value wins the moment it reports a real one.
-                #
-                # ONLY FOR THE SAME TRACK. Carrying a duration across a
-                # track change is destructive, not cosmetic: save_state
-                # DELETES an episode's bookmark when pos > duration - 20
-                # ("finished"), so a 12-minute Kokosbananas length dragged
-                # into an 8-hour Harry Potter wiped the child's place the
-                # moment it passed 11:40 (field 2026-08-15).
-                # Authoritative first: the shelf knows this book's length,
-                # keyed on the consumableId in the url. That covers the
-                # cases carrying-forward cannot — a restart, and playback
-                # started from the SPEAKER, where no earlier snapshot of
-                # ours exists at all.
-                known = ORCH._sonos_known_duration(snap.get("uri"))
-                if known:
-                    snap = dict(snap, dur_s=known)
-                else:
-                    prev = ORCH.sonos_snap or {}
-                    kept = prev.get("dur_s")
-                    if kept and prev.get("uri") \
-                            and prev["uri"] == snap.get("uri"):
-                        snap = dict(snap, dur_s=kept)
-            ORCH.sonos_snap = snap
-            ORCH.sonos_snap_at = time.monotonic()
-        opt = ORCH.sonos_opt_tr
-        if opt:
-            if (snap.get("transport") == opt[0]
-                    or time.monotonic() - opt[1] > 8):
-                ORCH.sonos_opt_tr = None  # confirmed or expired
-            else:
-                ORCH.sonos_snap = dict(ORCH.sonos_snap,
-                                       transport=opt[0])
-        # The same hold for POSITION, and for the same reason. A seek
-        # patches the snapshot optimistically, then this poller replaces
-        # it wholesale with the speaker's report — and the speaker needs
-        # a second or two to actually get there. So the bar jumped to the
-        # target, snapped back to the old spot, then jumped forward
-        # again: the box and the speaker visibly disagreeing mid-seek
-        # (field 2026-08-15). Hold our value until the speaker lands
-        # near it, or the window passes.
-        optp = ORCH.sonos_opt_pos
-        if optp:
-            rel_now = snap.get("rel_s")
-            landed = (rel_now is not None
-                      and abs(float(rel_now) - optp[0]) <= SONOS_SEEK_TOL_S)
-            if landed or time.monotonic() - optp[1] > SONOS_SEEK_HOLD_S:
-                ORCH.sonos_opt_pos = None
-            else:
-                ORCH.sonos_snap = dict(ORCH.sonos_snap, rel_s=optp[0],
-                                       stale_s=0)
-                ORCH.sonos_snap_at = time.monotonic()
-        stale = snap.get("stale_s")
-        fresh = stale is not None and stale < 12
-        if not fresh or not snap.get("ours"):
-            continue  # foreign/hijacked or old data: observe, never act
-        if ORCH.sonos_kind == "spotify_sharelink":
-            # the playing track's own decoded uri is the inbound
-            # authority — exact under every queue divergence; Track is
-            # only a cross-check (architect Q1). A missing uri leaves
-            # sonos_idx UNCHANGED: coercing to 0 would rewrite the
-            # bookmark to track 1.
-            turi = snap.get("track_spotify_uri")
+        try:
+
             pend = ORCH.sonos_pending
-            if pend and turi == pend[0]:
-                ORCH.sonos_pending = None  # our jump landed
-            elif pend and time.monotonic() - pend[1] < 8:
-                turi = None  # still settling: the speaker reports the
-                #              OLD track — adopting it yanked the index
-                #              backwards under a mash (field 2026-08-09)
-            elif pend:
-                ORCH.sonos_pending = None  # settle expired — trust reality
-            if turi:
-                hit = next((i for i, r in enumerate(ORCH.sonos_queue)
-                            if r["id"] == turi), None)
-                if hit is not None:
-                    ORCH.sonos_idx = hit
-                elif snap.get("ours"):
-                    ORCH.sonos_map_trusted = False
-        rel, dur = snap.get("rel_s"), snap.get("dur_s")
-        if (ORCH.sonos_kind in ("url", "spotify_sharelink")
-                and rel is not None
-                and snap.get("transport") in ("PLAYING",
-                                              "PAUSED_PLAYBACK")):
-            ORCH._sonos_bookmark_now(force=False)
-            ends_near = (ends_near + 1
-                         if dur and rel > dur - 20 else 0)
-        if (ORCH.sonos_kind == "url" and ORCH.sonos_idx is not None
-                and snap.get("transport") == "STOPPED" and ends_near):
-            # the episode ran off its end (STOPPED right after we saw the
-            # tail) — OUR queue advances; a stop far from the end is a
-            # human and stays stopped
-            ends_near = 0
-            nxt = ORCH.sonos_idx + 1
-            if nxt < len(ORCH.sonos_queue):
-                log("sonos: episode ended — next")
-                ORCH._sonos_play_entry(nxt, 0.0)
+            turi_now = snap.get("track_spotify_uri")
+            if (pend and turi_now and turi_now != pend[0]
+                    and time.monotonic() - pend[1] < 8):
+                # settle: the speaker still reports the PREVIOUS track.
+                # The index guard existed, but rel/dur leaked through and
+                # the bar showed 2:31 on the new title before snapping to
+                # 0:03 — on EVERY sharelink press (QA §1B). Keep the seeded
+                # position fields and extrapolation base.
+                old_s = ORCH.sonos_snap or {}
+                snap = dict(snap, rel_s=old_s.get("rel_s"),
+                            dur_s=old_s.get("dur_s"),
+                            track_title=old_s.get("track_title"),
+                            track_art=old_s.get("track_art"))
+                ORCH.sonos_snap = snap
             else:
-                # queue ran out — tell the sidecar the session is over,
-                # or it keeps polling an idle speaker (/stop is the only
-                # verb that disarms it; RF power audit 2026-08-10 #1)
-                log("sonos: queue finished — stop")
-                try:
-                    _renderer.post("/stop",
-                                   {"if_uid": _renderer.read().get("uid")})
-                except _renderer.SidecarDown:
-                    pass
+                if not snap.get("dur_s"):
+                    # Keep a length we already know. A Sonos handed a signed
+                    # url with no file extension does not work the length out
+                    # for itself — it reports TrackDuration "0:00:00", which
+                    # the sidecar turns into 0, NOT None. Testing `is None`
+                    # let that zero through and it erased the seeded duration,
+                    # so the screen showed 0:00 and drew no bar at all (field
+                    # 2026-08-15). Falsy is the correct test; the speaker's
+                    # own value wins the moment it reports a real one.
+                    #
+                    # ONLY FOR THE SAME TRACK. Carrying a duration across a
+                    # track change is destructive, not cosmetic: save_state
+                    # DELETES an episode's bookmark when pos > duration - 20
+                    # ("finished"), so a 12-minute Kokosbananas length dragged
+                    # into an 8-hour Harry Potter wiped the child's place the
+                    # moment it passed 11:40 (field 2026-08-15).
+                    # Authoritative first: the shelf knows this book's length,
+                    # keyed on the consumableId in the url. That covers the
+                    # cases carrying-forward cannot — a restart, and playback
+                    # started from the SPEAKER, where no earlier snapshot of
+                    # ours exists at all.
+                    known = ORCH._sonos_known_duration(snap.get("uri"))
+                    if known:
+                        snap = dict(snap, dur_s=known)
+                    else:
+                        prev = ORCH.sonos_snap or {}
+                        kept = prev.get("dur_s")
+                        if kept and prev.get("uri") \
+                                and prev["uri"] == snap.get("uri"):
+                            snap = dict(snap, dur_s=kept)
+                ORCH.sonos_snap = snap
+                ORCH.sonos_snap_at = time.monotonic()
+            opt = ORCH.sonos_opt_tr
+            if opt:
+                if (snap.get("transport") == opt[0]
+                        or time.monotonic() - opt[1] > 8):
+                    ORCH.sonos_opt_tr = None  # confirmed or expired
+                else:
+                    ORCH.sonos_snap = dict(ORCH.sonos_snap,
+                                           transport=opt[0])
+            # The same hold for POSITION, and for the same reason. A seek
+            # patches the snapshot optimistically, then this poller replaces
+            # it wholesale with the speaker's report — and the speaker needs
+            # a second or two to actually get there. So the bar jumped to the
+            # target, snapped back to the old spot, then jumped forward
+            # again: the box and the speaker visibly disagreeing mid-seek
+            # (field 2026-08-15). Hold our value until the speaker lands
+            # near it, or the window passes.
+            optp = ORCH.sonos_opt_pos
+            if optp:
+                # Clear only — the hold lives in _sonos_position(), never in
+                # the snapshot, so the bookmark can never persist our guess.
+                rel_now = snap.get("rel_s")
+                landed = (rel_now is not None
+                          and abs(float(rel_now) - optp[0]) <= SONOS_SEEK_TOL_S)
+                if (landed or time.monotonic() - optp[1] > SONOS_SEEK_HOLD_S
+                        or optp[2] != snap.get("uri")):
+                    ORCH.sonos_opt_pos = None
+            stale = snap.get("stale_s")
+            fresh = stale is not None and stale < 12
+            if not fresh or not snap.get("ours"):
+                continue  # foreign/hijacked or old data: observe, never act
+            if ORCH.sonos_kind == "spotify_sharelink":
+                # the playing track's own decoded uri is the inbound
+                # authority — exact under every queue divergence; Track is
+                # only a cross-check (architect Q1). A missing uri leaves
+                # sonos_idx UNCHANGED: coercing to 0 would rewrite the
+                # bookmark to track 1.
+                turi = snap.get("track_spotify_uri")
+                pend = ORCH.sonos_pending
+                if pend and turi == pend[0]:
+                    ORCH.sonos_pending = None  # our jump landed
+                elif pend and time.monotonic() - pend[1] < 8:
+                    turi = None  # still settling: the speaker reports the
+                    #              OLD track — adopting it yanked the index
+                    #              backwards under a mash (field 2026-08-09)
+                elif pend:
+                    ORCH.sonos_pending = None  # settle expired — trust reality
+                if turi:
+                    hit = next((i for i, r in enumerate(ORCH.sonos_queue)
+                                if r["id"] == turi), None)
+                    if hit is not None:
+                        ORCH.sonos_idx = hit
+                    elif snap.get("ours"):
+                        ORCH.sonos_map_trusted = False
+            rel, dur = snap.get("rel_s"), snap.get("dur_s")
+            if (ORCH.sonos_kind in ("url", "spotify_sharelink")
+                    and rel is not None
+                    and snap.get("transport") in ("PLAYING",
+                                                  "PAUSED_PLAYBACK")):
+                ORCH._sonos_bookmark_now(force=False)
+                ends_near = (ends_near + 1
+                             if dur and rel > dur - 20 else 0)
+            if (ORCH.sonos_kind == "url" and ORCH.sonos_idx is not None
+                    and snap.get("transport") == "STOPPED" and ends_near):
+                # the episode ran off its end (STOPPED right after we saw the
+                # tail) — OUR queue advances; a stop far from the end is a
+                # human and stays stopped
+                ends_near = 0
+                nxt = ORCH.sonos_idx + 1
+                if nxt < len(ORCH.sonos_queue):
+                    log("sonos: episode ended — next")
+                    ORCH._sonos_play_entry(nxt, 0.0)
+                else:
+                    # queue ran out — tell the sidecar the session is over,
+                    # or it keeps polling an idle speaker (/stop is the only
+                    # verb that disarms it; RF power audit 2026-08-10 #1)
+                    log("sonos: queue finished — stop")
+                    try:
+                        _renderer.post("/stop",
+                                       {"if_uid": _renderer.read().get("uid")})
+                    except _renderer.SidecarDown:
+                        pass
 
 
+        except Exception as exc:
+            # ONE guard for the whole tick. Everything above was bare:
+            # a ValueError from a malformed url, an OSError from a full
+            # SD card inside the bookmark write — and this thread dies,
+            # taking snapshots, bookmarks and queue advance with it for
+            # the rest of the session. The code already defended point
+            # by point ('never let a poller tick raise'); one guard is
+            # cheaper and cannot be forgotten (QA 2026-08-15).
+            log(f"sonos poll tick failed: {exc!r}")
 _storytel_wake = threading.Event()
 _STORYTEL_MIRRORED = {}   # consumableId -> pos_ms last noted, in-process
 #                           dedup so a steady position pushes nothing

@@ -95,7 +95,8 @@ assert "st = None if no_resume else load_state(key)" in src, \
     "a tap on an 'always from start' entry must still ignore the bookmark"
 assert "if not live and not no_resume:" not in src, \
     "the WRITE gate must be gone — the session needs the position"
-assert "                if not live:" in src
+assert "if not live and not top_guard:" in src, \
+    "the write gate is live + the start-of-track guard, nothing about resume"
 print("5. resume:false: writes a position, still taps to track 1 OK")
 
 # 6. boot resume asks for the session, not the entry's flag — otherwise

@@ -262,7 +262,7 @@ o3.sonos_snap = {"rel_s": 39.0, "dur_s": 28800.0, "transport": "PLAYING",
                  "stale_s": 0, "ours": True}
 o3.sonos_snap_at = daemon.time.monotonic()
 
-o3.sonos_bm_hold = ("331854", 3120.0)       # as the refused seek sets it
+o3.sonos_bm_hold = ("331854", 3120.0, daemon.time.monotonic())
 o3._sonos_bookmark_now(force=True)
 kept_pos = _bm.load_state(bm_key)["episodes"]["331854"]["pos"]
 assert kept_pos == 3120.0, f"the held bookmark must survive, got {kept_pos}"
@@ -278,7 +278,7 @@ assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3120.0, \
 # and playback passing the held point releases it, so normal listening
 # still bookmarks
 _bm.save_state(bm_key, "/c/331854.mp3", 3120.0, "331854", 28800.0)
-o3.sonos_bm_hold = ("331854", 3120.0)
+o3.sonos_bm_hold = ("331854", 3120.0, daemon.time.monotonic())
 o3.sonos_snap = dict(o3.sonos_snap, rel_s=3200.0)
 o3._sonos_bm_last = 0.0
 o3._sonos_bookmark_now(force=True)
@@ -287,8 +287,11 @@ assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3200.0, \
 assert o3.sonos_bm_hold is None, "and the hold is released"
 
 # the url play path must SET the hold, not just log that it kept one
-assert 'self.sonos_bm_hold = (ep.get("id"), start_s)' in src, \
+assert 'self.sonos_bm_hold = (ep.get("id"), start_s,' in src, \
     "the refused-seek branch must arm the hold, not merely claim to"
+assert "BM_HOLD_MAX_S" in src, \
+    "and the hold must be BOUNDED — unbounded it silences the writes " \
+    "that matter, which loses the place just as surely"
 print("12. a refused resume-seek holds the bookmark instead of eating it OK")
 
 # 13. ADOPTING A LIVE SESSION MUST RESTORE THE LENGTH. The snapshot the
@@ -407,9 +410,43 @@ assert "sonos_opt_pos" in src, "a seek needs an optimistic position hold"
 hold = src[src.index("optp = ORCH.sonos_opt_pos"):][:600]
 assert "SONOS_SEEK_TOL_S" in hold and "SONOS_SEEK_HOLD_S" in hold, \
     "release the hold when the speaker lands near it, or the window passes"
-assert "self.sonos_opt_pos = (tgt, time.monotonic())" in src, \
-    "ORCH.seek must arm the hold, not only patch the snapshot"
+assert "self.sonos_opt_pos = (tgt, time.monotonic()," in src, \
+    "ORCH.seek must arm the hold"
+assert "self.sonos_snap = dict(self.sonos_snap, rel_s=tgt" not in src, \
+    "and must NOT write that guess into the bookmark's source snapshot"
 print("17. a sonos seek holds its position instead of snapping back OK")
+
+# 18. THE RENDERER IS KNOWN AT PLAY TIME — do not depend on a global a
+#     DIFFERENT THREAD sets at startup. The poller flips PREFER_REMOTE,
+#     so a play issued before that thread ran expanded to the downloaded
+#     books only; a streamed book was missing from the queue, the
+#     bookmark's episode id matched nothing, idx fell back to 0, and the
+#     series restarted at book one from zero — bookmarking zero on the
+#     way (field 2026-08-15: restart vibbd under sonos, play, place gone).
+sst = src[src.index("def sonos_start_target"):][:1400]
+assert "content.PREFER_REMOTE = True" in sst, \
+    "sonos_start_target must set PREFER_REMOTE itself, not inherit a race"
+assert sst.index("content.PREFER_REMOTE = True") < \
+    sst.index("entries = content.expand_entries(target)"), \
+    "and it must be set BEFORE the expansion it governs"
+print("18. the sonos play path expands remote-aware without a race OK")
+
+# 19. THE SHELF LENGTH MAY NOT DELETE A BOOKMARK. save_state drops an
+#     episode when pos > duration - RESUME_MIN_S, and our duration can
+#     be Storytel's number rather than the speaker's. If it is short by
+#     half a minute against the real file, a ten-hour book loses its
+#     place near the end. Good enough to draw a bar, not to delete data.
+assert 'episode_id=ep.get("id"), duration=None)' in src, \
+    "the sonos bookmark write must not pass a shelf-derived duration"
+print("19. the shelf length cannot delete a bookmark OK")
+
+# 20. and the poller tick is guarded WHOLESALE: a ValueError from a bad
+#     url or an OSError from a full SD card inside the bookmark write
+#     used to kill the thread, taking snapshots, bookmarks and queue
+#     advance with it for the rest of the session.
+assert "sonos poll tick failed" in src, \
+    "one guard around the whole tick, not point defences"
+print("20. a raising poller tick cannot kill the thread OK")
 
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")

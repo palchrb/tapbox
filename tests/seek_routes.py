@@ -148,10 +148,15 @@ try:
     assert isinstance(rec.sonos[0][1]["s"], float), "seconds, not h:m:s"
     print("7. sonos is routed first, coalesced, and never leaks OK")
 
-    # 8. the snapshot is patched optimistically, or /status extrapolates
-    #    from the PRE-seek position and the bar snaps back for a poll
-    assert o.sonos_snap["rel_s"] == r["position"], o.sonos_snap
-    assert o.sonos_snap["stale_s"] == 0
+    # 8. the optimistic position is held for the DISPLAY only, and is
+    #    deliberately NOT written into sonos_snap: that snapshot is also
+    #    the bookmark's source of truth, and a held guess must never
+    #    reach the disk (QA 2026-08-15).
+    assert o.sonos_snap["rel_s"] == 50.0, "the snapshot must stay MEASURED"
+    assert o.sonos_opt_pos and o.sonos_opt_pos[0] == r["position"], \
+        "the seek target is held for display"
+    assert o._sonos_position() == r["position"], \
+        "and the position the screen reads is the held target"
     assert o.sonos_bm_hold is None, \
         "a deliberate seek outranks the refused-seek bookmark hold"
     print("8. the sonos snapshot is patched and the bm hold released OK")
