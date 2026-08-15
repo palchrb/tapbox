@@ -3224,7 +3224,7 @@ class App:
         if self.view != "now":
             d.rounded_rectangle([50, 84, 190, 136], radius=8, fill=(30, 30, 45))
             shown = "–" if self.volume_shown is None else self.volume_shown
-            d.text((W // 2, 92), f"Volum {shown}", font=F_MED,
+            d.text((W // 2, 92), f"Volume {shown}", font=F_MED,
                    fill=HILITE, anchor="ma")
             d.text((60, 116), "B  -", font=F_SMALL, fill=DIM)
             d.text((W - 60, 116), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
@@ -3239,7 +3239,7 @@ class App:
         y1, y2, xl, xr = 107, 134, 54, 186
         if card == "seek":
             if self.seek_shown is None:
-                d.text((W // 2, y1), "Spol", font=F_MED, fill=DIM, anchor="ma")
+                d.text((W // 2, y1), "Seek", font=F_MED, fill=DIM, anchor="ma")
             else:
                 sign = "+" if self.seek_shown > 0 else "-"
                 d.text((W // 2, y1), f"{sign} {fmt_time(abs(self.seek_shown))}",
@@ -3250,13 +3250,13 @@ class App:
             _seek_arrows(d, xr - 14, y2 + 7, DIM, back=False)
         elif card == "shuf":
             on = bool((self.status or {}).get("shuffle"))
-            d.text((W // 2, y1), f"Shuffle {'på' if on else 'av'}",
+            d.text((W // 2, y1), f"Shuffle {'on' if on else 'off'}",
                    font=F_MED, fill=HILITE if on else DIM, anchor="ma")
-            d.text((xl, y2), "B  av", font=F_SMALL, fill=DIM)
-            d.text((xr, y2), "på  Y", font=F_SMALL, fill=DIM, anchor="ra")
+            d.text((xl, y2), "B  off", font=F_SMALL, fill=DIM)
+            d.text((xr, y2), "on  Y", font=F_SMALL, fill=DIM, anchor="ra")
         else:
             shown = "–" if self.volume_shown is None else self.volume_shown
-            d.text((W // 2, y1), f"Volum {shown}", font=F_MED,
+            d.text((W // 2, y1), f"Volume {shown}", font=F_MED,
                    fill=HILITE, anchor="ma")
             d.text((xl, y2), "B  -", font=F_SMALL, fill=DIM)
             d.text((xr, y2), "+ Y", font=F_SMALL, fill=DIM, anchor="ra")
@@ -3861,8 +3861,8 @@ class App:
                 # a card's POST came back with nothing routed: sonos, a
                 # live stream, or no session at all. Drawing belongs on
                 # this thread, never on the poster's — same rule as below.
-                msg = ("Kan ikke stokke om her" if self.shuffle_refused
-                       else "Kan ikke spole her")
+                msg = ("Can't shuffle here" if self.shuffle_refused
+                       else "Can't seek here")
                 self.shuffle_refused = self.seek_refused = False
                 self.vol_mode_until = self.volume_flash = 0.0  # the card
                 #   would otherwise outlive the message that replaced it

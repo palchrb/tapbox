@@ -877,7 +877,7 @@ function renderStorytelShelf() {
 }
 
 async function addCheckedStorytel() {
-  const section = $("#storytel-section").value.trim() || "Lydbøker";
+  const section = $("#storytel-section").value.trim() || "Audiobooks";
   const picks = [...document.querySelectorAll("#storytel-shelf input:checked")]
     .filter((cb) => !cb.disabled)
     .map((cb) => STORYTEL_SHELF.find((g) => g.target === cb.dataset.target))
