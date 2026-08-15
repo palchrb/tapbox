@@ -164,12 +164,39 @@ assert body["duration_s"] == 721.9, \
     "the length must ride in the /play body, or Sonos has to guess it"
 print("9. the known length is sent to the speaker, not guessed OK")
 
-# 10. and a speaker that reports NO duration must not erase one we have —
-#     letting that None through made the bar appear and then vanish
-src_p = src[src.index("if snap.get(\"dur_s\") is None:"):][:900]
+# 10. and a speaker that reports no usable duration must not erase one we
+#     have. The test is FALSY, not `is None`: a Sonos handed a signed url
+#     reports TrackDuration "0:00:00", which the sidecar turns into 0 —
+#     and an `is None` check let that zero through, so the screen showed
+#     a 0:00 duration and drew no bar (field 2026-08-15, the second time).
+src_p = src[src.index('if not snap.get("dur_s"):'):][:1000]
 assert "kept" in src_p and "dict(snap, dur_s=kept)" in src_p, \
-    "a None duration from the speaker must not overwrite a known one"
-print("10. a speaker's missing duration cannot erase a known one OK")
+    "a missing/zero duration from the speaker must not overwrite a known one"
+assert 'if not snap.get("dur_s"):' in src_p, \
+    "the guard must be falsy — the speaker sends 0, not None"
+print("10. a speaker's zero duration cannot erase a known one OK")
+
+# 11. PAUSE MUST NOT REWIND THE BAR. While PLAYING the position is
+#     extrapolated forward by the snapshot's age plus the sidecar's own
+#     measurement lag, so the bar keeps up with the Sonos app. Pausing
+#     stops that — and falling back to the raw measurement made the bar
+#     jump visibly BACKWARDS (5s in the field, 2026-08-15) and forwards
+#     again on resume. The audio was always right; the display was not.
+o2 = object.__new__(daemon.Orchestrator)
+o2.sonos_snap = {"rel_s": 100.0, "dur_s": 700.0, "transport": "PLAYING",
+                 "stale_s": 1.0}
+o2.sonos_snap_at = daemon.time.monotonic() - 4.0
+playing_at = o2._sonos_position()
+assert round(playing_at) == 105, playing_at      # 100 + 4s age + 1s lag
+frozen = o2._sonos_position()
+o2.sonos_snap = dict(o2.sonos_snap, transport="PAUSED_PLAYBACK",
+                     rel_s=frozen, stale_s=0)
+o2.sonos_snap_at = daemon.time.monotonic()
+assert round(o2._sonos_position()) == round(playing_at), \
+    "pausing must freeze the shown position, not rewind to the raw one"
+assert "frozen = self._sonos_position()" in src, \
+    "the pause verb must freeze the extrapolated position"
+print("11. pausing freezes the bar instead of rewinding it OK")
 
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")

@@ -1792,8 +1792,20 @@ class Orchestrator:
                     # optimistic flip, HELD until the sidecar confirms:
                     # the post-verb wake used to fetch the still-stale
                     # snapshot and flip the card back (QA §1A)
-                    self.sonos_snap = dict(self.sonos_snap,
-                                           transport=new_tr)
+                    patch = {"transport": new_tr}
+                    if new_tr == "PAUSED_PLAYBACK":
+                        # FREEZE the extrapolated position, don't fall back
+                        # to the raw measurement. While PLAYING the bar
+                        # adds the snapshot's age (and the sidecar's own
+                        # measurement lag) so it keeps up with the Sonos
+                        # app; pausing stops that, and without this the bar
+                        # visibly jumps BACKWARDS by exactly that much and
+                        # forwards again on resume (field 2026-08-15).
+                        frozen = self._sonos_position()
+                        if frozen is not None:
+                            patch["rel_s"] = frozen
+                            patch["stale_s"] = 0
+                    self.sonos_snap = dict(self.sonos_snap, **patch)
                     self.sonos_snap_at = time.monotonic()
                     self.sonos_opt_tr = (new_tr, time.monotonic())
                 _sonos_wake.set()  # re-poll now: the card should flip fast
@@ -3919,13 +3931,16 @@ def _sonos_poller():
                         track_art=old_s.get("track_art"))
             ORCH.sonos_snap = snap
         else:
-            if snap.get("dur_s") is None:
+            if not snap.get("dur_s"):
                 # Keep a length we already know. A Sonos handed a signed
-                # url with no file extension reports 0:00 until it has
-                # buffered, and letting that None overwrite the seeded
-                # duration made the progress bar appear and then vanish
-                # (field 2026-08-15). The speaker's own value wins the
-                # moment it has one.
+                # url with no file extension does not work the length out
+                # for itself — it reports TrackDuration "0:00:00", which
+                # the sidecar turns into 0, NOT None. Testing `is None`
+                # let that zero through and it erased the seeded duration,
+                # so the screen showed 0:00 and drew no bar at all (field
+                # 2026-08-15, twice: first no duration, then a zero one).
+                # Falsy is the correct test. The speaker's own value still
+                # wins the moment it reports a real one.
                 kept = (ORCH.sonos_snap or {}).get("dur_s")
                 if kept:
                     snap = dict(snap, dur_s=kept)
