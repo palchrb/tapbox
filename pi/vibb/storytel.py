@@ -374,12 +374,17 @@ def bookshelf_cached(ttl=RAW_SHELF_TTL_S):
     return raw
 
 
-def asset_url(consumable_id):
+def asset_url(consumable_id, timeout=15):
     """getAudioStreamUrl. The signed CDN mp3 for one book, from the 302
-    Location — NOT followed, so the bearer never rides to the CDN. Raises
-    OSError on a locked/geo/absent title (no redirect) or when
-    unreachable."""
-    status, headers, _b = _api(ASSET.format(cid=consumable_id), follow=False)
+    Location — NOT followed, so the bearer never rides to the CDN.
+
+    Raises OSError on a locked/geo/absent title (no redirect) or when
+    unreachable, and RuntimeError from login() when unconfigured or
+    refused. `timeout` matters on the sonos play path, which mints this
+    inline before a SOAP call: the default would let a login retry stack
+    up to ~70s while the renderer card goes 'unreachable' at 15s."""
+    status, headers, _b = _api(ASSET.format(cid=consumable_id), follow=False,
+                               timeout=timeout)
     loc = headers.get("Location") or headers.get("location")
     if not loc:
         raise OSError(f"storytel: no audio url for {consumable_id} ({status})")
@@ -496,14 +501,22 @@ def local_cover(target):
     return p if os.path.exists(p) else None
 
 
-def entries_for(target):
-    """target -> [{'url','title','id','image'}] for its DOWNLOADED books.
+def entries_for(target, remote=False):
+    """target -> [{'url','title','id','image'}] in reading order.
 
-    Download-only by design: a signed CDN url expires and cannot be
-    cached, so a book that is not on disk is OMITTED rather than streamed.
-    Reads shelf.json and the local mp3s — ZERO network, so this is safe on
-    the playback path (STALE_OK) and offline, exactly like a cached feed.
-    Books come back in reading order."""
+    Locally (remote=False) this is DOWNLOAD-ONLY: a book without its mp3
+    on disk is OMITTED, because a signed CDN url expires and cannot be
+    cached in a catalog. Reads shelf.json and the local files — ZERO
+    network, so it is safe on the playback path (STALE_OK) and offline,
+    exactly like a cached feed.
+
+    remote=True (a sonos renderer) returns EVERY book instead: the
+    speaker fetches from the CDN, so a book need not be downloaded at all
+    to play in another room. `url` stays the LOCAL PATH either way — it
+    is the bookmark and reconcile key, and inventing an http placeholder
+    would leak a short-lived signed token into the state file. The real
+    uri is minted at the last moment in the daemon's _sonos_body.
+    `art_url` rides along because Sonos cannot fetch a local cover."""
     shelf = read_shelf(target)
     if not shelf:
         return []
@@ -511,13 +524,15 @@ def entries_for(target):
     rows = []
     for b in shelf.get("books") or []:
         cid = b.get("consumable_id")
+        if not cid:
+            continue
         mp3 = os.path.join(d, f"{cid}.mp3")
-        if not cid or not os.path.exists(mp3):
+        if not remote and not os.path.exists(mp3):
             continue                       # not downloaded yet -> omit
         jpg = os.path.join(d, f"{cid}.jpg")
         cover = jpg if os.path.exists(jpg) else local_cover(target)
         rows.append({"url": mp3, "title": b.get("title"), "id": str(cid),
-                     "image": cover})
+                     "image": cover, "art_url": b.get("cover")})
     return rows
 
 

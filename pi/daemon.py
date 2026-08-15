@@ -1069,6 +1069,26 @@ class Orchestrator:
         if m and ep.get("id"):
             body.update(kind="nrk_program", uri=self.target,
                         series=m.group(1), program_id=ep["id"])
+        elif _storytel.is_storytel(self.target or ""):
+            # A storytel book is a LOCAL file; a Sonos cannot play a path.
+            # Mint the signed CDN url HERE, milliseconds before the SOAP
+            # /play, because it is short-lived — that timing is the whole
+            # trick, and it means the box need not have downloaded the
+            # book at all to play it in another room.
+            #
+            # NEVER raises: this is called from _sonos_step_worker and
+            # _sonos_poller, neither of which guards it, and an escape
+            # there kills the thread — leaving next/prev dead until a
+            # daemon restart, or losing snapshots and bookmarks for the
+            # session. login() raises RuntimeError (unconfigured,
+            # refused, inside the refused-login cooldown) as well as
+            # OSError, so both are caught.
+            try:
+                body.update(kind="url",
+                            uri=_storytel.asset_url(ep["id"], timeout=6),
+                            art=ep.get("art_url") or art)
+            except (OSError, RuntimeError) as e:
+                return {"error": f"storytel url unavailable: {e}"}
         else:
             body.update(kind="url", uri=ep["url"])
         return body
@@ -1116,13 +1136,20 @@ class Orchestrator:
             log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
                 f"{ep.get('title') or ep['id']}")
             return {"source": "sonos", "target": self.target, "index": idx}
-        code, resp = _renderer.post(
-            "/play", self._sonos_body(ep, rd["uid"], start_s))
+        # ONE body, built once: the second call existed only to read back
+        # `kind`, and it re-ran load_library() and the regex for nothing.
+        # With storytel it would also mint a SECOND signed url — and
+        # could fail after the speaker is already playing.
+        body = self._sonos_body(ep, rd["uid"], start_s)
+        if body.get("error"):        # could not resolve a playable uri
+            log(f"sonos: {body['error']}")
+            return {"error": body["error"]}
+        code, resp = _renderer.post("/play", body)
         if code != 200:
             log(f"sonos: play refused ({code}: {resp.get('error')})")
             return {"error": resp.get("error") or f"http-{code}"}
         self.sonos_idx = idx
-        self.sonos_kind = self._sonos_body(ep, rd["uid"], 0)["kind"]
+        self.sonos_kind = body["kind"]
         self.sonos_pending = (ep.get("id") or ep["url"], time.monotonic())
         self.sonos_opt_tr = ("PLAYING", time.monotonic())
         # seed the snapshot so the card extrapolates from the position we
@@ -1243,9 +1270,14 @@ class Orchestrator:
         if is_spotify(target):
             return self._sonos_start_spotify(target, rd, episode)
         entries = content.expand_entries(target)
+        # A storytel row's url is a LOCAL path (the bookmark key); its
+        # playable uri is minted per-play in _sonos_body, so it gets the
+        # same escape hatch the NRK series service already has. Without
+        # this every book — downloaded or not — is filtered out here.
         playable = [e for e in entries
                     if str(e["url"]).startswith(("http://", "https://"))
-                    or re.match(r"https?://radio\.nrk\.no/serie/", target)]
+                    or re.match(r"https?://radio\.nrk\.no/serie/", target)
+                    or _storytel.is_storytel(target)]
         skipped = len(entries) - len(playable)
         if skipped:
             log(f"sonos: {skipped} local-only entr"
@@ -1348,6 +1380,10 @@ class Orchestrator:
         _renderer.write("sonos", uid=uid, name=name)
         self._sonos_vol_opt = None  # new speaker, new volume world
         content.PREFER_REMOTE = True
+        _library._EXPAND_CACHE.clear()  # entries differ by renderer: sonos
+        #   lists every book, the box only the downloaded ones. A stale
+        #   300s entry otherwise shows the wrong list — and tapping an
+        #   undownloaded book on the box plays a DIFFERENT one from 0.
         _sonos_wake.set()
         log(f"renderer -> sonos: {name or uid}")
         if target:
@@ -1374,6 +1410,7 @@ class Orchestrator:
                 "still be playing (stop it from the Sonos app)")
         _renderer.write("box")
         content.PREFER_REMOTE = False
+        _library._EXPAND_CACHE.clear()  # see the note on the sonos side
         self._sonos_vol_opt = None
         with self.lock:
             self.sonos_snap, self.sonos_snap_at = {}, 0.0
@@ -3752,6 +3789,10 @@ def _sonos_poller():
     back over music that never stopped (architect crash matrix b)."""
     if _renderer.is_sonos():
         content.PREFER_REMOTE = True
+        _library._EXPAND_CACHE.clear()  # entries differ by renderer: sonos
+        #   lists every book, the box only the downloaded ones. A stale
+        #   300s entry otherwise shows the wrong list — and tapping an
+        #   undownloaded book on the box plays a DIFFERENT one from 0.
         try:
             snap = _renderer.get("/state")
             if snap.get("armed") and snap.get("transport") in (
@@ -3764,15 +3805,27 @@ def _sonos_poller():
                 # adopt tells the sidecar we are its vibbd again
                 if ORCH.target and not is_spotify(ORCH.target):
                     try:
+                        _story = _storytel.is_storytel(ORCH.target)
                         ORCH.sonos_queue = [
                             e for e in content.expand_entries(ORCH.target)
-                            if str(e["url"]).startswith(
+                            if _story or str(e["url"]).startswith(
                                 ("http://", "https://"))]
                         ORCH.sonos_kind = "url"
                         uri = snap.get("uri")
-                        ORCH.sonos_idx = next(
-                            (i for i, e in enumerate(ORCH.sonos_queue)
-                             if e["url"] == uri), None)
+                        if _story:
+                            # The speaker holds a SIGNED url minted by the
+                            # previous daemon process — string equality can
+                            # never match it, and a None index silently
+                            # disables bookmarks (1016) and queue advance
+                            # for the rest of the session. Match on the
+                            # book id, which is in the signed url's query.
+                            ORCH.sonos_idx = next(
+                                (i for i, e in enumerate(ORCH.sonos_queue)
+                                 if e["id"] and e["id"] in str(uri)), None)
+                        else:
+                            ORCH.sonos_idx = next(
+                                (i for i, e in enumerate(ORCH.sonos_queue)
+                                 if e["url"] == uri), None)
                     except Exception:
                         pass
                 elif ORCH.target:
@@ -3802,6 +3855,7 @@ def _sonos_poller():
                 # existing guards make a duplicate attempt stand down.
                 _renderer.write("box")
                 content.PREFER_REMOTE = False
+                _library._EXPAND_CACHE.clear()
                 with ORCH.lock:
                     if ORCH.source == "sonos":
                         ORCH.source = ("spotify" if ORCH.target

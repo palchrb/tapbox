@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Storytel on a Sonos: mint the signed url at the last possible moment.
+
+A Sonos cannot play a local path, and a storytel book IS a local path.
+So the queue keeps the local path (it is the bookmark and reconcile key)
+and _sonos_body swaps in a freshly minted signed CDN url milliseconds
+before the SOAP /play — short-lived by design, so late minting is the
+whole trick. A book therefore need not be downloaded at all to play in
+another room.
+
+Four things QA found that this pins, each of which silently breaks
+something:
+
+  - the http-only filter in sonos_start_target drops every storytel row
+    (local paths), so nothing ever reaches the speaker;
+  - _sonos_body used to be called TWICE per play, which would mint two
+    urls and could fail AFTER the speaker is already playing;
+  - _sonos_body must NEVER raise: it runs on _sonos_step_worker and
+    _sonos_poller, neither guarded, and an escape kills those threads —
+    next/prev dead until a restart, or no bookmarks for the session.
+    login() raises RuntimeError as well as OSError;
+  - after a daemon restart the speaker holds a signed url minted by the
+    previous process, so matching the queue on url equality gives idx
+    None, which silently disables bookmarks and queue advance."""
+import json
+import os
+import sys
+import tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TMP = tempfile.mkdtemp()
+os.environ["VIBB_STATE"] = TMP
+os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
+os.environ["VIBB_RUN"] = TMP
+os.environ["VIBB_LIBRARY"] = os.path.join(TMP, "lib.json")
+sys.path.insert(0, os.path.join(REPO, "pi"))
+
+import daemon  # noqa: E402
+from vibb import storytel, content  # noqa: E402
+
+TARGET = "storytel:series:26175"
+BOOKS = [
+    {"consumable_id": "111", "title": "En", "order": 1,
+     "cover": "https://covers.storytel.com/1.jpg"},
+    {"consumable_id": "222", "title": "To", "order": 2,
+     "cover": "https://covers.storytel.com/2.jpg"},
+]
+storytel.write_shelf(TARGET, "Kokosbananas", BOOKS)
+d = storytel.cache_dir(TARGET)
+with open(os.path.join(d, "111.mp3"), "wb") as f:   # only book 1 downloaded
+    f.write(b"\xff\xfb audio")
+
+# 1. locally, expand is download-only: book 2 is omitted, urls are paths
+content.PREFER_REMOTE = False
+rows = content.expand_entries(TARGET)
+assert [r["id"] for r in rows] == ["111"], rows
+assert rows[0]["url"].endswith("111.mp3")
+print("1. on the box, only downloaded books, as local paths OK")
+
+# 2. for a sonos renderer EVERY book is listed — the speaker fetches from
+#    the CDN, so a book need not be downloaded at all. url stays the LOCAL
+#    path: it is the bookmark key, and an http placeholder would leak a
+#    signed token into the state file.
+content.PREFER_REMOTE = True
+rows = content.expand_entries(TARGET)
+assert [r["id"] for r in rows] == ["111", "222"], rows
+assert all(not r["url"].startswith("http") for r in rows), \
+    "the queue url must stay the local path, never an invented http url"
+assert rows[1]["art_url"] == "https://covers.storytel.com/2.jpg", \
+    "the http cover must ride along — sonos cannot fetch a local jpg"
+content.PREFER_REMOTE = False
+print("2. for sonos, every book is listed and the url stays local OK")
+
+# --- a scripted orchestrator for the _sonos_body half ----------------------
+MINTED = []
+
+
+def fake_asset(cid, timeout=15):
+    MINTED.append((cid, timeout))
+    return f"https://fastly-ng.storytel.net/mp3encoder-128/uuid-{cid}?token=T"
+
+
+storytel.asset_url = fake_asset
+daemon._renderer.read = lambda: {"renderer": "sonos", "uid": "RINCON_1"}
+
+orch = object.__new__(daemon.Orchestrator)
+orch.target = TARGET
+ep = {"url": os.path.join(d, "111.mp3"), "title": "En", "id": "111",
+      "image": os.path.join(d, "111.jpg"),
+      "art_url": "https://covers.storytel.com/1.jpg"}
+
+# 3. the body carries a freshly minted signed url and the http cover, and
+#    asks for it with a SHORT timeout (the default would let a login retry
+#    stack to ~70s while the renderer card goes 'unreachable' at 15s)
+body = orch._sonos_body(ep, "RINCON_1", 0.0)
+assert body["kind"] == "url"
+assert body["uri"].startswith("https://fastly-ng.storytel.net/"), body
+assert body["art"] == "https://covers.storytel.com/1.jpg", body
+assert MINTED == [("111", 6)], f"one mint, short timeout: {MINTED}"
+print("3. the body mints one signed url, with an http cover and a short "
+      "timeout OK")
+
+# 4. IT MUST NEVER RAISE. Both OSError and RuntimeError (login refused, or
+#    inside the refused-login cooldown) become an error dict — a raise here
+#    kills _sonos_step_worker (next/prev dead until restart) and
+#    _sonos_poller (no bookmarks or queue advance for the session).
+for exc in (OSError("offline"), RuntimeError("login refused")):
+    def boom(cid, timeout=15, _e=exc):
+        raise _e
+    storytel.asset_url = boom
+    body = orch._sonos_body(ep, "RINCON_1", 0.0)
+    assert body.get("error"), f"{type(exc).__name__} must degrade, not raise"
+    assert "uri" not in body, "a failed mint must not hand over a stale uri"
+storytel.asset_url = fake_asset
+print("4. a failed mint degrades to an error dict, never a raise OK")
+
+# 5. _sonos_body is called ONCE per play. Twice meant two authenticated
+#    round-trips, two signed urls, and a second failure possible AFTER the
+#    speaker was already playing.
+src = open(daemon.__file__, encoding="utf-8").read()
+i = src.index("def _sonos_play_entry")
+j = src.index("def _sonos_start_spotify", i)
+assert src.count("self._sonos_body(", i, j) == 1, \
+    "_sonos_body must be built once and reused, not called twice"
+assert "body = self._sonos_body(" in src[i:j]
+print("5. the play path builds the body exactly once OK")
+
+# 6. the http-only filter lets storytel through — without this escape
+#    hatch every book, downloaded or not, is dropped before the speaker
+assert "_storytel.is_storytel(target)" in src[
+    src.index("playable = [e for e in entries"):
+    src.index("playable = [e for e in entries") + 400], \
+    "storytel needs the same filter exemption the NRK series service has"
+print("6. storytel rows survive the http-only playable filter OK")
+
+# 7. the restart reconcile matches on the BOOK ID, not url equality: the
+#    speaker holds a signed url minted by the previous daemon process, and
+#    a None index silently disables bookmarks and queue advance
+k = src.index("ORCH.sonos_idx = next(")
+window = src[k - 800:k + 400]
+assert 'e["id"] in str(uri)' in window, \
+    "a signed url can never equal the queue's url — match on the id"
+print("7. the restart reconcile matches a signed url by book id OK")
+
+# 8. the expand cache is cleared on every renderer switch: entries differ
+#    by renderer, and a stale one makes the box play the WRONG book
+assert src.count("_EXPAND_CACHE.clear()") >= 3, \
+    "clear the expand cache wherever PREFER_REMOTE flips"
+print("8. a renderer switch clears the expand cache OK")
+
+print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
+      "queue keeps the local key, and a failed mint never kills a thread.")

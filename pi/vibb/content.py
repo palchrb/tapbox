@@ -1002,7 +1002,9 @@ def expand_entries(target):
         # is omitted rather than streamed from an expiring signed url —
         # which keeps this branch network-free on the playback path.
         from vibb import storytel
-        return storytel.entries_for(target)
+        # PREFER_REMOTE is the sonos renderer: the speaker fetches from
+        # the CDN, so every book is listed even when not downloaded.
+        return storytel.entries_for(target, remote=PREFER_REMOTE)
     if os.path.isdir(target):
         # Local folder (e.g. a DRM-free audiobook): sorted playlist of audio
         # files, each keyed on its filename so resume survives moves/renames
