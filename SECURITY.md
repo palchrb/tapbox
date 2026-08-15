@@ -57,11 +57,27 @@ shortcut keeps working:
 - `POST /playpause`, `/next`, `/prev`, `/pause`, `/volume`, `/shuffle`,
   `/stop`, `/seek`
 
+**Two rules for GET, not one.** GET is blanket-open because the PWA's
+own bootstrap files must be fetchable before any of our code runs (the
+token lives in localStorage, which `app.js` creates) — so a GET may
+never be state-changing or secret-revealing. The second rule was
+unwritten until 2026-08-15 and its absence produced a real hole: **a GET
+that serves a file must be constrained by content TYPE, not merely by
+directory.** `/artwork` was allowlisted by directory; those directories
+later grew cached podcast audio, uploaded audiobooks and downloaded
+Storytel books, and it became a way to pull licensed audio off the box
+with a plain url from anything on the LAN. A path allowlist answers
+"where", never "what".
+
 **Privileged** — device control, config, or destructive. These are what
 we want behind a trust gate:
 - `POST /system/shutdown`, `/system/wifi`
 - `POST /wifi/connect|forget|add|reconnect|hotspot|scan`
 - `POST /spotify/logout`
+- `GET /expand?target=<raw>` — a curated `?id=` stays open, but an
+  arbitrary target lists the audio files in any directory the daemon can
+  read and makes the box fetch a url of the caller's choosing. Same rule
+  the raw-target form of `POST /play` already had.
 - `POST /storytel/credentials|shelf|logout` — the credentials store a
   RECOVERABLE account password (`/etc/vibb/storytel.json`, 0600,
   root-owned): the login flow returns a jwt with no refresh token, so an

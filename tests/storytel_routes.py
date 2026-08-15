@@ -61,9 +61,9 @@ def call(path, method="POST", body=None, tok=None):
         req.add_header("X-Vibb-Token", tok)
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status, r.read().decode()
+            return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
+        return e.code, e.read().decode("utf-8", "replace")
 
 
 # 1. all three POSTs are privileged — refused without the token, by
@@ -108,10 +108,49 @@ assert series[0]["in_library"] is False, "not added to the library here"
 assert series[0]["downloaded"] == 0, "nothing downloaded"
 print("4. the shelf picker groups the account's books into series OK")
 
+# 4b. THE ARTWORK PROXY MUST NOT SERVE AUDIO. Its allowlist is
+#     DIRECTORY based and CACHE_DIR holds the books next to the covers,
+#     while every GET is open on the LAN by structural necessity — so a
+#     downloaded audiobook was fetchable by anything on the network.
+import urllib.parse as _upq  # noqa: E402
+
+cdir = storytel.cache_dir("storytel:series:26175")
+os.makedirs(cdir, exist_ok=True)
+mp3 = os.path.join(cdir, "111.mp3")
+jpg = os.path.join(cdir, "cover.jpg")
+open(mp3, "wb").write(b"\xff\xfb AUDIO")
+open(jpg, "wb").write(b"\xff\xd8 JPEG")
+
+
+def art(p):
+    st, _ = call("/artwork?path=" + _upq.quote(p), method="GET")
+    return st
+
+
+assert art(mp3) == 403, "a downloaded audiobook must not be served over the LAN"
+assert art(jpg) == 200, "but its cover still must be"
+print("4b. the artwork proxy serves images only, never the audio OK")
+
+# 4c. and /expand with a RAW target is privileged, exactly as POST /play
+#     with a raw target already was. ?id= names something the parent
+#     curated; ?target= is arbitrary — unauthenticated it lists the audio
+#     in any directory the root daemon can read, makes the box fetch a
+#     url of the caller's choosing, and hands out the local PATHS of
+#     licensed books.
+st, _ = call("/expand?target=" + _upq.quote("/etc"), method="GET")
+assert st == 401, f"a raw expand target must need the token, got {st}"
+st, _ = call("/expand?id=nope", method="GET")
+assert st != 401, "a curated ?id= stays open (404 here, but not gated)"
+print("4c. /expand with a raw target is privileged, ?id= stays open OK")
+
 # 5. logout clears the account, and a bad password is refused cleanly
 st, body = call("/storytel/logout", tok=TOKEN)
 assert st == 200 and json.loads(body)["configured"] is False
 assert not storytel.configured()
+# and the books go with the account — Storytel's own app drops its
+# downloads on logout, and a box that can no longer authenticate has no
+# business keeping a playable shelf
+assert not os.path.exists(mp3), "logout must remove the downloaded books"
 storytel._request = lambda *a, **k: (403, {}, b"nope")   # login now fails
 st, body = call("/storytel/credentials",
                 body={"email": "x@y.no", "password": "wrong"}, tok=TOKEN)

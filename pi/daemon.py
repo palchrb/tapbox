@@ -280,6 +280,9 @@ MPV_START_GRACE_S = float(os.environ.get("VIBB_MPV_START_GRACE", "12"))
 # how long after the daemon starts to prewarm mpv's decode path (idle, off
 # the boot rush) so the first human play hits a warm page cache
 PREWARM_DELAY_S = float(os.environ.get("VIBB_PREWARM_DELAY", "15"))
+# What GET /artwork may serve. That endpoint's allowlist is directory
+# based, and CACHE_DIR holds audio next to the covers.
+ARTWORK_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 WEB_DIR = os.environ.get("VIBB_WEB") or (
     os.path.join(_here, "web") if os.path.isdir(os.path.join(_here, "web"))
     else "/usr/share/vibb/web")
@@ -3085,6 +3088,15 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(url.query)
             entry_id = (q.get("id") or [None])[0]
             target = (q.get("target") or [None])[0]
+            # A RAW target is privileged, exactly as it is on POST /play.
+            # ?id= names something the parent already curated; ?target=
+            # is arbitrary, and unauthenticated it lists the audio files
+            # in any directory this root daemon can read AND makes the
+            # box fetch a url of the caller's choosing. It also hands out
+            # the local PATHS of licensed books — the map for the file
+            # server /artwork used to be.
+            if target and not entry_id and not self._require_token():
+                return
             order, name = "auto", None
             if entry_id:
                 entry = find_entry(load_library(), entry_id)
@@ -3116,6 +3128,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "path required"})
             elif not artwork_allowed(path):
                 self._send(403, {"error": "path not allowed"})
+            elif os.path.splitext(
+                    os.path.realpath(path))[1].lower() not in ARTWORK_EXTS:
+                # IMAGES ONLY. The allowlist is about DIRECTORIES, and
+                # CACHE_DIR holds the audio too — so this endpoint would
+                # hand any cached episode or audiobook to anything on the
+                # LAN, with no token, because every GET is open by
+                # structural necessity. Free podcast audio made that
+                # merely untidy; a downloaded audiobook makes it a
+                # distribution channel we did not mean to build.
+                self._send(403, {"error": "not an image"})
             else:
                 self._send_file(path, cache=True)
         elif url.path == "/":
@@ -3463,8 +3485,13 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError as e:
                     self._send(502, {"error": f"could not reach Storytel: {e}"})
             elif self.path == "/storytel/logout":
+                # The books go with the account. Storytel's own app drops
+                # its downloads on logout, and a box that can no longer
+                # authenticate has no business keeping a playable shelf.
+                gone = _storytel.forget_downloads()
                 _storytel.save_credentials(None, None)
-                self._send(200, {"configured": False})
+                log(f"storytel: logged out, {gone} downloaded book(s) removed")
+                self._send(200, {"configured": False, "removed": gone})
             elif self.path == "/storytel/shelf":
                 # The picker: the account's audiobooks grouped into series.
                 if not _storytel.configured():
@@ -3701,12 +3728,26 @@ class Handler(BaseHTTPRequestHandler):
 # fails CLOSED, so anything added later is privileged until a human
 # deliberately puts it in this table.
 #
-# GET/HEAD being blanket-safe is STRUCTURAL, not laziness: the browser
-# fetches index.html, app.js, the manifest, the icons and every <img>
-# artwork URL by itself and cannot attach a custom header to any of them.
-# The obligation that buys must hold forever:
+# GET/HEAD being blanket-safe is STRUCTURAL, and the real reason is
+# BOOTSTRAP, not <img>: the browser fetches index.html, app.js, the
+# manifest and the icons before any of our code runs, and the token
+# lives in localStorage which app.js itself creates — so gating those
+# would make it impossible to ever deliver the token they would need.
+# (The <img> argument used to be cited here and is soft: the PWA builds
+# its two artwork <img> tags in JS and could fetch+blob them, and the
+# screen never uses /artwork at all — it opens local files directly and
+# already sends the token on every API GET.)
+#
+# TWO obligations, and the second is the one whose absence cost us:
 #
 #     NEVER serve a state-changing or secret-revealing endpoint via GET.
+#
+#     NEVER let a GET serve arbitrary file bytes. A GET that serves a
+#     file must be constrained by CONTENT TYPE, not merely by which
+#     directory the file sits in. /artwork was allowlisted by directory,
+#     those directories later grew audio, and it quietly became a way to
+#     pull a licensed audiobook off the box with a plain url (found
+#     2026-08-15). A path allowlist answers "where", never "what".
 #
 # (True today: every GET is a read, and no endpoint ever returns the
 # token — rotation happens on the box screen, not over HTTP.)

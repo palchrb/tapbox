@@ -159,10 +159,34 @@ def _write_private(path, obj):
     os.replace(tmp, path)
 
 
+def forget_downloads():
+    """Delete every downloaded book. Storytel's own app does this on
+    logout ("nedlastingene vil forsvinne"), and matching that matters:
+    an account we no longer hold must not leave a shelf of playable
+    audiobooks behind on a box that can no longer justify having them.
+    Returns how many files went. Best-effort — never raises."""
+    import shutil
+    gone = 0
+    try:
+        names = os.listdir(CACHE_DIR)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith("storytel-"):
+            continue
+        d = os.path.join(CACHE_DIR, name)
+        try:
+            gone += sum(1 for f in os.listdir(d) if f.endswith(".mp3"))
+            shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    return gone
+
+
 def save_credentials(email, password):
     """Store the account, or clear it when email is falsy. Never logged."""
     if not email:
-        for p in (CREDS_FILE, _SESSION_FILE):
+        for p in (CREDS_FILE, _SESSION_FILE, _OUTBOX_FILE, _RAW_SHELF_FILE):
             try:
                 os.remove(p)
             except OSError:
