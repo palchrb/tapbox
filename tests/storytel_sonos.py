@@ -288,5 +288,18 @@ assert 'self.sonos_bm_hold = (ep.get("id"), start_s)' in src, \
     "the refused-seek branch must arm the hold, not merely claim to"
 print("12. a refused resume-seek holds the bookmark instead of eating it OK")
 
+# 13. ADOPTING A LIVE SESSION MUST RESTORE THE LENGTH. The snapshot the
+#     reconcile adopts comes straight from the speaker, which reports 0
+#     for a signed url — and a fresh process has no earlier value to
+#     carry forward. So a daemon restart mid-book left the card with
+#     duration 0 and no position at all (field 2026-08-15: 33666s before
+#     the restart, 0 after). The queue row knows it, from the shelf.
+adopt = src[src.index("# Restore the LENGTH from the queue row."):][:900]
+assert 'not (ORCH.sonos_snap or {}).get("dur_s")' in adopt, \
+    "restore only when the adopted snapshot has no usable length"
+assert 'ORCH.sonos_queue[ORCH.sonos_idx].get(' in adopt and "dur_s" in adopt, \
+    "the length must come from the matched queue row"
+print("13. adopting a live session restores the book's length OK")
+
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")

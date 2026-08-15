@@ -3880,6 +3880,21 @@ def _sonos_poller():
                             ORCH.sonos_idx = next(
                                 (i for i, e in enumerate(ORCH.sonos_queue)
                                  if e["url"] == uri), None)
+                        # Restore the LENGTH from the queue row. The
+                        # adopted snapshot comes straight from the
+                        # speaker, which reports 0 for a signed url — and
+                        # on a fresh process there is no earlier value to
+                        # carry forward, so a restart mid-book left the
+                        # card with duration 0 and no position at all
+                        # (field 2026-08-15: 33666s before the restart,
+                        # 0 after). We know it from the shelf.
+                        if ORCH.sonos_idx is not None \
+                                and not (ORCH.sonos_snap or {}).get("dur_s"):
+                            known = ORCH.sonos_queue[ORCH.sonos_idx].get(
+                                "dur_s")
+                            if known:
+                                ORCH.sonos_snap = dict(ORCH.sonos_snap,
+                                                       dur_s=known)
                     except Exception:
                         pass
                 elif ORCH.target:
