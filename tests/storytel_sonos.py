@@ -376,28 +376,39 @@ assert bm_run(3120.0, 3200.0) == 3200.0, "ordinary forward listening"
 assert bm_run(200.0, 5.0) == 5.0, "a restart with little to lose"
 print("15. a track restart cannot eat the bookmark, and real seeks still write OK")
 
-# 16. PLAY AFTER A RESTART MUST RESUME, NOT RESTART. With no live
-#     session of ours, playpause used to send a bare /resume to a
-#     speaker that no longer had our queue — so it played from the top.
-#     That is why pressing play right after a daemon restart started an
-#     audiobook over, while going out and back in (a real /play, which
-#     reads the bookmark) resumed correctly (field 2026-08-15).
-pp = []
-o5 = object.__new__(daemon.Orchestrator)
-o5.target = BM_T
-o5.sonos_snap, o5.sonos_snap_at = {}, 0.0          # stale / no session
-o5.sonos_start_target = lambda t, episode=None: pp.append(("start", t)) or {}
-daemon._renderer.read = lambda: {"renderer": "sonos", "uid": "U"}
-daemon._renderer.post = lambda p, b=None, **k: pp.append(("post", p)) or (200, {})
-o5._sonos_command("playpause")
-assert pp == [("start", BM_T)], f"must start from the bookmark, got {pp}"
+# 16. THE ROOT CAUSE, measured in the field 2026-08-15 and pinned with
+#     its own numbers. /resume only means anything from
+#     PAUSED_PLAYBACK. A STOPPED speaker has no position to resume
+#     from, so a bare resume restarts the track at zero — and
+#     _sonos_on_term STOPS the speaker on every daemon restart. Hence
+#     "restart vibbd, press play" replayed an episode from the
+#     beginning, while going out and back in (a real /play) resumed
+#     correctly. The capture proved the BOOKMARK was never damaged:
+#     1059 -> 1074 across the restart, still 1074 after the play, while
+#     the box reported position 32.9 — playing from zero, never reading
+#     it. Not storytel-specific: this was a podcast.
+def pp_probe(transport, ours=True):
+    calls = []
+    o = object.__new__(daemon.Orchestrator)
+    o.target = "https://feeds.acast.com/public/shows/5fc2bd40"
+    o.sonos_snap = {"ours": ours, "transport": transport, "rel_s": 0.0}
+    o.sonos_snap_at = daemon.time.monotonic()
+    o.sonos_start_target = lambda t, episode=None: calls.append("START") or {}
+    o._sonos_bookmark_now = lambda *a, **k: None
+    daemon._renderer.read = lambda: {"renderer": "sonos", "uid": "U"}
+    daemon._renderer.post = lambda p, b=None, **k: calls.append(p) or (200, {})
+    o._sonos_command("playpause")
+    return calls
 
-pp.clear()
-o5.sonos_snap = {"ours": True, "transport": "PAUSED_PLAYBACK", "rel_s": 10.0}
-o5.sonos_snap_at = daemon.time.monotonic()
-o5._sonos_command("playpause")
-assert pp == [("post", "/resume")], f"a live session still just resumes: {pp}"
-print("16. play with no live session resumes from the bookmark OK")
+
+assert pp_probe("STOPPED") == ["START"], \
+    "a STOPPED speaker must start from the bookmark, never a blind resume"
+assert pp_probe("PAUSED_PLAYBACK") == ["/resume"], \
+    "a genuinely paused session still resumes in place"
+assert pp_probe("PLAYING") == ["/pause"], "and a playing one still pauses"
+assert pp_probe("PLAYING", ours=False) == ["START"], \
+    "someone else's session is not ours to resume"
+print("16. play on a stopped speaker resumes from the bookmark OK")
 
 # 17. A SEEK MUST NOT SNAP BACK. The seek patches the snapshot
 #     optimistically, but the poller replaces it wholesale every few

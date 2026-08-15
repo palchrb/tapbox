@@ -1931,17 +1931,23 @@ class Orchestrator:
             if action in ("next", "prev"):
                 return self.sonos_step(1 if action == "next" else -1)
             if action == "playpause":
-                if not snap.get("ours") and self.target:
-                    # NO LIVE SESSION OF OURS. A bare /resume here is sent
-                    # to a speaker that no longer has our queue, so it
-                    # plays whatever it has from the top — which is how
-                    # pressing play right after a daemon restart made an
-                    # audiobook start over, while going out and back in
-                    # (a real /play) resumed correctly (field 2026-08-15).
-                    # Start the target properly instead: that reads the
-                    # bookmark and resumes where the child was.
-                    log("sonos: no live session — starting from the "
-                        "bookmark instead of a blind resume")
+                # THE ROOT CAUSE, measured 2026-08-15. /resume only means
+                # anything from PAUSED_PLAYBACK. A STOPPED speaker has no
+                # position to resume from, so a bare resume restarts the
+                # track at zero — and _sonos_on_term STOPS the speaker on
+                # every daemon restart, which is why "restart vibbd, press
+                # play" replayed an episode from the beginning while going
+                # out and back in (a real /play) resumed correctly. The
+                # bookmark was never damaged; the resume simply never read
+                # it. Anything that is not a live paused session of ours
+                # goes through the start path, which does read it.
+                if (not snap.get("ours")
+                        or snap.get("transport") not in ("PLAYING",
+                                                         "PAUSED_PLAYBACK")):
+                    if not self.target:
+                        return {"error": "nothing to play"}
+                    log("sonos: not a live paused session — starting from "
+                        "the bookmark instead of a blind resume")
                     return self.sonos_start_target(self.target)
                 if snap.get("transport") == "PLAYING":
                     self._sonos_bookmark_now()
