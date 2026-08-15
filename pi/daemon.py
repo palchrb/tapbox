@@ -1043,6 +1043,17 @@ class Orchestrator:
             return
         if self.sonos_kind != "url":
             return
+        # The SAME refused-seek guard the sharelink branch above has. It
+        # was never wired to this branch, so a resume whose seek the
+        # speaker refused played from the top and the next poll wrote
+        # that near-zero position straight over the good one: 52 minutes
+        # into a Harry Potter book became 39 seconds (field 2026-08-15).
+        # Podcasts had this hole too; a long audiobook is just where it
+        # finally hurt enough to see.
+        hold = self.sonos_bm_hold
+        if hold and hold[0] == ep.get("id") and float(rel) < hold[1]:
+            return  # refused seek: never overwrite the good position
+        self.sonos_bm_hold = None
         _bm_save(state_key(self.target), ep["url"], float(rel),
                  episode_id=ep.get("id"), duration=snap.get("dur_s"))
 
@@ -1179,8 +1190,16 @@ class Orchestrator:
             "volume": (self.sonos_snap or {}).get("volume")}
         self.sonos_snap_at = time.monotonic()
         if start_s >= 5 and not resp.get("sought"):
-            log("sonos: seek refused — playing from the top (bookmark "
-                "kept)")
+            # The bookmark was NOT kept — this log said so for months
+            # while nothing arranged it. The seek was refused, playback
+            # runs from 0, and the poller then wrote that near-zero
+            # position straight over the good one. Hold it until playback
+            # passes where we meant to resume: 52 minutes into a Harry
+            # Potter book became 39 seconds without this (field
+            # 2026-08-15). Same guard the sharelink path has had.
+            self.sonos_bm_hold = (ep.get("id"), start_s)
+            log(f"sonos: seek refused — playing from the top, bookmark "
+                f"held at {int(start_s)}s")
         log(f"sonos: playing [{idx + 1}/{len(self.sonos_queue)}] "
             f"{ep.get('title') or ep['url']}")
         return {"source": "sonos", "target": self.target, "index": idx}

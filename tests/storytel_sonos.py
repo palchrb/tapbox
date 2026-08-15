@@ -226,5 +226,55 @@ assert "frozen = self._sonos_position()" in src, \
     "the pause verb must freeze the extrapolated position"
 print("11. pausing freezes the bar instead of rewinding it OK")
 
+# 12. A REFUSED RESUME-SEEK MUST NOT EAT THE BOOKMARK. When the speaker
+#     refuses the seek, playback runs from 0 — and the poller then wrote
+#     that near-zero position straight over the good one. 52 minutes into
+#     a Harry Potter book became 39 seconds (field 2026-08-15, the actual
+#     numbers below). The sharelink branch has had this guard for months;
+#     the url branch (podcasts AND storytel) never got it, and neither
+#     set nor checked the hold.
+from vibb import library as _lib  # noqa: E402
+
+BM_T = "storytel:series:113290"
+bm_key = _lib.state_key(BM_T)
+_bm.save_state(bm_key, "/c/331854.mp3", 3120.0, "331854", 28800.0)
+
+o3 = object.__new__(daemon.Orchestrator)
+o3.target = BM_T
+o3.sonos_kind = "url"
+o3.sonos_idx = 0
+o3.sonos_queue = [{"url": "/c/331854.mp3", "id": "331854", "title": "HP1"}]
+o3._sonos_bm_last = 0.0
+o3.sonos_snap = {"rel_s": 39.0, "dur_s": 28800.0, "transport": "PLAYING",
+                 "stale_s": 0, "ours": True}
+o3.sonos_snap_at = daemon.time.monotonic()
+
+o3.sonos_bm_hold = ("331854", 3120.0)       # as the refused seek sets it
+o3._sonos_bookmark_now(force=True)
+kept_pos = _bm.load_state(bm_key)["episodes"]["331854"]["pos"]
+assert kept_pos == 3120.0, f"the held bookmark must survive, got {kept_pos}"
+
+o3.sonos_bm_hold = None                     # the unguarded old behaviour
+o3._sonos_bm_last = 0.0
+o3._sonos_bookmark_now(force=True)
+assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 39.0, \
+    "without the hold it really is overwritten — that is the bug"
+
+# and playback passing the held point releases it, so normal listening
+# still bookmarks
+_bm.save_state(bm_key, "/c/331854.mp3", 3120.0, "331854", 28800.0)
+o3.sonos_bm_hold = ("331854", 3120.0)
+o3.sonos_snap = dict(o3.sonos_snap, rel_s=3200.0)
+o3._sonos_bm_last = 0.0
+o3._sonos_bookmark_now(force=True)
+assert _bm.load_state(bm_key)["episodes"]["331854"]["pos"] == 3200.0, \
+    "past the held point the bookmark must move again"
+assert o3.sonos_bm_hold is None, "and the hold is released"
+
+# the url play path must SET the hold, not just log that it kept one
+assert 'self.sonos_bm_hold = (ep.get("id"), start_s)' in src, \
+    "the refused-seek branch must arm the hold, not merely claim to"
+print("12. a refused resume-seek holds the bookmark instead of eating it OK")
+
 print("\nSTORYTEL ON SONOS OK — the url is minted at the last moment, the "
       "queue keeps the local key, and a failed mint never kills a thread.")
