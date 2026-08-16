@@ -203,18 +203,23 @@ assert '"uri": body.get("uri")' in seed, \
     "the seeded snapshot needs its uri, or the carry-forward can never match"
 print("10b. a duration is never carried across a track change OK")
 
-# 10c. and the deletion it guards is real: prove save_state drops the
-#      episode when the duration is wrong-and-short, so the guard above
-#      is protecting something that actually bites
+# 10c. and the loss it guards is real: prove save_state treats the
+#      episode as FINISHED when the duration is wrong-and-short, so the
+#      guard above is protecting something that actually bites. (The
+#      record now survives as a `done` tombstone for the Storytel mirror
+#      — but the child's place is gone just the same, which is the harm.)
 from vibb import bookmarks as _bm  # noqa: E402
 
 _k = "sonos-dur-probe"
 _bm.save_state(_k, "/x/hp1.mp3", 3000.0, "hp1", 28800.0)   # 50min into 8h
-assert (_bm.load_state(_k).get("episodes") or {}).get("hp1"), "kept"
+assert _bm.episode_pos(_bm.load_state(_k), "hp1", "/x/hp1.mp3") == 3000.0, \
+    "a truthful duration keeps the place"
 _bm.save_state(_k, "/x/hp1.mp3", 3000.0, "hp1", 720.0)     # wrong short dur
-assert not (_bm.load_state(_k).get("episodes") or {}).get("hp1"), \
-    "a short wrong duration DELETES the bookmark — that is what 10b stops"
-print("10c. a wrong short duration really does delete the bookmark OK")
+assert (_bm.load_state(_k)["episodes"]["hp1"] or {}).get("done"), \
+    "a short wrong duration marks the episode finished"
+assert _bm.episode_pos(_bm.load_state(_k), "hp1", "/x/hp1.mp3") == 0.0, \
+    "...and the place is gone with it — that is what 10b stops"
+print("10c. a wrong short duration really does lose the place OK")
 
 # 11. PAUSE MUST NOT REWIND THE BAR. While PLAYING the position is
 #     extrapolated forward by the snapshot's age plus the sidecar's own

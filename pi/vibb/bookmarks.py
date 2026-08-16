@@ -10,9 +10,11 @@ command rule 1, status gate, boot-resume guard — architect review
 2026-08-08). player.py re-exports these names, so its callers and the
 existing tests are untouched.
 
-File format is UNCHANGED: {url, pos, id, updated, episodes:{key:{pos,
-url, updated}}} per state_key, in STATE_DIR. Anything that changes here
-changes what a yanked battery loses — see tests/episode_resume.py.
+File format: {url, pos, id, updated, episodes:{key:{pos, url, updated}}}
+per state_key, in STATE_DIR. A finished episode's record additionally
+carries done:true and holds the duration — see save_state. Anything that
+changes here changes what a yanked battery loses — see
+tests/episode_resume.py.
 """
 
 import json
@@ -42,8 +44,15 @@ def save_state(key, url, pos, episode_id=None, duration=None):
     `episodes` additionally remembers a position PER episode so hopping
     between episodes continues each where it was left. Keyed by the stable
     episode id (falls back to url), so a stream and its cached file share
-    one slot. An episode played to its end is dropped from the map — a
-    re-tap then starts it fresh instead of at the last second."""
+    one slot. An episode played to its end keeps a `done` record instead
+    of a position — episode_pos reads it as 0, so a re-tap still starts
+    fresh, but the fact that it FINISHED survives. Deleting the record
+    used to erase that fact, and the Storytel mirror (which can only say
+    "the position is now X") had nothing left to report: a book heard to
+    the end stayed at whatever we last pushed mid-listen. Storytel derives
+    its own state from position — our small pushes are what flipped those
+    books from WILL_CONSUME to CONSUMING — so reporting the duration is
+    what marks one CONSUMED (field 2026-08-16)."""
     os.makedirs(STATE_DIR, exist_ok=True)
     st = load_state(key) or {}
     eps = st.get("episodes")
@@ -51,7 +60,12 @@ def save_state(key, url, pos, episode_id=None, duration=None):
         eps = {}
     ep_key = episode_id or url
     if duration and pos > duration - RESUME_MIN_S:
-        eps.pop(ep_key, None)  # finished — no mid-episode resume to keep
+        # The duration, not `pos`: the threshold accepts anything within
+        # RESUME_MIN_S of the end, so the real position can sit 19s short
+        # of a completion we are certain of. Storytel's own bar for
+        # CONSUMED is not published; the end is unambiguously past it.
+        eps[ep_key] = {"pos": duration, "url": url,
+                       "updated": time.time(), "done": True}
     else:
         eps[ep_key] = {"pos": pos, "url": url, "updated": time.time()}
     st.update({"url": url, "pos": pos, "id": episode_id,
@@ -70,8 +84,10 @@ def episode_pos(st, episode_id, url):
     eps = st.get("episodes")
     if isinstance(eps, dict):  # new format: the map is authoritative — an
         rec = eps.get(episode_id) if episode_id is not None else None  # episode
-        rec = rec or eps.get(url) or {}                       # cleared on finish
-        return float(rec.get("pos") or 0)                     # must stay cleared
+        rec = rec or eps.get(url) or {}
+        if rec.get("done"):     # a finished episode resumes from the start;
+            return 0.0          # the stored position is for the mirror only
+        return float(rec.get("pos") or 0)
     # back-compat: state files written before per-episode memory only had
     # the single top-level bookmark
     if episode_id is not None and st.get("id") == episode_id:
@@ -80,8 +96,31 @@ def episode_pos(st, episode_id, url):
 
 
 def clear_state(key):
+    """Drop the resume position. Any `done` records are KEPT, in a file
+    holding nothing else: player.py clears when a queue finishes by
+    itself, which is exactly when the last episode's completion is
+    freshest and the Storytel mirror (60s heartbeat) is least likely to
+    have seen it yet. Removing the file there would lose the very fact
+    the mirror exists to report. Readers are unaffected — with no
+    top-level id/url, rotate_to_bookmark finds no index and returns
+    (urls, 0.0), the same as a missing file, and episode_pos already
+    reads a done record as 0."""
+    st = load_state(key) or {}
+    eps = st.get("episodes")
+    keep = {k: v for k, v in eps.items()
+            if isinstance(v, dict) and v.get("done")} \
+        if isinstance(eps, dict) else {}
+    if not keep:
+        try:
+            os.remove(state_path(key))
+        except OSError:
+            pass
+        return
     try:
-        os.remove(state_path(key))
+        tmp = state_path(key) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"updated": time.time(), "episodes": keep}, f)
+        os.replace(tmp, state_path(key))
     except OSError:
         pass
 

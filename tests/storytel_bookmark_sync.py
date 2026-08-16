@@ -113,5 +113,62 @@ daemon._storytel_mirror_tick()
 assert storytel.outbox_pending() == 0, "the queue must drain when online"
 print("6. back online, the queued positions drain OK")
 
+# 7. A BOOK HEARD TO THE END IS REPORTED AS FINISHED. This is the one
+#    that bit in the field (2026-08-16): "Kokosbananas og tomattorsken"
+#    played out on the box, the player rolled on to the next episode
+#    untouched, and the account still said 2:20 — the position we had
+#    mirrored mid-listen. save_state used to express completion by
+#    DELETING the record, and the mirror only walks records that exist,
+#    so the one moment worth reporting was the one moment that pushed
+#    nothing. Storytel derives its own state from position (our small
+#    pushes are what flipped books from WILL_CONSUME to CONSUMING), so
+#    the end of the book is what marks it CONSUMED.
+PUSHED.clear()
+bookmarks.save_state(key, "/c/111.mp3", 695.0, "111", 700.0)   # rolled over
+daemon._storytel_mirror_tick()
+assert [p["consumableId"] for p in PUSHED] == ["111"], \
+    f"a finished book must be reported, not silently dropped: {PUSHED}"
+assert PUSHED[0]["position"] == 700000, \
+    ("the DURATION is what gets sent, not the 695s we happened to stop at — "
+     f"the threshold accepts anything within 20s of the end: {PUSHED[0]}")
+print("7. a book heard to the end is pushed as finished OK")
+
+# 8. ...and it still resumes from the start, which is why the record was
+#    deleted in the first place. The tombstone must not become a resume.
+assert bookmarks.episode_pos(bookmarks.load_state(key), "111",
+                             "/c/111.mp3") == 0.0, \
+    "a finished episode must re-tap from the start, not from its last second"
+print("8. a finished episode still starts fresh on the next tap OK")
+
+# 9. THE END OF A QUEUE MUST NOT EAT THE COMPLETION. player.py clears the
+#    state when a queue finishes by itself — precisely when the last
+#    episode's completion is freshest and the 60s mirror is least likely
+#    to have seen it. Removing the file there loses the very fact the
+#    mirror exists to report, so `done` records survive a clear.
+PUSHED.clear()
+bookmarks.save_state(key, "/c/222.mp3", 698.0, "222", 700.0)   # last one out
+bookmarks.clear_state(key)                                     # queue over
+st_after = bookmarks.load_state(key) or {}
+assert (st_after.get("episodes") or {}).get("222", {}).get("done"), \
+    "clearing a finished queue threw away the completion before it was sent"
+assert not st_after.get("url") and not st_after.get("id"), \
+    "the resume bookmark itself must still be gone — clear_state must clear"
+daemon._storytel_mirror_tick()
+assert [p["consumableId"] for p in PUSHED] == ["222"], \
+    f"the last episode of a queue must still reach Storytel: {PUSHED}"
+print("9. a completion survives the end-of-queue clear OK")
+
+# 10. and with nothing finished, clear_state still removes the file
+#     outright — an unfinished queue leaves no trace, as before. A key of
+#     its own: the one above is full of completions by now, which is
+#     exactly the case this pin is NOT about.
+fresh = key + "-unfinished"
+bookmarks.save_state(fresh, "/c/333.mp3", 30.0, "333", 700.0)
+bookmarks.clear_state(fresh)
+assert bookmarks.load_state(fresh) is None, \
+    "with no completions to keep, clear_state must leave nothing behind"
+print("10. with nothing finished, the state file is removed as before OK")
+
 print("\nSTORYTEL BOOKMARK SYNC OK — one-way out, silent when unchanged, "
-      "and an offline stretch is queued, never lost.")
+      "an offline stretch is queued, and a book heard to the end is "
+      "reported as finished.")
