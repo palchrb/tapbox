@@ -883,19 +883,35 @@ async function addCheckedStorytel() {
     .map((cb) => STORYTEL_SHELF.find((g) => g.target === cb.dataset.target))
     .filter(Boolean);
   if (!picks.length) { toast("Check a series first"); return; }
+  let added = 0;
   try {
     await saveLibrary((lib) => {
+      // Dedup against the WHOLE library, not just the chosen section:
+      // the server derives entry ids from the target, globally unique —
+      // and a still-downloading series renders checked+enabled (so a
+      // stalled download stays kickable), so it rides along in every
+      // save. Section-scoped dedup let it into a second section, and
+      // the server 400'd the whole save, new series included (field
+      // 2026-08-16: "duplicate entry id" until Kokosbananas finished
+      // downloading and its row went disabled).
+      const have = new Set();
+      for (const s of lib.sections)
+        for (const e of s.entries) have.add(e.target);
       let sec = lib.sections.find(
         (s) => s.name.toLowerCase() === section.toLowerCase());
       if (sec && sec.spotify_user) { sec = null; }  // don't touch a follow
       if (!sec) { sec = { name: section, entries: [] }; lib.sections.push(sec); }
+      added = 0;  // saveLibrary may retry the mutate on a fresh copy
       for (const g of picks) {
-        if (sec.entries.some((e) => e.target === g.target)) continue;
+        if (have.has(g.target)) continue;
         sec.entries.push({ name: g.name, target: g.target,
                            order: "oldest_first", cache: -1, resume: true });
+        added += 1;
       }
     });
-    toast(`Added ${picks.length} series — downloading to the box`);
+    toast(added
+      ? `Added ${added} series — downloading to the box`
+      : "Already on the box — download nudged");
     await loadLibrary();
     renderStorytelShelf();
   } catch (e) { toast(e.message, 6000); }

@@ -39,4 +39,23 @@ assert not bad, "bare-id selectors (missing '#'?): " + \
 print(f"1. all {src.count(chr(36) + chr(40))} $( calls use a real "
       "selector OK")
 
-print("\nPWA SELECTORS OK — no $(\"id\") that should have been $(\"#id\").")
+# 2. The storytel picker's dedup must span the WHOLE library, not the
+#    chosen section: entry ids are sha1(target), globally unique, and a
+#    still-downloading series renders checked+enabled (deliberate — a
+#    stalled download stays kickable) so it rides along in every save.
+#    Section-scoped dedup let it into a second section and the server
+#    400'd the whole save, blocking the NEW series too (field 2026-08-16:
+#    "duplicate entry id" until Kokosbananas finished downloading).
+fn = src[src.index("async function addCheckedStorytel"):]
+fn = fn[:fn.index("\n}")]
+assert "for (const s of lib.sections)" in fn and "have.add(e.target)" in fn, \
+    "the dedup set must be built from EVERY section's entries"
+assert fn.index("have.add(e.target)") < fn.index("sec.entries.push"), \
+    "…and built before anything is pushed"
+assert "sec.entries.some" not in fn, \
+    "section-scoped dedup is the bug — it must not come back"
+print("2. the storytel picker dedups against the whole library OK")
+
+print("\nPWA SELECTORS OK — no $(\"id\") that should have been $(\"#id\"), "
+      "and the storytel picker cannot 400 itself on a half-downloaded "
+      "series.")
