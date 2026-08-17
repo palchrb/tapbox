@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0c0c14">
+<title>Vibb — Backup</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Backup</h1>
+  <a href="index.html" class="back-link">← Vibb</a>
+</header>
+
+<main class="page">
+
+<p class="dim small">
+  Backs up the library, settings, RFID cards, the Storytel and Spotify
+  logins, and every child's place in every book. Downloaded audio is left
+  out — it can be fetched again.
+</p>
+
+<section class="card">
+  <h2>Status</h2>
+  <p id="bk-status" class="dim">Checking…</p>
+</section>
+
+<section class="card">
+  <h2>Where backups go</h2>
+  <p class="dim small">
+    Backups are stored with <strong>restic</strong>, which encrypts them
+    before they leave the box. restic reaches your storage through
+    <strong>rclone</strong>, so any provider rclone supports works —
+    S3, Backblaze B2, Nextcloud/WebDAV, Jottacloud, Drive, Dropbox, SFTP.
+  </p>
+  <p class="dim small">
+    On your own computer run <code>rclone config</code> to create a remote
+    (that step also handles providers that need a browser login), then paste
+    the resulting block from <code>rclone.conf</code> below.
+  </p>
+  <form id="bk-remote-form">
+    <label for="bk-conf">rclone remote config</label>
+    <textarea id="bk-conf" rows="7" spellcheck="false"
+      placeholder="[myremote]&#10;type = s3&#10;provider = ...&#10;access_key_id = ...&#10;secret_access_key = ..."></textarea>
+
+    <label for="bk-path">Folder in that remote</label>
+    <input id="bk-path" type="text" value="vibb-backup" spellcheck="false">
+
+    <label for="bk-pass">Repository password</label>
+    <input id="bk-pass" type="password" autocomplete="new-password"
+           placeholder="encrypts the backup">
+    <p class="dim small">
+      This password encrypts the repository. <strong>Write it down.</strong>
+      Without it the backup cannot be read — not by us, not by anyone.
+      It is stored on the box so backups can run unattended.
+    </p>
+    <button type="submit" id="bk-save">Save and connect</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Back up now</h2>
+  <p class="dim small">Backups also run on their own a few times a day.</p>
+  <button type="button" id="bk-now">Back up now</button>
+  <p id="bk-now-msg" class="dim small"></p>
+</section>
+
+<section class="card danger">
+  <h2>Restore</h2>
+  <p class="dim small">
+    Replaces this box's library, settings, logins and bookmarks with a
+    saved copy, then <strong>reboots</strong>. The box keeps its own QR
+    code — restoring never brings back an old one — and a Bluetooth
+    speaker has to be paired again.
+  </p>
+  <label for="bk-snap">Backup to restore</label>
+  <select id="bk-snap"><option value="">Loading…</option></select>
+  <button type="button" id="bk-restore" class="danger">Restore and reboot</button>
+  <p id="bk-restore-msg" class="dim small"></p>
+</section>
+
+</main>
+
+<div id="toast" hidden></div>
+
+<script>
+/* Standalone page: the daily controls live in index.html, and a restore
+   button does not belong next to the volume slider. Shares the box token
+   that index.html already stored, so a linked phone is linked here too. */
+const $ = (s) => document.querySelector(s);
+const TOKEN_KEY = "vibb.token";
+let TOKEN = "";
+try { TOKEN = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { TOKEN = ""; }
+
+function toast(msg, ms = 3000) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (TOKEN) headers["X-Vibb-Token"] = TOKEN;
+  const r = await fetch(path, {
+    ...opts,
+    headers: { ...headers, ...(opts.headers || {}) },
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+  });
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).error || msg; } catch (e) { /* not json */ }
+    if (r.status === 401) {
+      throw new Error("This phone isn't linked to the box — open Vibb and link it first");
+    }
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+async function loadStatus() {
+  const el = $("#bk-status");
+  try {
+    const s = await api("/backup/status");
+    el.textContent = s.configured
+      ? `Connected — backing up to ${s.repo}`
+      : "No storage connected yet — set one up below.";
+    el.classList.toggle("dim", !s.configured);
+  } catch (e) {
+    el.textContent = e.message;
+  }
+}
+
+/* A backup is only as good as the restore, so the snapshot list is the
+   proof it worked — shown even before anyone needs it. */
+async function loadSnapshots() {
+  const sel = $("#bk-snap");
+  sel.textContent = "";
+  let snaps = [];
+  try {
+    snaps = (await api("/backup/snapshots")).snapshots || [];
+  } catch (e) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = e.message;
+    sel.append(o);
+    return;
+  }
+  if (!snaps.length) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "No backups yet";
+    sel.append(o);
+    return;
+  }
+  for (const s of snaps) {
+    const o = document.createElement("option");
+    o.value = s.id;
+    const when = s.time ? new Date(s.time).toLocaleString() : s.id;
+    o.textContent = when;
+    sel.append(o);
+  }
+}
+
+$("#bk-remote-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const btn = $("#bk-save");
+  btn.disabled = true;
+  try {
+    await api("/backup/configure", {
+      method: "POST",
+      body: {
+        rclone_conf: $("#bk-conf").value,
+        path: $("#bk-path").value.trim(),
+        repo_password: $("#bk-pass").value,
+      },
+    });
+    $("#bk-pass").value = "";
+    toast("Storage connected");
+    loadStatus();
+    loadSnapshots();
+  } catch (e) {
+    toast(e.message, 6000);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#bk-now").addEventListener("click", async () => {
+  const btn = $("#bk-now");
+  const msg = $("#bk-now-msg");
+  btn.disabled = true;
+  msg.textContent = "Backing up…";
+  try {
+    const r = await api("/backup/now", { method: "POST" });
+    msg.textContent = `Backed up ${r.files} files.`;
+    loadSnapshots();
+  } catch (e) {
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#bk-restore").addEventListener("click", async () => {
+  const snap = $("#bk-snap").value;
+  if (!snap) { toast("No backup selected"); return; }
+  if (!confirm("Replace this box's library, settings, logins and bookmarks "
+               + "with the selected backup, then reboot?")) return;
+  const btn = $("#bk-restore");
+  const msg = $("#bk-restore-msg");
+  btn.disabled = true;
+  msg.textContent = "Restoring…";
+  try {
+    const r = await api("/backup/restore",
+                        { method: "POST", body: { snapshot: snap } });
+    msg.textContent = `Restored ${r.restored} files — the box is rebooting.`;
+  } catch (e) {
+    msg.textContent = e.message;
+    btn.disabled = false;
+  }
+});
+
+loadStatus();
+loadSnapshots();
+</script>
+</body>
+</html>

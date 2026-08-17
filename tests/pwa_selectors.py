@@ -56,6 +56,29 @@ assert "sec.entries.some" not in fn, \
     "section-scoped dedup is the bug — it must not come back"
 print("2. the storytel picker dedups against the whole library OK")
 
+# 3. backup.html carries its OWN inline script with the same $() helper,
+#    so it is exposed to exactly the bug above — and being a separate page
+#    it would not be covered by the app.js scan. Check it too, and check
+#    every id it selects actually exists in its own markup (a typo'd id
+#    silently yields null and the handler never attaches, which is how the
+#    Storytel login "did nothing" in the field).
+BK = os.path.join(REPO, "pi", "web", "backup.html")
+bk = open(BK, encoding="utf-8").read()
+bad_bk = [m.group(1) for m in re.finditer(r'\$\(\s*"([^"]*)"', bk)
+          if re.fullmatch(r"[A-Za-z][\w-]*", m.group(1))]
+assert not bad_bk, f"backup.html has bare-id selectors: {bad_bk}"
+
+ids = set(re.findall(r'\bid="([^"]+)"', bk))
+missing = sorted({m.group(1) for m in re.finditer(r'\$\(\s*"#([\w-]+)"', bk)}
+                 - ids)
+assert not missing, \
+    f"backup.html selects ids that its markup never defines: {missing}"
+# and the page must reach the box only through the token-gated endpoints
+for route in ("/backup/status", "/backup/snapshots", "/backup/configure",
+              "/backup/now", "/backup/restore"):
+    assert route in bk, f"backup.html never calls {route}"
+print("3. backup.html's selectors resolve and it calls the real routes OK")
+
 print("\nPWA SELECTORS OK — no $(\"id\") that should have been $(\"#id\"), "
       "and the storytel picker cannot 400 itself on a half-downloaded "
       "series.")

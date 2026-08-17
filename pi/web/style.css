@@ -221,3 +221,32 @@ dd { margin: 0; text-align: right; }
 .queue-ep { cursor: pointer; }
 .queue-ep.playing strong::before { content: "▶ "; color: var(--accent, #6bf); }
 .queue-ep.playing { outline: 1px solid var(--accent, #6bf); border-radius: 8px; }
+
+/* --- backup.html: its own page, so a restore button is nowhere near the
+   volume slider. Only the few classes index.html never needed. --- */
+.page { padding-bottom: 2rem; }
+.back-link { color: var(--dim); text-decoration: none; font-size: 0.9rem; }
+a.button {
+  display: inline-block;
+  background: #26262f;
+  color: var(--fg);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font-size: 1rem;
+  text-decoration: none;
+}
+a.button:active { background: #333340; }
+.card.danger { outline: 1px solid var(--danger); }
+.card.danger h2 { color: var(--danger); }
+textarea {
+  background: #26262f;
+  color: var(--fg);
+  border: 1px solid #33333e;
+  border-radius: 0.5rem;
+  padding: 0.55rem;
+  font-size: 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
