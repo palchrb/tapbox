@@ -506,7 +506,18 @@ def _restic_env(repo=None):
     return env
 
 
-def _restic(*args, timeout=300, check=False, repo=None):
+def _kill_group(proc):
+    """Take down restic AND the `rclone serve restic --stdio` it spawned."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def _restic(*args, timeout=300, check=False, repo=None, watch=False):
     """Run restic, pointing it at our rclone (so it need not be on PATH) and
     our repo/password via env. The password goes by FILE, and the backend
     credentials live in rclone.conf, so neither ever reaches argv or a
@@ -520,12 +531,30 @@ def _restic(*args, timeout=300, check=False, repo=None):
         env=_restic_env(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, start_new_session=True)
     try:
-        out, err = proc.communicate(timeout=timeout)
+        if watch:
+            # Checking once before we start is not enough: a run takes tens
+            # of seconds, and a kid can tap play at any point inside it. The
+            # content sweeper already solves this exact problem by watching
+            # and terminating the child mid-download — 'the radio belongs to
+            # the music'. Same rule here, and cheaper to obey: an abandoned
+            # backup costs nothing, because restic dedups and the next run
+            # re-uploads only what is still missing.
+            deadline = time.monotonic() + timeout
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    raise subprocess.TimeoutExpired(proc.args, timeout)
+                if _box_busy():
+                    _kill_group(proc)
+                    raise Yielded("the box started playing")
+                time.sleep(WATCH_POLL_S)
+            out, err = proc.communicate()
+        else:
+            out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except OSError:
-            proc.kill()
+        _kill_group(proc)
+        proc.communicate()
+        raise
+    except Yielded:
         proc.communicate()
         raise
     r = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
@@ -565,7 +594,7 @@ def _write_secret(path, data):
 
 
 def backup_now(keep=("--keep-daily", "7", "--keep-weekly", "4",
-                     "--keep-monthly", "6")):
+                     "--keep-monthly", "6"), watch=False):
     """Snapshot the whitelist to the repo, then prune to the retention
     policy. Builds the set in a private tmpfs dir and removes it after.
     Returns {snapshot_id, created, files}. Raises RuntimeError on failure."""
@@ -574,8 +603,10 @@ def backup_now(keep=("--keep-daily", "7", "--keep-weekly", "4",
     staging = _mkstaging()
     try:
         manifest = collect(staging)
+        # watch=True only here and on the prune below: a RESTORE is
+        # user-initiated and must never be abandoned halfway.
         r = _restic("backup", "--json", os.path.join(staging, "files"),
-                    os.path.join(staging, "manifest.json"))
+                    os.path.join(staging, "manifest.json"), watch=watch)
         if r.returncode != 0:
             err = f"restic backup failed: {r.stderr.strip()}"
             _note_run(error=err)
@@ -589,7 +620,7 @@ def backup_now(keep=("--keep-daily", "7", "--keep-weekly", "4",
     # or OSError raised straight out and turned a completed backup into a
     # 500 (QA 2026-08-17).
     try:
-        _restic("forget", "--prune", *keep, timeout=600)
+        _restic("forget", "--prune", *keep, timeout=600, watch=watch)
     except Exception as e:
         log_line = f"backup: retention pass failed, snapshot is safe: {e}"
         print(log_line)
@@ -606,6 +637,10 @@ MIN_INTERVAL_S = int(os.environ.get("VIBB_BACKUP_MIN_INTERVAL", 24 * 3600))
 BUSY_WAIT_S = int(os.environ.get("VIBB_BACKUP_BUSY_WAIT", 600))
 BUSY_RECHECK_S = 30
 DAEMON_URL = os.environ.get("VIBB_DAEMON_URL", "http://127.0.0.1:3679")
+# How recent a button press still counts as "hands on the box".
+ACTIVITY_FRESH_S = 120
+# How often a running backup re-checks whether the music started.
+WATCH_POLL_S = 3
 
 
 def _link_up():
@@ -618,6 +653,25 @@ def _link_up():
             return f.read().strip() == "up"
     except OSError:
         return True   # unknown -> try anyway, never stall forever on a probe
+
+
+class Yielded(Exception):
+    """Raised when a backup stood down because the box got busy mid-run.
+    Not a failure: nothing is broken, we simply lost the race for the radio
+    and will try again at the next shutdown. Mirrors library.SweepYield."""
+
+
+def _hands_on_box():
+    """Someone is pressing buttons right now. Browsing is not playback, so
+    /status reads idle — but a backup competing for CPU and the SD card
+    while a child works the menu still shows up as a sluggish screen. The
+    activity marker is the same one vibb-idle uses to hold auto-off."""
+    try:
+        from vibb.paths import last_activity
+        age = time.time() - last_activity()
+        return 0 <= age < ACTIVITY_FRESH_S
+    except Exception:
+        return False
 
 
 def _box_busy():
@@ -643,7 +697,8 @@ def _box_busy():
             st = json.loads(r.read() or b"{}")
     except Exception:
         return False
-    return bool(st.get("playing") or st.get("bt_connected"))
+    return bool(st.get("playing") or st.get("bt_connected")
+                or _hands_on_box())
 
 
 def main(argv=None):
@@ -697,7 +752,13 @@ def main(argv=None):
             time.sleep(BUSY_RECHECK_S)
             waited += BUSY_RECHECK_S
         try:
-            r = backup_now()
+            # watch=True: stand down if the music starts WHILE we run.
+            r = backup_now(watch=True)
+        except Yielded as e:
+            print(f"backup: stood down mid-run ({e}) — the radio belongs "
+                  "to the music; retrying at the next shutdown")
+            return 0                 # not a failure, and not an error to
+            #                          record: nothing is broken
         except Exception as e:      # incl. subprocess timeouts, not just
             _note_run(error=str(e))  # RuntimeError — a timed-out run must
             print(f"backup: {e}")    # still reach last_error, or the PWA

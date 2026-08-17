@@ -282,12 +282,53 @@ print("10. the daily cadence is wall-clock and survives reboots OK")
 #     a hung run left last_error stale, so a box failing every run looked
 #     healthy — defeating the field the check exists for.
 backup.MIN_INTERVAL_S = 0
-backup.backup_now = lambda: (_ for _ in ()).throw(
+_real_backup_now = backup.backup_now
+backup.backup_now = lambda **kw: (_ for _ in ()).throw(
     __import__("subprocess").TimeoutExpired("restic", 300))
 assert backup.main() == 1, "a timed-out backup must report failure"
 assert backup.status()["last_error"], \
     "a timeout must reach last_error, not just the journal"
 print("11. a timed-out run is recorded, not silently lost OK")
+
+# --- 12. A RUNNING BACKUP STANDS DOWN WHEN THE MUSIC STARTS ----------------
+#     Checking once before we start is not enough: a run takes tens of
+#     seconds and a kid can tap play at any point inside it. The content
+#     sweeper already terminates its child mid-download for exactly this
+#     reason. An abandoned backup costs nothing — restic dedups, so the
+#     next run re-uploads only what is still missing.
+backup.backup_now = _real_backup_now      # undo test 11's stub
+SLOW_RESTIC = FAKE_RESTIC.replace(
+    'if cmd == "backup":',
+    'if cmd == "backup":\n    import time as _t; _t.sleep(3)')
+_install(os.environ["VIBB_RESTIC_BIN"], SLOW_RESTIC)
+backup.WATCH_POLL_S = 0.1
+backup.MIN_INTERVAL_S = 0
+started = [0]
+
+
+def _busy_after_first_look():
+    started[0] += 1
+    return started[0] > 1       # idle when we decide to start, busy once in
+
+
+backup._box_busy = _busy_after_first_look
+err_before = backup.status()["last_error"]
+rc = backup.main()
+assert rc == 0, "standing down is not a failure — nothing is broken"
+assert backup.status()["last_error"] == err_before, \
+    "a yield must not be recorded as an error; nothing is broken"
+print("12. a backup already running stands down when playback starts OK")
+
+# 13. ...and a yield does NOT count as a successful backup, so the daily
+#     gate still lets the next shutdown try again.
+before = backup.status()["last_ok"]
+backup._box_busy = _busy_after_first_look
+started[0] = 0
+backup.main()
+assert backup.status()["last_ok"] == before, \
+    "a yielded run must not stamp a success, or it would suppress retries"
+_install(os.environ["VIBB_RESTIC_BIN"], FAKE_RESTIC)   # heal
+print("13. a yielded run does not claim success OK")
 
 print("\nBACKUP RESTIC OK — setup rolls back, health is visible, the timer "
       "waits for a trustworthy clock, and the music always wins the radio.")
