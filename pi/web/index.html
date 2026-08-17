@@ -15,7 +15,10 @@
 </head>
 <body>
 <header>
-  <h1>Vibb</h1>
+  <!-- The logo ships in the repo and is served from the box itself, with
+       its wordmark font embedded as a data: URI — the PWA must render
+       identically offline, so no external fetch may hide here. -->
+  <h1><img src="logo.svg" alt="Vibb" class="logo"></h1>
   <div id="battery" class="battery" title="Battery">–</div>
 </header>
 
