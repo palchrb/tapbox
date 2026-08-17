@@ -30,8 +30,10 @@ import glob
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
+import urllib.request
 
 from vibb.paths import ART_DIR, STATE_DIR, clock_trusted
 
@@ -509,10 +511,27 @@ def _restic(*args, timeout=300, check=False, repo=None):
     our repo/password via env. The password goes by FILE, and the backend
     credentials live in rclone.conf, so neither ever reaches argv or a
     subprocess stderr we might surface in an HTTP error."""
-    return subprocess.run(
+    # start_new_session: restic spawns `rclone serve restic --stdio` as a
+    # child. On a timeout subprocess kills only restic, and the stranded
+    # rclone sits on tens of MB of RSS on a 512MB box — so give the pair its
+    # own process group and take the group down (QA 2026-08-17).
+    proc = subprocess.Popen(
         [RESTIC_BIN, "-o", f"rclone.program={RCLONE_BIN}", *args],
-        env=_restic_env(repo), capture_output=True, text=True,
-        timeout=timeout, check=check)
+        env=_restic_env(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        proc.communicate()
+        raise
+    r = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+    if check and r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, proc.args, out, err)
+    return r
 
 
 def _write_secret_text(path, text):
@@ -566,10 +585,65 @@ def backup_now(keep=("--keep-daily", "7", "--keep-weekly", "4",
         shutil.rmtree(staging, ignore_errors=True)
     _note_run(ok_at=manifest["created"])
     # retention — best effort; a prune failure must not fail the backup that
-    # already succeeded.
-    _restic("forget", "--prune", *keep, timeout=600)
+    # already succeeded. The bare call did not honour that: a TimeoutExpired
+    # or OSError raised straight out and turned a completed backup into a
+    # 500 (QA 2026-08-17).
+    try:
+        _restic("forget", "--prune", *keep, timeout=600)
+    except Exception as e:
+        log_line = f"backup: retention pass failed, snapshot is safe: {e}"
+        print(log_line)
     return {"snapshot_id": snap_id, "created": manifest["created"],
             "files": len(manifest["files"])}
+
+
+# One real backup a day. The TIMER only wakes us — this wall-clock gate is
+# what sets the cadence, and unlike a monotonic timer it survives the reboots
+# a toddler causes (see main()).
+MIN_INTERVAL_S = int(os.environ.get("VIBB_BACKUP_MIN_INTERVAL", 24 * 3600))
+# How long to keep waiting for the music to stop before giving up until the
+# next wake. Deferring is nearly free for a backup; stopping the music is not.
+BUSY_WAIT_S = int(os.environ.get("VIBB_BACKUP_BUSY_WAIT", 600))
+BUSY_RECHECK_S = 30
+DAEMON_URL = os.environ.get("VIBB_DAEMON_URL", "http://127.0.0.1:3679")
+
+
+def _link_up():
+    """Is wifi actually up? WiFi powers OFF to save battery when the box is
+    away from known networks, and restic's retry ladder would then burn
+    minutes before failing. A 10ms sysfs read instead — same file netmgmt
+    reads, without importing it (this module stays thin by contract)."""
+    try:
+        with open("/sys/class/net/wlan0/operstate") as f:
+            return f.read().strip() == "up"
+    except OSError:
+        return True   # unknown -> try anyway, never stall forever on a probe
+
+
+def _box_busy():
+    """True while the box is playing OR a Bluetooth speaker is live.
+
+    The radio rule this box runs on: 'whoever is doing something
+    time-critical owns the radio; the side that CAN wait a few seconds,
+    waits' (vibb/radio.py). A backup is always the side that can wait —
+    an upload shares the single 2.4GHz radio with both the Spotify stream
+    and the A2DP link, and NM/TLS bursts mid-playback are the documented
+    stutter-and-firmware-crash trigger (library.py, netmgmt.py).
+
+    Read off the daemon's own /status, which is token-free by design.
+    `bt_connected` is only present when the BT speaker is the ACTIVE output,
+    so its presence means a live A2DP PCM right now. Counting a PAUSED
+    session as busy is deliberate — a kid mid-listen resumes any second.
+
+    Fails OPEN: a broken check must never stall backups forever, the same
+    rule library.py's own busy check follows.
+    """
+    try:
+        with urllib.request.urlopen(DAEMON_URL + "/status", timeout=5) as r:
+            st = json.loads(r.read() or b"{}")
+    except Exception:
+        return False
+    return bool(st.get("playing") or st.get("bt_connected"))
 
 
 def main(argv=None):
@@ -593,13 +667,69 @@ def main(argv=None):
     if not clock_trusted():
         print("backup: clock not trusted yet (no RTC) — skipping this run")
         return 0
+    # The cadence gate, and the reason the timer fires more often than we
+    # back up. A MONOTONIC timer restarts from zero at every boot, and
+    # systemd does not carry OnUnitActiveSec across reboots — so on a box
+    # power-cycled by toddlers, OnUnitActiveSec=6h essentially never fired
+    # and OnBootSec did: one backup per boot, 15 minutes into a listening
+    # session, which is the worst possible window. (Persistent= would not
+    # have helped either — it only applies to OnCalendar= timers.) The fix
+    # is to make the timer a cheap WAKE and put the cadence here, in wall
+    # clock, where a reboot cannot reset it (QA 2026-08-17).
+    last_ok = (status() or {}).get("last_ok")
+    if last_ok and 0 <= time.time() - last_ok < MIN_INTERVAL_S:
+        return 0
+    if not _link_up():
+        print("backup: no network (wifi is off to save battery) — skipping")
+        return 0
+    # Only one at a time: the timer and the PWA's "Back up now" would
+    # otherwise collide on restic's own repo lock and surface as an error.
+    lock = _take_lock()
+    if lock is None:
+        print("backup: another backup is already running")
+        return 0
     try:
-        r = backup_now()
-    except RuntimeError as e:
-        print(f"backup: {e}")
-        return 1
+        waited = 0
+        while _box_busy():
+            if waited >= BUSY_WAIT_S:
+                print("backup: box still busy — leaving it for the next wake")
+                return 0
+            time.sleep(BUSY_RECHECK_S)
+            waited += BUSY_RECHECK_S
+        try:
+            r = backup_now()
+        except Exception as e:      # incl. subprocess timeouts, not just
+            _note_run(error=str(e))  # RuntimeError — a timed-out run must
+            print(f"backup: {e}")    # still reach last_error, or the PWA
+            return 1                 # reports health it does not have
+    finally:
+        _release_lock(lock)
     print(f"backup: snapshot {r.get('snapshot_id')} ({r.get('files')} files)")
     return 0
+
+
+def _take_lock():
+    """A non-blocking flock, or None when someone else holds it."""
+    import fcntl
+    from vibb.paths import RUN_DIR
+    try:
+        fd = os.open(os.path.join(RUN_DIR, "vibb-backup.lock"),
+                     os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def _release_lock(fd):
+    try:
+        os.close(fd)     # closing releases the flock
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

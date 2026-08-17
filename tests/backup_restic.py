@@ -219,6 +219,9 @@ print("6. status() carries the last successful backup time OK")
 #     DAY. Backing up under a wrong clock files snapshots in the wrong bucket.
 #     The rest of the codebase waits for clock_trusted(); so does this.
 open(RESTIC_LOG, "w").close()
+# set the other gates aside so this pins the CLOCK one alone
+backup.MIN_INTERVAL_S = 0
+backup._box_busy = lambda: False
 backup.clock_trusted = lambda: False
 assert backup.main() == 0, "an untrusted clock is a clean no-op, not a failure"
 assert "backup" not in open(RESTIC_LOG).read(), \
@@ -229,5 +232,62 @@ assert "backup --json" in open(RESTIC_LOG).read(), \
     "with a trusted clock the timer entry point does back up"
 print("7. the timer skips cleanly until the clock is trusted OK")
 
-print("\nBACKUP RESTIC OK — setup rolls back on failure, health is visible, "
-      "and the timer waits for a trustworthy clock.")
+# --- 8. THE BACKUP STANDS DOWN WHILE THE BOX IS BUSY ------------------------
+#     An upload shares the single 2.4GHz radio with the Spotify stream AND
+#     the A2DP link; a TLS burst mid-playback is the documented stutter and
+#     firmware-crash trigger on this hardware. A backup is always the side
+#     that can wait. Crucially it must DEFER, never quiesce: stopping a
+#     child's audiobook to upload 1MB of JSON is the worst available trade.
+backup.MIN_INTERVAL_S = 0        # don't let the daily gate mask this
+backup.BUSY_WAIT_S = 0           # give up immediately rather than sleep
+open(RESTIC_LOG, "w").close()
+backup._box_busy = lambda: True
+assert backup.main() == 0, "a busy box is a clean no-op, not a failure"
+assert "backup" not in open(RESTIC_LOG).read(), \
+    "no snapshot may be taken while the box is playing or BT is live"
+backup._box_busy = lambda: False
+assert backup.main() == 0
+assert "backup --json" in open(RESTIC_LOG).read(), \
+    "an idle box does back up"
+print("8. the backup defers while playing/BT is live, and runs when idle OK")
+
+# 9. ...and the busy check FAILS OPEN — a broken probe must never stall
+#    backups forever (the rule library.py's own busy check follows).
+import urllib.request as _u  # noqa: E402
+
+
+def _boom(*a, **k):
+    raise OSError("daemon not answering")
+
+
+_real_urlopen, _u.urlopen = _u.urlopen, _boom
+assert backup._box_busy() is False, \
+    "an unreachable daemon must read as 'not busy', never block backups"
+_u.urlopen = _real_urlopen
+print("9. an unreachable daemon fails open OK")
+
+# --- 10. the daily gate is wall-clock, so a reboot cannot reset it ----------
+#     A monotonic systemd timer restarts at every boot; on a toddler-power-
+#     cycled box that meant one backup per boot, 15 min into a listening
+#     session. The cadence lives here instead.
+backup.MIN_INTERVAL_S = 24 * 3600
+open(RESTIC_LOG, "w").close()
+assert backup.main() == 0
+assert "backup --json" not in open(RESTIC_LOG).read(), \
+    "a backup taken minutes ago must not be repeated on the next wake"
+print("10. the daily cadence is wall-clock and survives reboots OK")
+
+# --- 11. a timed-out restic still reports the failure ----------------------
+#     TimeoutExpired is not a RuntimeError; catching only RuntimeError meant
+#     a hung run left last_error stale, so a box failing every run looked
+#     healthy — defeating the field the check exists for.
+backup.MIN_INTERVAL_S = 0
+backup.backup_now = lambda: (_ for _ in ()).throw(
+    __import__("subprocess").TimeoutExpired("restic", 300))
+assert backup.main() == 1, "a timed-out backup must report failure"
+assert backup.status()["last_error"], \
+    "a timeout must reach last_error, not just the journal"
+print("11. a timed-out run is recorded, not silently lost OK")
+
+print("\nBACKUP RESTIC OK — setup rolls back, health is visible, the timer "
+      "waits for a trustworthy clock, and the music always wins the radio.")

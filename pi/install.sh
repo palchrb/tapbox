@@ -841,6 +841,7 @@ for f in "$SCRIPT_DIR"/web/*; do
   install_if_changed 644 "$f" "/usr/share/vibb/web/$(basename "$f")" || true
 done
 
+mkdir -p /var/cache/vibb-restic   # restic's index cache (see RESTIC_CACHE_DIR)
 # Backup timer. A dedicated timer, NOT the 6h cache sweeper: a backup that
 # fails must never interfere with cache pruning, and the two have nothing to
 # do with each other. Harmless before the owner has connected any storage —
@@ -848,12 +849,34 @@ done
 write_if_changed /etc/systemd/system/vibb-backup.service <<'EOF' && BK_CHANGED=1
 [Unit]
 Description=Vibb: back up the box's config, secrets and bookmarks
-After=network-online.target
-Wants=network-online.target
+# No network-online.target: at timer-fire time it is long since active and
+# tells us nothing, and it cannot un-rfkill a radio that auto-off powered
+# down. vibb.backup checks the link itself in ~10ms.
 
 [Service]
 Type=oneshot
+# Playback always wins. nice+CPUWeight for the scheduler, CPUAffinity to
+# match the content sweeper's own `taskset -c 1`, and GOMAXPROCS=1 so Go
+# does not spin four Ps and four GC workers onto that one core.
 Nice=19
+CPUWeight=20
+CPUAffinity=1
+IOSchedulingClass=idle
+# THE IMPORTANT ONES. ~430MB usable after the GPU split, no swap and no
+# zram anywhere, and restic+rclone are two Go binaries that together want
+# 100-170MB. Without a ceiling the kernel OOM killer picks by score — and
+# that can just as easily be mpv or go-librespot as restic, i.e. the music
+# dies to save the backup. MemoryMax makes the cgroup OOM local: the backup
+# is what dies, and it simply retries at the next wake (QA 2026-08-17).
+MemoryHigh=100M
+MemoryMax=200M
+MemorySwapMax=0
+Environment=GOMEMLIMIT=80MiB GOGC=20 GOMAXPROCS=1
+# systemd sets $HOME only with User=, and no vibb unit has one. Without it
+# restic cannot resolve a cache dir, warns, and runs CACHELESS — re-fetching
+# the whole index from the remote every run, forever. Kept out of CACHE_DIR,
+# which is served and pruned.
+Environment=RESTIC_CACHE_DIR=/var/cache/vibb-restic
 Environment=PYTHONPATH=/usr/local/lib/vibb-py
 ExecStart=/usr/bin/python3 -m vibb.backup
 EOF
@@ -862,13 +885,19 @@ write_if_changed /etc/systemd/system/vibb-backup.timer <<'EOF' && BK_CHANGED=1
 Description=Vibb: periodic backup of the box's irreplaceable state
 
 [Timer]
-OnBootSec=15min
-# 6h: the data is tiny and changes rarely (a library edit, a bookmark),
-# and restic dedups, so a run that finds nothing new costs almost nothing.
-OnUnitActiveSec=6h
-# The box is often asleep or offline at any given moment — catch up rather
-# than silently skipping a whole day.
-Persistent=true
+# These fire a cheap WAKE, not a backup: vibb.backup decides, and its gate
+# is a 24h WALL-CLOCK check that a reboot cannot reset.
+#
+# Why not just OnUnitActiveSec=24h: monotonic timers restart from zero at
+# every boot and systemd does not carry the elapse across reboots, so on a
+# box power-cycled by toddlers the interval essentially never fired — what
+# fired was OnBootSec, once per boot, 15 minutes into a listening session.
+# The cadence knob was not the one in control. (Persistent= would not have
+# fixed it either: it only applies to OnCalendar= timers, and an OnCalendar
+# timer would fire a backup straight into the boot storm.)
+OnBootSec=20min
+OnUnitActiveSec=2h
+AccuracySec=5min
 RandomizedDelaySec=10min
 
 [Install]
