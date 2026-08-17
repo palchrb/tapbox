@@ -42,7 +42,10 @@ def w(path, text, mode=0o644):
 
 
 # --- a plausible box on disk ------------------------------------------------
-w(os.path.join(ETC, "library.json"), json.dumps({"version": 1, "sections": []}))
+w(os.path.join(ETC, "library.json"), json.dumps({"version": 1, "sections": [
+    {"id": "eventyr", "name": "Eventyr", "entries": [],
+     # absolute path, exactly as POST /library/section-logo stores it
+     "image": os.path.join(ART, "section-eventyr.jpg")}]}))
 w(os.path.join(ETC, "settings.json"), json.dumps({"screen_brightness": 7}))
 w(os.path.join(ETC, "cards.json"), json.dumps({"04AABB": "storytel:book:1"}))
 w(os.path.join(ETC, "rfid.conf"), "MODE=poll\n")
@@ -137,6 +140,21 @@ for secret in (os.path.join(ETC, "storytel.json"),
 assert not any(n.endswith(backup.RESTORE_TMP_SUFFIX)
                for n in os.listdir(ETC)), "restore tmp not cleaned up"
 print("3. a round-trip is byte-identical and secrets land 0600 OK")
+
+# 3b. A section logo and the library entry that POINTS at it must survive
+#     together. library.json stores the logo's ABSOLUTE path (the upload
+#     route writes sec["image"] = path), so the reference only stays valid
+#     because both are restored to the same absolute locations — ART_DIR is
+#     /var/lib/vibb/art on every box. If either the glob or the path guard
+#     ever drops section art, the carousel comes back with dead references
+#     and nobody notices until a parent looks at the home screen.
+lib_after = json.load(open(os.path.join(ETC, "library.json")))
+ref = lib_after["sections"][0]["image"]
+assert ref == os.path.join(ART, "section-eventyr.jpg"), ref
+assert os.path.isfile(ref), \
+    "the library points at a section logo the restore did not bring back"
+assert open(ref, "rb").read() == b"JPEGDATA", "the logo came back corrupt"
+print("3b. a section logo and the library reference to it survive together OK")
 
 # --- 4. a too-new schema is refused -----------------------------------------
 future = tempfile.mkdtemp()
