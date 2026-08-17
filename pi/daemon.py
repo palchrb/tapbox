@@ -3601,6 +3601,10 @@ class Handler(BaseHTTPRequestHandler):
                 # would write them back over the restore, and go-librespot,
                 # BlueZ and NM never re-read on their own.
                 try:
+                    # Before the apply, not after: the bookmarker threads run
+                    # throughout, and anything they write from here on would
+                    # be pre-restore state landing on top of the restore.
+                    _RESTORING[0] = True
                     manifest = _backup.restore_snapshot(
                         body.get("snapshot") or "latest")
                 except RuntimeError as e:
@@ -3830,6 +3834,10 @@ SAFE = {
 # Recovery valve for a box whose screen is broken. Documented in
 # SECURITY.md, never shipped enabled.
 REQUIRE_TOKEN = os.environ.get("VIBB_REQUIRE_TOKEN", "1") != "0"
+# Set for the rest of this process's life once a restore has applied files:
+# every writer of restored state must stand down, or the reboot's own
+# shutdown flush puts pre-restore positions back (see _on_term).
+_RESTORING = [False]
 
 _DENY_LOG = {"at": 0.0, "n": 0}
 
@@ -5133,6 +5141,13 @@ def _flush_spotify_bookmark():
 
 
 def _on_term(*_args):
+    # A restore just wrote last-play.json and the spotify bookmarks from a
+    # snapshot, and the reboot it triggers arrives here as SIGTERM. Flushing
+    # our IN-MEMORY position over them would undo part of the restore with
+    # stale pre-restore state — so a restore in progress skips persistence
+    # entirely and just leaves (QA 2026-08-17).
+    if _RESTORING[0]:
+        os._exit(0)
     _flag_was_playing()
     _flush_spotify_bookmark()
     _sonos_on_term()

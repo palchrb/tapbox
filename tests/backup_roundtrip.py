@@ -173,5 +173,91 @@ assert not os.path.exists(dest + backup.RESTORE_TMP_SUFFIX), \
     "the staged tmp must be cleaned up on abort"
 print("5. a torn JSON member aborts the restore, writing nothing OK")
 
+# --- 6. A HOSTILE MANIFEST CANNOT WRITE OUTSIDE THE BOX'S OWN CONFIG -------
+#     vibb-daemon runs as ROOT (install.sh gives it no User=), and the
+#     manifest decides where bytes land. Without validation, one entry of
+#     "/etc/systemd/system/x.service" makes restore an arbitrary root-owned
+#     overwrite. The repo is encrypted, but the password sits on the same SD
+#     card — so this is defence in depth on the one path that writes over
+#     live secrets (QA 2026-08-17).
+outside = os.path.join(tempfile.mkdtemp(), "victim.conf")
+with open(outside, "w") as f:
+    f.write("ORIGINAL")
+
+for bad_path in (outside,                                  # absolute, elsewhere
+                 os.path.join(ETC, "..", "escape.json"),   # ..-escape
+                 "relative.json",                          # not absolute
+                 ""):
+    ev = tempfile.mkdtemp()
+    d = os.path.join(ev, "files", bad_path.lstrip("/") or "x")
+    os.makedirs(os.path.dirname(d), exist_ok=True)
+    with open(d, "w") as f:
+        f.write("PWNED")
+    with open(os.path.join(ev, "manifest.json"), "w") as f:
+        json.dump({"format": backup.MANIFEST_FORMAT, "schema": backup.SCHEMA,
+                   "files": [{"path": bad_path, "tier": "config",
+                              "mode": "0o644"}]}, f)
+    try:
+        backup.apply_tree(ev)
+        assert False, f"a manifest writing to {bad_path!r} must be refused"
+    except ValueError:
+        pass
+assert open(outside).read() == "ORIGINAL", \
+    "a hostile manifest overwrote a file outside the box's config"
+print("6. a manifest pointing outside the box's own config is refused OK")
+
+# 7. and it cannot ask for a setuid bit either — the mode is masked.
+ev = tempfile.mkdtemp()
+d = os.path.join(ev, "files", ETC.lstrip("/"), "cards.json")
+os.makedirs(os.path.dirname(d), exist_ok=True)
+with open(d, "w") as f:
+    f.write("{}")
+with open(os.path.join(ev, "manifest.json"), "w") as f:
+    json.dump({"format": backup.MANIFEST_FORMAT, "schema": backup.SCHEMA,
+               "files": [{"path": os.path.join(ETC, "cards.json"),
+                          "tier": "config", "mode": "0o4755"}]}, f)
+backup.apply_tree(ev)
+mode = os.stat(os.path.join(ETC, "cards.json")).st_mode
+assert not (mode & 0o4000), "restore must never grant setuid"
+print("7. a manifest asking for setuid gets it masked off OK")
+
+# --- 8. the JWT is not in the set ------------------------------------------
+#     storytel.py writes storytel-session.json 0600 as a bearer token. The
+#     progress tier restores 0644, so sweeping it in would publish a session
+#     token — and it is re-minted from credentials we already carry anyway.
+w(os.path.join(STATE, "storytel-session.json"),
+  json.dumps({"jwt": "SECRET-BEARER", "at": 1}), 0o600)
+w(os.path.join(STATE, "backup-last.json"), json.dumps({"ok_at": 1}))
+m2 = backup.collect(tempfile.mkdtemp())
+paths2 = {e["path"] for e in m2["files"]}
+assert os.path.join(STATE, "storytel-session.json") not in paths2, \
+    "the cached JWT must not be backed up (it would restore world-readable)"
+assert os.path.join(STATE, "backup-last.json") not in paths2, \
+    "our own run bookkeeping must not be restored over"
+# every file we DO take from the progress tier must be safe to restore 0644
+for e in m2["files"]:
+    if e["tier"] == "progress":
+        assert "session" not in os.path.basename(e["path"]), \
+            f"a session credential slipped into the progress tier: {e['path']}"
+print("8. the cached JWT and our own bookkeeping stay out of the set OK")
+
+# --- 9. an env-overridden config path is still captured ---------------------
+#     The owning modules read these paths from env vars; hardcoding the
+#     filenames here would silently back up NOTHING for a relocated file —
+#     a backup that looks like it works (architect review 2026-08-17).
+assert os.path.join(ETC, "storytel.json") in paths, \
+    "the storytel credentials path must come from the same env var " \
+    "storytel.py uses, not a hardcoded literal"
+import importlib  # noqa: E402
+os.environ["VIBB_STORYTEL_CREDS"] = os.path.join(ETC, "moved-storytel.json")
+w(os.environ["VIBB_STORYTEL_CREDS"], json.dumps({"email": "x"}), 0o600)
+importlib.reload(backup)
+moved = {e["path"] for e in backup.collect(tempfile.mkdtemp())["files"]}
+assert os.environ["VIBB_STORYTEL_CREDS"] in moved, \
+    "a relocated credentials file must still be backed up"
+del os.environ["VIBB_STORYTEL_CREDS"]
+importlib.reload(backup)
+print("9. a config file relocated by env var is still captured OK")
+
 print("\nBACKUP ROUNDTRIP OK — right files, atomic restore, secrets 0600, "
-      "and a bad bundle changes nothing.")
+      "a hostile manifest changes nothing, and no session token ships.")

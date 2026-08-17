@@ -180,5 +180,54 @@ assert (os.stat(os.path.join(ETC, "storytel.json")).st_mode & 0o777) == 0o600
 assert any(e["tier"] == "secret" for e in manifest["files"])
 print("4. restore_snapshot pulls the repo tree and applies it live OK")
 
-print("\nBACKUP RESTIC OK — token setup, snapshot+prune, newest-first list, "
-      "and a repo-driven restore.")
+# --- 5. A FAILED SETUP MUST NOT LEAVE THE BOX LOOKING CONNECTED -------------
+#     Committing the repo pointer before the backend answered left a box that
+#     rendered "Connected — backing up to ..." in the PWA while every 6h run
+#     failed against a repo that was never initialised. The owner believes
+#     they have backups; they have none (QA 2026-08-17).
+good = backup.load_repo()
+os.environ["FAKE_RCLONE_FAIL"] = "1"
+FAKE_RCLONE_FAILING = FAKE_RCLONE.replace(
+    "sys.exit(0)      # `lsd remote:` -> reachable",
+    "sys.exit(1)      # unreachable backend")
+_install(os.environ["VIBB_RCLONE_BIN"], FAKE_RCLONE_FAILING)
+try:
+    backup.configure("[broken]\ntype = s3\n", repo_password="p2")
+    assert False, "an unreachable backend must fail setup"
+except RuntimeError as e:
+    assert "reach" in str(e).lower(), e
+assert backup.load_repo() == good, \
+    "a failed setup must not repoint the box at the repo it could not reach"
+assert open(os.environ["VIBB_RESTIC_PASS"]).read().strip() == "repo-pass-123", \
+    "a failed setup must roll the password back, not leave the new one"
+assert "broken" not in open(os.environ["VIBB_RCLONE_CONF"]).read(), \
+    "a failed setup must roll rclone.conf back"
+_install(os.environ["VIBB_RCLONE_BIN"], FAKE_RCLONE)   # heal for later runs
+print("5. a failed setup rolls back and leaves the old backend intact OK")
+
+# --- 6. status() reports whether backups are actually WORKING ---------------
+#     'configured' is not health: a box whose every run failed for a month
+#     looks identical to a healthy one without a last-success time.
+st = backup.status()
+assert st["last_ok"], \
+    "a successful backup must record when it last succeeded"
+print("6. status() carries the last successful backup time OK")
+
+# --- 7. the timer entry point is a no-op when the clock is not trusted ------
+#     The Zero has no RTC: early in a boot the wall clock is roughly 'when the
+#     box was last switched off', and restic buckets retention by CALENDAR
+#     DAY. Backing up under a wrong clock files snapshots in the wrong bucket.
+#     The rest of the codebase waits for clock_trusted(); so does this.
+open(RESTIC_LOG, "w").close()
+backup.clock_trusted = lambda: False
+assert backup.main() == 0, "an untrusted clock is a clean no-op, not a failure"
+assert "backup" not in open(RESTIC_LOG).read(), \
+    "no snapshot may be taken while the clock is untrusted"
+backup.clock_trusted = lambda: True
+assert backup.main() == 0
+assert "backup --json" in open(RESTIC_LOG).read(), \
+    "with a trusted clock the timer entry point does back up"
+print("7. the timer skips cleanly until the clock is trusted OK")
+
+print("\nBACKUP RESTIC OK — setup rolls back on failure, health is visible, "
+      "and the timer waits for a trustworthy clock.")

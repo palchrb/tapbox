@@ -124,10 +124,22 @@ async function loadStatus() {
   const el = $("#bk-status");
   try {
     const s = await api("/backup/status");
-    el.textContent = s.configured
-      ? `Connected — backing up to ${s.repo}`
-      : "No storage connected yet — set one up below.";
-    el.classList.toggle("dim", !s.configured);
+    if (!s.configured) {
+      el.textContent = "No storage connected yet — set one up below.";
+      return;
+    }
+    /* "Connected" is not health. A box whose every run has failed for a
+       month looks identical to a working one unless the last SUCCESS is
+       shown, and that is the whole question this page exists to answer. */
+    const parts = [`Connected to ${s.repo}`];
+    if (s.last_ok) {
+      const d = new Date(s.last_ok * 1000);
+      parts.push(`last backup ${d.toLocaleString()}`);
+    } else {
+      parts.push("no successful backup yet");
+    }
+    if (s.last_error) parts.push(`last attempt failed: ${s.last_error}`);
+    el.textContent = parts.join(" · ");
   } catch (e) {
     el.textContent = e.message;
   }

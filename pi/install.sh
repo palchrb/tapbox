@@ -854,7 +854,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Nice=19
-ExecStart=/usr/bin/python3 -c "import sys; sys.path.insert(0, '/usr/local/lib/vibb-py'); from vibb import backup; sys.exit(0) if not backup.configured() else backup.backup_now()"
+Environment=PYTHONPATH=/usr/local/lib/vibb-py
+ExecStart=/usr/bin/python3 -m vibb.backup
 EOF
 write_if_changed /etc/systemd/system/vibb-backup.timer <<'EOF' && BK_CHANGED=1
 [Unit]

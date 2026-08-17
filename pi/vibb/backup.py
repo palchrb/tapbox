@@ -33,10 +33,25 @@ import shutil
 import subprocess
 import time
 
-from vibb.paths import ART_DIR, STATE_DIR
+from vibb.paths import ART_DIR, STATE_DIR, clock_trusted
 
 # --- locations (env-overridable so tests point them at a tmp tree) ----------
 ETC = os.environ.get("VIBB_ETC", "/etc/vibb")
+
+# The config/secret files each owning module can be pointed elsewhere with an
+# env var. We read the SAME variables rather than hardcoding the filenames:
+# a literal "storytel.json" here would silently back up nothing whenever
+# VIBB_STORYTEL_CREDS is set, and a backup that quietly omits the account is
+# worse than no backup (architect review 2026-08-17). Importing those modules
+# instead would drag the daemon's world into a subprocess that must stay
+# thin, so the env var — the actual contract — is what is shared.
+LIBRARY_FILE = os.environ.get("VIBB_LIBRARY", os.path.join(ETC, "library.json"))
+SETTINGS_FILE = os.environ.get("VIBB_SETTINGS", os.path.join(ETC, "settings.json"))
+STORYTEL_CREDS = os.environ.get("VIBB_STORYTEL_CREDS",
+                                os.path.join(ETC, "storytel.json"))
+SPOTIFY_API_CREDS = os.environ.get("VIBB_SPOTIFY_API",
+                                   os.path.join(ETC, "spotify-api.json"))
+BT_MAC_FILE = os.environ.get("VIBB_BT_FILE", os.path.join(ETC, "bt-headset"))
 RESTIC_BIN = os.environ.get("VIBB_RESTIC_BIN", "restic")
 RCLONE_BIN = os.environ.get("VIBB_RCLONE_BIN", "rclone")
 RCLONE_CONF = os.environ.get("VIBB_RCLONE_CONF", os.path.join(ETC, "rclone.conf"))
@@ -69,6 +84,14 @@ _STATE_EXCLUDE = frozenset({
     "sonos.json", "last-sweep.json", "spotify-precache.json",
     "podcast-new.json", "on-battery-runtime.json",
     "storytel-shelf-raw.json", "storytel-login-refused.json",
+    # A cached bearer JWT (storytel.py writes it 0600, one hour TTL). It is
+    # re-minted from the credentials we already carry, so backing it up buys
+    # nothing — and it would ride in the PROGRESS tier, which restores 0644,
+    # turning a 0600 session token world-readable (QA 2026-08-17).
+    "storytel-session.json",
+    # Our own bookkeeping about backup runs — restoring a stale "last backup
+    # succeeded" would misreport the health of the thing doing the restoring.
+    "backup-last.json",
 })
 
 RESTORE_TMP_SUFFIX = ".vibbrestore.tmp"
@@ -76,22 +99,16 @@ RESTORE_TMP_SUFFIX = ".vibbrestore.tmp"
 
 # --- the whitelist ----------------------------------------------------------
 def _config_files():
-    out = []
-    for name in ("library.json", "settings.json", "cards.json",
-                 "rfid.conf", "bt-headset"):
-        p = os.path.join(ETC, name)
-        if os.path.exists(p):
-            out.append(p)
+    out = [p for p in (LIBRARY_FILE, SETTINGS_FILE, BT_MAC_FILE,
+                       os.path.join(ETC, "cards.json"),
+                       os.path.join(ETC, "rfid.conf"))
+           if os.path.exists(p)]
     out += sorted(glob.glob(os.path.join(ART_DIR, "section-*.jpg")))
     return out
 
 
 def _secret_files():
-    out = []
-    for name in ("storytel.json", "spotify-api.json"):
-        p = os.path.join(ETC, name)
-        if os.path.exists(p):
-            out.append(p)
+    out = [p for p in (STORYTEL_CREDS, SPOTIFY_API_CREDS) if os.path.exists(p)]
     if GO_DIR:
         for name in ("credentials.json", "state.json"):
             p = os.path.join(GO_DIR, name)
@@ -138,13 +155,17 @@ def collect(staging):
     files_root = os.path.join(staging, "files")
     entries = []
     for src, tier in _iter_files():
+        # One guard around stat AND copy: a bookmark can be pruned or a
+        # session file cleared between the two (spotify.py prunes
+        # spotify-bm-*, storytel logout removes its state), and a vanished
+        # file must skip, never abort the whole backup (QA 2026-08-17).
         try:
             st = os.stat(src)
+            dst = os.path.join(files_root, src.lstrip("/"))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
         except OSError:
             continue
-        dst = os.path.join(files_root, src.lstrip("/"))
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
         entries.append({"path": src, "tier": tier,
                         "mode": oct(st.st_mode & 0o777)})
     manifest = {
@@ -170,6 +191,38 @@ def _check_restorable(manifest):
         raise ValueError(
             f"backup schema {manifest.get('schema')} is newer than this box "
             f"understands ({SCHEMA}) — upgrade vibb before restoring")
+
+
+def _allowed_roots():
+    """The only directories a restore may write into."""
+    roots = [ETC, ART_DIR, STATE_DIR]
+    if GO_DIR:
+        roots.append(GO_DIR)
+    return [os.path.realpath(r) for r in roots if r]
+
+
+def _check_dest(dest):
+    """Refuse any destination outside the directories collect() draws from.
+
+    The manifest decides where bytes land, and vibb-daemon runs as ROOT
+    (install.sh gives it no User=). Without this, a manifest entry of
+    "/etc/systemd/system/x.service" or "/root/.ssh/authorized_keys" turns
+    restore into an arbitrary root-owned overwrite — and the repo password
+    that would gate such a manifest sits on the same SD card an attacker
+    would have had to reach anyway. Defence in depth on the one path that
+    writes over live secrets (QA 2026-08-17).
+
+    Symlinks are resolved first, so a planted link inside an allowed root
+    cannot redirect the write outside it.
+    """
+    if not isinstance(dest, str) or not dest or not dest.startswith("/"):
+        raise ValueError(f"backup entry has a non-absolute path: {dest!r}")
+    real = os.path.realpath(dest)
+    for root in _allowed_roots():
+        if real == root or real.startswith(root + os.sep):
+            return real
+    raise ValueError(
+        f"backup entry points outside the box's own config: {dest!r}")
 
 
 def _target_owner(dest):
@@ -220,7 +273,7 @@ def apply_tree(tree):
     staged = []   # (tmp, dest, owner)
     try:
         for entry in manifest["files"]:
-            dest = entry["path"]
+            dest = _check_dest(entry.get("path"))
             src = os.path.join(files_root, dest.lstrip("/"))
             if not os.path.isfile(src):
                 raise ValueError(f"backup is missing its file for {dest}")
@@ -230,8 +283,14 @@ def apply_tree(tree):
                 json.loads(data)   # torn/garbage json -> reject before commit
             # secrets are forced 0600 at creation, never chmod-after; other
             # files keep their recorded mode (default 0644).
-            mode = 0o600 if entry.get("tier") == "secret" \
-                else int(entry.get("mode", "0o644"), 8)
+            # Masked to 0o777: a manifest asking for 0o4755 would otherwise
+            # have restore drop a setuid-root binary (QA 2026-08-17).
+            try:
+                mode = int(entry.get("mode", "0o644"), 8) & 0o777
+            except (TypeError, ValueError):
+                mode = 0o644
+            if entry.get("tier") == "secret":
+                mode = 0o600
             owner = _target_owner(dest)   # BEFORE makedirs, so it is the real
             #                               pre-existing owner, not root
             parent = os.path.dirname(dest)
@@ -286,10 +345,49 @@ def configured():
     return bool(load_repo()) and os.path.exists(RESTIC_PASS_FILE)
 
 
+LAST_FILE = os.path.join(STATE_DIR, "backup-last.json")
+
+
 def status():
-    """Non-secret view for the PWA: is a backend set up, and where to (the
-    repo string names the remote, never a credential)."""
-    return {"configured": configured(), "repo": load_repo()}
+    """Non-secret view for the PWA: is a backend set up, where to (the repo
+    string names the remote, never a credential), and — the number that
+    actually says whether this feature is working — when a backup last
+    SUCCEEDED. Without it a box whose every run has failed for a month looks
+    identical to a healthy one (QA 2026-08-17)."""
+    out = {"configured": configured(), "repo": load_repo(),
+           "last_ok": None, "last_error": None}
+    try:
+        with open(LAST_FILE) as f:
+            last = json.load(f)
+        out["last_ok"] = last.get("ok_at")
+        out["last_error"] = last.get("error")
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _note_run(ok_at=None, error=None):
+    """Record the outcome of a run. Best-effort: a backup that worked must
+    not be reported as failed because this bookkeeping could not be written."""
+    try:
+        prev = {}
+        try:
+            with open(LAST_FILE) as f:
+                prev = json.load(f)
+        except (OSError, ValueError):
+            pass
+        if ok_at:
+            prev["ok_at"] = ok_at
+            prev["error"] = None
+        else:
+            prev["error"] = error
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp = LAST_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(prev, f)
+        os.replace(tmp, LAST_FILE)
+    except OSError:
+        pass
 
 
 def _remote_name(repo):
@@ -339,45 +437,81 @@ def configure(rclone_conf_text, repo=None, repo_password=None, path=None):
             f"repo names remote {remote!r} but the pasted config has "
             f"{remotes or 'no remotes'}")
 
+    # Write rclone.conf and the password FIRST — restic/rclone read them from
+    # disk, so they cannot be validated without being written — but hold back
+    # BACKUP_CONF, the repo pointer configured() keys on, until the backend
+    # has actually answered. Committing all three up front left a box that
+    # reported "Connected" and failed every 6h run against a repo that was
+    # never initialised (QA 2026-08-17). On failure the two written files are
+    # removed, so a retry starts clean.
+    prev_conf = _read_bytes(RCLONE_CONF)
+    prev_pass = _read_bytes(RESTIC_PASS_FILE)
     _write_secret_text(RCLONE_CONF, rclone_conf_text)
-    _write_secret_json(BACKUP_CONF, {"repo": repo})
     _write_secret_text(RESTIC_PASS_FILE, repo_password)
-
-    env = dict(os.environ)
-    env["RCLONE_CONFIG"] = RCLONE_CONF
-    if remote:
-        try:
-            subprocess.run(
-                [RCLONE_BIN, "lsd", f"{remote}:"],
-                env=env, capture_output=True, text=True, timeout=60,
-                check=True)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                OSError) as e:
-            detail = (getattr(e, "stderr", "") or str(e)).strip()
-            raise RuntimeError(f"could not reach the backend: {detail}")
-    # init the repo unless it already answers to this password
-    if _restic("cat", "config", timeout=60).returncode != 0:
-        r = _restic("init", timeout=120)
-        if r.returncode != 0:
-            raise RuntimeError(f"restic init failed: {r.stderr.strip()}")
+    try:
+        env = dict(os.environ)
+        env["RCLONE_CONFIG"] = RCLONE_CONF
+        if remote:
+            try:
+                subprocess.run(
+                    [RCLONE_BIN, "lsd", f"{remote}:"],
+                    env=env, capture_output=True, text=True, timeout=60,
+                    check=True)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                    OSError) as e:
+                detail = (getattr(e, "stderr", "") or str(e)).strip()
+                raise RuntimeError(f"could not reach the backend: {detail}")
+        # init the repo unless it already answers to this password
+        if _restic("cat", "config", timeout=60, repo=repo).returncode != 0:
+            r = _restic("init", timeout=120, repo=repo)
+            if r.returncode != 0:
+                raise RuntimeError(f"restic init failed: {r.stderr.strip()}")
+    except BaseException:
+        _restore_bytes(RCLONE_CONF, prev_conf)
+        _restore_bytes(RESTIC_PASS_FILE, prev_pass)
+        raise
+    _write_secret_json(BACKUP_CONF, {"repo": repo})
     return status()
 
 
+def _read_bytes(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _restore_bytes(path, data):
+    """Put a secret file back the way it was (or remove it if there was
+    none), so a failed setup leaves no half-configured backend behind."""
+    try:
+        if data is None:
+            os.unlink(path)
+        else:
+            _write_secret(path, data)
+    except OSError:
+        pass
+
+
 # --- restic / rclone shell-outs ---------------------------------------------
-def _restic_env():
+def _restic_env(repo=None):
     env = dict(os.environ)
-    env["RESTIC_REPOSITORY"] = load_repo()
+    # `repo` is passed only during setup, before BACKUP_CONF is committed.
+    env["RESTIC_REPOSITORY"] = repo or load_repo()
     env["RESTIC_PASSWORD_FILE"] = RESTIC_PASS_FILE
     env["RCLONE_CONFIG"] = RCLONE_CONF
     return env
 
 
-def _restic(*args, timeout=300, check=False):
+def _restic(*args, timeout=300, check=False, repo=None):
     """Run restic, pointing it at our rclone (so it need not be on PATH) and
-    our repo/password via env. Returns the CompletedProcess."""
+    our repo/password via env. The password goes by FILE, and the backend
+    credentials live in rclone.conf, so neither ever reaches argv or a
+    subprocess stderr we might surface in an HTTP error."""
     return subprocess.run(
         [RESTIC_BIN, "-o", f"rclone.program={RCLONE_BIN}", *args],
-        env=_restic_env(), capture_output=True, text=True,
+        env=_restic_env(repo), capture_output=True, text=True,
         timeout=timeout, check=check)
 
 
@@ -424,15 +558,53 @@ def backup_now(keep=("--keep-daily", "7", "--keep-weekly", "4",
         r = _restic("backup", "--json", os.path.join(staging, "files"),
                     os.path.join(staging, "manifest.json"))
         if r.returncode != 0:
-            raise RuntimeError(f"restic backup failed: {r.stderr.strip()}")
+            err = f"restic backup failed: {r.stderr.strip()}"
+            _note_run(error=err)
+            raise RuntimeError(err)
         snap_id = _parse_backup_snapshot(r.stdout)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+    _note_run(ok_at=manifest["created"])
     # retention — best effort; a prune failure must not fail the backup that
     # already succeeded.
     _restic("forget", "--prune", *keep, timeout=600)
     return {"snapshot_id": snap_id, "created": manifest["created"],
             "files": len(manifest["files"])}
+
+
+def main(argv=None):
+    """Entry point for the systemd timer — a real one, not a shell one-liner,
+    so the clock gate and the logging live in code rather than in a quoted
+    string. Exit 0 when there is nothing to do: an unconfigured box, or a
+    clock we cannot trust yet.
+
+    The clock gate matters more than it looks. The Zero has no RTC, so early
+    in a boot the wall clock is roughly 'whenever the box was last switched
+    off' — and restic buckets retention by CALENDAR DAY. Backing up under a
+    wrong clock files snapshots in the wrong bucket, and repeated toddler
+    reboots could collapse several days' keeps into one. The rest of the
+    codebase already waits for `clock_trusted()`; so does this
+    (architect review 2026-08-17). The next 6h tick picks it up once NTP or
+    the PiSugar RTC has landed.
+    """
+    if not configured():
+        print("backup: no backend configured — nothing to do")
+        return 0
+    if not clock_trusted():
+        print("backup: clock not trusted yet (no RTC) — skipping this run")
+        return 0
+    try:
+        r = backup_now()
+    except RuntimeError as e:
+        print(f"backup: {e}")
+        return 1
+    print(f"backup: snapshot {r.get('snapshot_id')} ({r.get('files')} files)")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
 
 
 def snapshots():
