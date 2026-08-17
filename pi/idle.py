@@ -165,11 +165,41 @@ def _cycle(idle):
     if limit <= 0:
         return 0  # disabled: never accumulate behind the parent's back
     if idle >= limit * 60:
+        _backup_before_off()
         subprocess.run(["logger",
                         f"vibb-idle: idle {limit}min, powering off"])
         subprocess.run(["poweroff"])
         return None
     return idle
+
+
+BACKUP_MAX_S = int(os.environ.get("VIBB_IDLE_BACKUP_MAX", "180"))
+
+
+def _backup_before_off():
+    """Back up on the way down — the moment the owner actually wants.
+
+    This is the natural end of a listening session: the box has been idle
+    for the whole timeout, so nothing is playing, the 2.4GHz radio is free,
+    and the bookmarks from the session that just ended are on disk. Far
+    better than any periodic schedule, which can only ever guess at a quiet
+    moment.
+
+    Bounded and best-effort by construction. vibb.backup's own gates decide
+    whether there is anything to do (unconfigured, clock not trusted yet,
+    already backed up today, no link) and almost every shutdown is a no-op
+    costing milliseconds. A run that hangs is killed at BACKUP_MAX_S so a
+    dead network can never keep the box awake burning battery — the box
+    powers off regardless, and the next shutdown tries again.
+    """
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "vibb.backup"],
+            env={**os.environ, "PYTHONPATH": "/usr/local/lib/vibb-py"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=BACKUP_MAX_S)
+    except Exception:
+        pass   # a failed backup must never block the shutdown
 
 
 def main():

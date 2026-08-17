@@ -885,20 +885,25 @@ write_if_changed /etc/systemd/system/vibb-backup.timer <<'EOF' && BK_CHANGED=1
 Description=Vibb: periodic backup of the box's irreplaceable state
 
 [Timer]
-# These fire a cheap WAKE, not a backup: vibb.backup decides, and its gate
-# is a 24h WALL-CLOCK check that a reboot cannot reset.
+# A SAFETY NET, not the schedule. The real backup happens on the way down,
+# in vibb-idle: the box has been idle for the whole timeout, so nothing is
+# playing, the radio is free, and the session's bookmarks are fresh. That is
+# the moment worth backing up at, and no timer can guess it.
 #
-# Why not just OnUnitActiveSec=24h: monotonic timers restart from zero at
-# every boot and systemd does not carry the elapse across reboots, so on a
-# box power-cycled by toddlers the interval essentially never fired — what
-# fired was OnBootSec, once per boot, 15 minutes into a listening session.
-# The cadence knob was not the one in control. (Persistent= would not have
-# fixed it either: it only applies to OnCalendar= timers, and an OnCalendar
-# timer would fire a backup straight into the boot storm.)
-OnBootSec=20min
-OnUnitActiveSec=2h
-AccuracySec=5min
-RandomizedDelaySec=10min
+# This exists only for a box that never reaches an idle shutdown — left
+# playing for days, or auto-off disabled. It cannot wake a powered-off box
+# (that would need an RTC alarm; we set none), so it costs nothing while the
+# box is off. When it does fire it is a few milliseconds: vibb.backup's 24h
+# wall-clock gate says "already done today" and exits.
+#
+# 6h rather than something tighter because it is a backstop, and because a
+# monotonic timer restarts at every boot — a tight interval on a
+# toddler-power-cycled box just means firing on every boot, mid-session,
+# which is exactly the bug this replaced.
+OnBootSec=30min
+OnUnitActiveSec=6h
+AccuracySec=15min
+RandomizedDelaySec=15min
 
 [Install]
 WantedBy=timers.target

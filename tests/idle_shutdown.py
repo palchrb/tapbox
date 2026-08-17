@@ -47,8 +47,33 @@ PLAYING[0] = False
 n = idle._cycle(0)
 assert n == idle.CHECK_S and CALLS == []
 assert idle._cycle(n) is None  # 120s idle == the 2 min limit
-assert CALLS == ["logger", "poweroff"], CALLS
-print("2. idle box powers off exactly at the limit OK")
+# The backup runs FIRST, on the way down: the box has been idle for the
+# whole timeout, so nothing is playing, the radio is free and the session's
+# bookmarks are fresh. That is the moment worth backing up at — no periodic
+# timer can guess it (owner 2026-08-17). Its own gates make almost every
+# shutdown a no-op.
+assert CALLS == [sys.executable, "logger", "poweroff"], CALLS
+print("2. idle box backs up, then powers off exactly at the limit OK")
+
+# 2b. and a backup that fails or hangs must NEVER keep the box awake —
+#     a dead network would otherwise burn battery at every shutdown.
+CALLS.clear()
+_real_run = idle.subprocess.run
+
+
+def _boom(argv, **kw):
+    CALLS.append(argv[0])
+    if argv[0] == sys.executable:
+        raise idle.subprocess.TimeoutExpired("backup", 180)
+
+
+idle.subprocess.run = _boom
+try:
+    assert idle._cycle(n) is None, "a failed backup must not stop the poweroff"
+    assert CALLS == [sys.executable, "logger", "poweroff"], CALLS
+finally:
+    idle.subprocess.run = _real_run
+print("2b. a hung or failed backup never blocks the shutdown OK")
 
 # 3. a fresh button press counts as activity — browsing hands never
 # have the box shut down under them
