@@ -75,7 +75,8 @@
     speaker has to be paired again.
   </p>
   <label for="bk-snap">Backup to restore</label>
-  <select id="bk-snap"><option value="">Loading…</option></select>
+  <button type="button" id="bk-list">Show backups</button>
+  <select id="bk-snap" hidden><option value="">Press “Show backups”</option></select>
   <button type="button" id="bk-restore" class="danger">Restore and reboot</button>
   <p id="bk-restore-msg" class="dim small"></p>
 </section>
@@ -145,8 +146,9 @@ async function loadStatus() {
   }
 }
 
-/* A backup is only as good as the restore, so the snapshot list is the
-   proof it worked — shown even before anyone needs it. */
+/* Only ever called from the "Show backups" button: this spawns restic on
+   the box, so it must be something the owner asked for, not a side effect
+   of opening the page. */
 async function loadSnapshots() {
   const sel = $("#bk-snap");
   sel.textContent = "";
@@ -179,6 +181,24 @@ async function loadSnapshots() {
 $("#bk-remote-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const btn = $("#bk-save");
+  /* Show the owner what they actually typed, before it becomes the only key
+     to the backup. Two things this catches that nothing else can: a typo
+     (the repo would initialise with it, every backup would succeed, and the
+     password they wrote down would open nothing), and simply forgetting to
+     save it at all. Entirely local — this is the value already in the form,
+     never fetched from the box, so no endpoint ever has to hand a stored
+     secret back over the LAN. */
+  const pass = $("#bk-pass").value;
+  if (!pass) { toast("Enter a repository password"); return; }
+  const repo = "rclone:<your remote>:" + ($("#bk-path").value.trim()
+                                          || "vibb-backup");
+  if (!confirm(
+      "Save this in your password manager now:\n\n"
+      + "  Repository password:  " + pass + "\n"
+      + "  Backup location:      " + repo + "\n\n"
+      + "Without this password the backup cannot be read — not by us, "
+      + "not by anyone. It is the one thing that is not in the backup "
+      + "itself.\n\nUse this password?")) return;
   btn.disabled = true;
   try {
     await api("/backup/configure", {
@@ -192,7 +212,6 @@ $("#bk-remote-form").addEventListener("submit", async (ev) => {
     $("#bk-pass").value = "";
     toast("Storage connected");
     loadStatus();
-    loadSnapshots();
   } catch (e) {
     toast(e.message, 6000);
   } finally {
@@ -208,7 +227,6 @@ $("#bk-now").addEventListener("click", async () => {
   try {
     const r = await api("/backup/now", { method: "POST" });
     msg.textContent = `Backed up ${r.files} files.`;
-    loadSnapshots();
   } catch (e) {
     msg.textContent = e.message;
   } finally {
@@ -235,8 +253,25 @@ $("#bk-restore").addEventListener("click", async () => {
   }
 });
 
+/* Status only. loadSnapshots() spawns restic (~120MB of Go) plus a network
+   round trip, and it ran on every page open — including mid-playback, just
+   to fill a dropdown in the danger card nobody came to use. Health is
+   answered by /backup/status, which reads two small JSON files. The button
+   press is the consent to spawn restic, same class as the restore itself. */
 loadStatus();
-loadSnapshots();
+$("#bk-list").addEventListener("click", async () => {
+  const btn = $("#bk-list");
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  try {
+    await loadSnapshots();
+    $("#bk-snap").hidden = false;
+    btn.hidden = true;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Show backups";
+  }
+});
 </script>
 </body>
 </html>

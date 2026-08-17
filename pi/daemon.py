@@ -3608,8 +3608,16 @@ class Handler(BaseHTTPRequestHandler):
                     manifest = _backup.restore_snapshot(
                         body.get("snapshot") or "latest")
                 except RuntimeError as e:
+                    # Reset the flag: a FAILED restore wrote nothing, and
+                    # leaving it set wedges the daemon in "restoring" for the
+                    # rest of its life — _on_term then exits without flushing
+                    # and every bookmark from that point is silently lost
+                    # (QA 2026-08-17). Only a restore that actually applied
+                    # may stand the writers down.
+                    _RESTORING[0] = False
                     self._send(503, {"error": str(e)})
                 except ValueError as e:
+                    _RESTORING[0] = False
                     self._send(400, {"error": str(e)})
                 else:
                     log(f"backup: restored {len(manifest['files'])} files — "

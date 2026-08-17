@@ -206,6 +206,34 @@ assert open(outside).read() == "ORIGINAL", \
     "a hostile manifest overwrote a file outside the box's config"
 print("6. a manifest pointing outside the box's own config is refused OK")
 
+# 6b. AND the dangerous neighbours INSIDE /etc/vibb. Validating by directory
+#     was not enough: api-token is the box's own credential (a restore could
+#     set it to a value the attacker knows), and extras/ holds scripts ui.py
+#     lists and runs AS ROOT from the screen. Neither is in the backup set,
+#     so neither may be a restore target (QA 2026-08-17).
+for inside in (os.path.join(ETC, "api-token"),
+               os.path.join(ETC, "extras", "pwn.sh"),
+               os.path.join(ETC, "rclone.conf"),
+               os.path.join(ETC, "restic-pass"),
+               os.path.join(STATE, "now-playing.json")):
+    ev = tempfile.mkdtemp()
+    d = os.path.join(ev, "files", inside.lstrip("/"))
+    os.makedirs(os.path.dirname(d), exist_ok=True)
+    with open(d, "w") as f:
+        f.write("PWNED")
+    with open(os.path.join(ev, "manifest.json"), "w") as f:
+        json.dump({"format": backup.MANIFEST_FORMAT, "schema": backup.SCHEMA,
+                   "files": [{"path": inside, "tier": "config",
+                              "mode": "0o755"}]}, f)
+    try:
+        backup.apply_tree(ev)
+        assert False, f"a restore must never write {inside}"
+    except ValueError:
+        pass
+assert open(os.path.join(ETC, "api-token")).read().startswith("ABCD"), \
+    "the box token must be untouched by a restore"
+print("6b. api-token, extras/ and the backend keys are not restore targets OK")
+
 # 7. and it cannot ask for a setuid bit either — the mode is masked.
 ev = tempfile.mkdtemp()
 d = os.path.join(ev, "files", ETC.lstrip("/"), "cards.json")

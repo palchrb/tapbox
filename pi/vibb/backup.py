@@ -195,12 +195,32 @@ def _check_restorable(manifest):
             f"understands ({SCHEMA}) — upgrade vibb before restoring")
 
 
-def _allowed_roots():
-    """The only directories a restore may write into."""
-    roots = [ETC, ART_DIR, STATE_DIR]
-    if GO_DIR:
-        roots.append(GO_DIR)
-    return [os.path.realpath(r) for r in roots if r]
+def _restorable(real):
+    """Is this exactly one of the things collect() would ever back up?
+
+    Validating by DIRECTORY was not enough. /etc/vibb also holds
+    api-token — restore could set the box's own credential to an
+    attacker-chosen value — and extras/, whose scripts ui.py lists and runs
+    AS ROOT, so a manifest could drop a root-owned executable there and the
+    screen would offer to launch it. Neither is in the backup set, so
+    neither may be a restore target: match the whitelist itself, not the
+    folder it happens to live in (QA 2026-08-17).
+    """
+    if real in {os.path.realpath(p) for p in
+                (LIBRARY_FILE, SETTINGS_FILE, BT_MAC_FILE,
+                 STORYTEL_CREDS, SPOTIFY_API_CREDS,
+                 os.path.join(ETC, "cards.json"),
+                 os.path.join(ETC, "rfid.conf"))}:
+        return True
+    art = os.path.realpath(ART_DIR)
+    name = os.path.basename(real)
+    if os.path.dirname(real) == art:
+        return name.startswith("section-") and name.endswith(".jpg")
+    if GO_DIR and os.path.dirname(real) == os.path.realpath(GO_DIR):
+        return name in ("credentials.json", "state.json")
+    if os.path.dirname(real) == os.path.realpath(STATE_DIR):
+        return name.endswith(".json") and name not in _STATE_EXCLUDE
+    return False
 
 
 def _check_dest(dest):
@@ -220,11 +240,10 @@ def _check_dest(dest):
     if not isinstance(dest, str) or not dest or not dest.startswith("/"):
         raise ValueError(f"backup entry has a non-absolute path: {dest!r}")
     real = os.path.realpath(dest)
-    for root in _allowed_roots():
-        if real == root or real.startswith(root + os.sep):
-            return real
+    if _restorable(real):
+        return real
     raise ValueError(
-        f"backup entry points outside the box's own config: {dest!r}")
+        f"backup entry is not something this box backs up: {dest!r}")
 
 
 def _target_owner(dest):

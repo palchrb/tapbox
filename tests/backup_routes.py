@@ -141,5 +141,32 @@ assert any("reboot" in " ".join(a[0]) for a in REBOOTS), \
     "library back over the restored one"
 print("5. backup_now snapshots, and restore applies then reboots OK")
 
+# --- 6. A FAILED RESTORE MUST NOT WEDGE THE DAEMON -------------------------
+#     _RESTORING stands the bookmark writers down so the reboot's own
+#     shutdown flush cannot put pre-restore positions back. But a restore
+#     that FAILS wrote nothing — and leaving the flag set means _on_term
+#     exits without flushing for the rest of the daemon's life, silently
+#     losing every bookmark from then on (QA 2026-08-17).
+def _fail(snap="latest"):
+    raise RuntimeError("backend unreachable")
+
+
+backup.restore_snapshot = _fail
+st, _ = call("/backup/restore", tok=TOKEN, body={"snapshot": "2222"})
+assert st == 503, st
+assert daemon._RESTORING[0] is False, \
+    "a failed restore must release the flag, or every later bookmark is lost"
+
+
+def _bad(snap="latest"):
+    raise ValueError("schema too new")
+
+
+backup.restore_snapshot = _bad
+st, _ = call("/backup/restore", tok=TOKEN, body={"snapshot": "2222"})
+assert st == 400, st
+assert daemon._RESTORING[0] is False, "same for a rejected bundle"
+print("6. a failed restore releases the writers instead of wedging them OK")
+
 print("\nBACKUP ROUTES OK — all privileged, the open-GET default is "
-      "overridden, and a restore reboots.")
+      "overridden, a restore reboots, and a failed one lets go.")

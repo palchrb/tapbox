@@ -79,6 +79,27 @@ for route in ("/backup/status", "/backup/snapshots", "/backup/configure",
     assert route in bk, f"backup.html never calls {route}"
 print("3. backup.html's selectors resolve and it calls the real routes OK")
 
+# 4. Opening the page must NOT spawn restic. loadSnapshots() costs ~120MB of
+#    Go plus a network round trip on the box, and it used to run on every
+#    page open — including mid-playback — just to fill a dropdown in the
+#    danger card nobody came to use. Health comes from /backup/status, which
+#    reads two small JSON files. The button press is the consent.
+tail = bk[bk.index("loadStatus();", bk.index("</section>")):]
+assert "loadSnapshots();" not in tail.split("$(\"#bk-list\")")[0], \
+    "backup.html must not call loadSnapshots() at page load"
+assert "#bk-list" in bk, "the snapshot list needs an explicit button"
+
+# 5. The repo password must be confirmed LOCALLY before it becomes the only
+#    key to the backup — it is never fetched back from the box, so this is
+#    the one moment the owner can catch a typo or be told to save it.
+form = bk[bk.index("#bk-remote-form"):]
+form = form[:form.index("/backup/configure")]
+assert "confirm(" in form and "bk-pass" in form, \
+    "the password must be confirmed locally before setup is submitted"
+assert "/backup/recovery" not in bk and "recovery-note" not in bk, \
+    "the box must never serve a stored secret back over the LAN"
+print("4. the page spawns no restic on load, and confirms the password OK")
+
 print("\nPWA SELECTORS OK — no $(\"id\") that should have been $(\"#id\"), "
       "and the storytel picker cannot 400 itself on a half-downloaded "
       "series.")
