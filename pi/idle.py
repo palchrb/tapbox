@@ -193,9 +193,14 @@ def _backup_before_off():
     powers off regardless, and the next shutdown tries again.
     """
     try:
+        # Start the UNIT, don't spawn the module. A child of vibb-idle
+        # inherits vibb-idle's cgroup, which has no limits — so the memory
+        # ceiling, CPU pinning and cache dir that vibb-backup.service
+        # carries would all have been silently bypassed on the one path
+        # that actually runs (architect review 2026-08-17). Going through
+        # systemd puts the run where its policy lives.
         subprocess.run(
-            [sys.executable, "-m", "vibb.backup"],
-            env={**os.environ, "PYTHONPATH": "/usr/local/lib/vibb-py"},
+            ["systemctl", "start", "--wait", "vibb-backup.service"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=BACKUP_MAX_S)
     except Exception:

@@ -842,6 +842,18 @@ for f in "$SCRIPT_DIR"/web/*; do
 done
 
 mkdir -p /var/cache/vibb-restic   # restic's index cache (see RESTIC_CACHE_DIR)
+# The memory ceiling below is only real if the kernel's memory cgroup
+# controller is on, and Raspberry Pi OS ships it OFF unless cmdline.txt says
+# so. Without it MemoryMax/MemoryHigh/MemorySwapMax are silently ignored and
+# a runaway backup could have the global OOM killer take mpv instead. We warn
+# rather than edit cmdline.txt: that file is boot-critical, and a bad edit
+# bricks the box far worse than an uncapped backup.
+if ! grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
+  echo "    NOTE: the kernel memory cgroup controller is off, so the backup's"
+  echo "          memory limit cannot be enforced. To enable it, append"
+  echo "          'cgroup_enable=memory cgroup_memory=1' to the single line in"
+  echo "          /boot/firmware/cmdline.txt (or /boot/cmdline.txt) and reboot."
+fi
 # Backup timer. A dedicated timer, NOT the 6h cache sweeper: a backup that
 # fails must never interfere with cache pruning, and the two have nothing to
 # do with each other. Harmless before the owner has connected any storage —
@@ -868,7 +880,12 @@ IOSchedulingClass=idle
 # that can just as easily be mpv or go-librespot as restic, i.e. the music
 # dies to save the backup. MemoryMax makes the cgroup OOM local: the backup
 # is what dies, and it simply retries at the next wake (QA 2026-08-17).
-MemoryHigh=100M
+# 160M, not 100M: with MemorySwapMax=0 there is no swap, so crossing
+# MemoryHigh can only reclaim file-backed pages — i.e. the mapped text of
+# two large Go binaries — and then throttles. Set inside the real working
+# set it strangles the run off the SD card instead of protecting anything.
+# MemoryMax is the ceiling that matters.
+MemoryHigh=160M
 MemoryMax=200M
 MemorySwapMax=0
 Environment=GOMEMLIMIT=80MiB GOGC=20 GOMAXPROCS=1
