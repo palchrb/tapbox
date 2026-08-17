@@ -26,10 +26,19 @@ header {
   padding: 0.8rem 1rem 0.2rem;
 }
 h1 { font-size: 1.3rem; margin: 0; color: var(--hilite); }
-/* The logo replaces the "Vibb" wordmark at roughly the same visual size:
-   the old h1 line box was ~1.8rem tall, and the SVG is 186x84, so 1.8rem
-   tall comes out ~4rem wide. block kills the baseline gap under an img. */
-.logo { height: 1.8rem; width: auto; display: block; }
+/* The logo replaces the "Vibb" wordmark. Its LAYOUT box stays at the old
+   h1's ~1.8rem line height so the header keeps exactly its size — the
+   50% visual blow-up happens via transform, which does not participate
+   in layout (owner 2026-08-17: bigger logo, identical header). Anchored
+   left/center so it grows rightward into the header's empty middle, not
+   up out of the bar. block kills the baseline gap under an img. */
+.logo {
+  height: 1.8rem;
+  width: auto;
+  display: block;
+  transform: scale(1.5);
+  transform-origin: left center;
+}
 .battery { color: var(--dim); font-size: 0.9rem; }
 .battery.low { color: var(--danger); }
 
