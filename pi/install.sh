@@ -111,6 +111,14 @@ PKGS=(bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils curl jq
       openssl                              # storytel.py AES-encrypts the
                                            # login password (system python
                                            # has no AES); normally present
+      restic rclone                        # backup.py: restic snapshots the
+                                           # box's irreplaceable state
+                                           # (authenticated encryption, dedup,
+                                           # retention), rclone is the bridge
+                                           # to whatever storage the owner
+                                           # picked. From apt, not a vendored
+                                           # binary, so both get security
+                                           # updates with everything else
       python3-dbus python3-gi)             # BlueZ D-Bus backend (PLAN-bt-dbus.md)
 missing=()
 for p in "${PKGS[@]}"; do have_pkg "$p" || missing+=("$p"); done
@@ -832,6 +840,44 @@ mkdir -p /usr/share/vibb/web
 for f in "$SCRIPT_DIR"/web/*; do
   install_if_changed 644 "$f" "/usr/share/vibb/web/$(basename "$f")" || true
 done
+
+# Backup timer. A dedicated timer, NOT the 6h cache sweeper: a backup that
+# fails must never interfere with cache pruning, and the two have nothing to
+# do with each other. Harmless before the owner has connected any storage —
+# the run exits 0 without touching the network.
+write_if_changed /etc/systemd/system/vibb-backup.service <<'EOF' && BK_CHANGED=1
+[Unit]
+Description=Vibb: back up the box's config, secrets and bookmarks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Nice=19
+ExecStart=/usr/bin/python3 -c "import sys; sys.path.insert(0, '/usr/local/lib/vibb-py'); from vibb import backup; sys.exit(0) if not backup.configured() else backup.backup_now()"
+EOF
+write_if_changed /etc/systemd/system/vibb-backup.timer <<'EOF' && BK_CHANGED=1
+[Unit]
+Description=Vibb: periodic backup of the box's irreplaceable state
+
+[Timer]
+OnBootSec=15min
+# 6h: the data is tiny and changes rarely (a library edit, a bookmark),
+# and restic dedups, so a run that finds nothing new costs almost nothing.
+OnUnitActiveSec=6h
+# The box is often asleep or offline at any given moment — catch up rather
+# than silently skipping a whole day.
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
+EOF
+if [[ ${BK_CHANGED:-0} -eq 1 ]]; then
+  systemctl daemon-reload
+  echo "    backup timer installed (connect storage in the PWA: Settings -> Backup)"
+fi
+systemctl enable --now vibb-backup.timer >/dev/null 2>&1 || true
 
 # Screen daemon service (Pirate Audio HAT). Installed but NOT enabled —
 # enable it when the screen is mounted:  sudo systemctl enable --now vibb-ui
