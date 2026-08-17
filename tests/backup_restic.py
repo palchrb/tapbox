@@ -332,3 +332,18 @@ print("13. a yielded run does not claim success OK")
 
 print("\nBACKUP RESTIC OK — setup rolls back, health is visible, the timer "
       "waits for a trustworthy clock, and the music always wins the radio.")
+
+# --- 14. the restraints travel with the CALL, not the unit file -------------
+#     The PWA's routes call this module in-process from vibb-daemon, whose
+#     unit carries no limits — so anything set only in vibb-backup.service
+#     protected the timer path and left the daemon path running with Go's
+#     defaults and no restic cache, next to mpv (QA 2026-08-17).
+env = backup._restic_env()
+assert env["GOMEMLIMIT"] == "80MiB" and env["GOGC"] == "20", env
+assert env["GOMAXPROCS"] == "1", "one core, like the content sweeper's taskset"
+assert env["RESTIC_CACHE_DIR"], \
+    "without a cache dir restic re-fetches the whole index every run"
+os.environ["GOMEMLIMIT"] = "40MiB"     # a unit file may still tighten them
+assert backup._restic_env()["GOMEMLIMIT"] == "40MiB"
+del os.environ["GOMEMLIMIT"]
+print("14. memory/CPU restraints travel with the call, not the unit OK")

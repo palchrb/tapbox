@@ -503,6 +503,17 @@ def _restic_env(repo=None):
     env["RESTIC_REPOSITORY"] = repo or load_repo()
     env["RESTIC_PASSWORD_FILE"] = RESTIC_PASS_FILE
     env["RCLONE_CONFIG"] = RCLONE_CONF
+    # Set HERE, not only in vibb-backup.service: the PWA's routes call this
+    # module IN-PROCESS from vibb-daemon, whose unit carries none of these.
+    # Relying on the unit file meant the timer/idle path was restrained and
+    # the daemon path ran with Go's defaults (GOGC=100, GOMAXPROCS=4) and no
+    # restic cache — measured ~124MB RSS against mpv, re-fetching the whole
+    # index every time (QA 2026-08-17). Env travels with the call; a unit
+    # file does not. setdefault so the unit can still tighten them.
+    env.setdefault("GOMEMLIMIT", "80MiB")
+    env.setdefault("GOGC", "20")
+    env.setdefault("GOMAXPROCS", "1")
+    env.setdefault("RESTIC_CACHE_DIR", "/var/cache/vibb-restic")
     return env
 
 
