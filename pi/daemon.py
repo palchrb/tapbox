@@ -122,6 +122,7 @@ for _p in (_here, "/usr/local/lib/vibb-py"):
         if _p not in sys.path:
             sys.path.insert(0, _p)
         break
+from vibb import backup as _backup  # noqa: E402 — state snapshots to restic
 from vibb import content, mpv as _mpv, spotify as _spotify  # noqa: E402
 from vibb import renderer as _renderer  # noqa: E402 — sonos axis+client
 from vibb import spotify_web as _spotify_web  # noqa: E402
@@ -3084,6 +3085,20 @@ class Handler(BaseHTTPRequestHandler):
                 "queued": _storytel.outbox_pending(),
                 "sync": bool(load_settings().get("storytel_sync", 1)),
             })
+        elif url.path in ("/backup/status", "/backup/snapshots"):
+            # SAFE["GET"] is True, so these must gate themselves. Unlike
+            # /storytel/status these are NOT booleans-only: the repo string
+            # names the owner's bucket/host, and the snapshot list is a
+            # record of the box's history. Privileged, both of them.
+            if not self._require_token():
+                return
+            if url.path == "/backup/status":
+                self._send(200, _backup.status())
+                return
+            try:
+                self._send(200, {"snapshots": _backup.snapshots()})
+            except RuntimeError as e:
+                self._send(503, {"error": str(e)})
         elif url.path == "/expand":
             q = urllib.parse.parse_qs(url.query)
             entry_id = (q.get("id") or [None])[0]
@@ -3558,6 +3573,52 @@ class Handler(BaseHTTPRequestHandler):
                     save_library(normalize_library(lib))
                 log(f"section logo {'set' if data else 'removed'}: {sid}")
                 self._send(200, lib)
+            elif self.path == "/backup/configure":
+                # Point the box at ANY rclone-backed restic repo. The owner
+                # runs `rclone config` on their own machine (which is what
+                # handles OAuth backends) and pastes the resulting block —
+                # nothing here is tied to one provider. Privileged by
+                # default-deny: POST is not in SAFE.
+                try:
+                    self._send(200, _backup.configure(
+                        body.get("rclone_conf") or "",
+                        repo=body.get("repo") or None,
+                        repo_password=body.get("repo_password") or None,
+                        path=body.get("path") or None))
+                except RuntimeError as e:
+                    self._send(400, {"error": str(e)})
+            elif self.path == "/backup/now":
+                try:
+                    r = _backup.backup_now()
+                    log(f"backup: snapshot {r.get('snapshot_id')} "
+                        f"({r.get('files')} files)")
+                    self._send(200, r)
+                except RuntimeError as e:
+                    self._send(503, {"error": str(e)})
+            elif self.path == "/backup/restore":
+                # Applies config, secrets and every child's place, then
+                # reboots: the daemon holds library/settings in memory and
+                # would write them back over the restore, and go-librespot,
+                # BlueZ and NM never re-read on their own.
+                try:
+                    manifest = _backup.restore_snapshot(
+                        body.get("snapshot") or "latest")
+                except RuntimeError as e:
+                    self._send(503, {"error": str(e)})
+                except ValueError as e:
+                    self._send(400, {"error": str(e)})
+                else:
+                    log(f"backup: restored {len(manifest['files'])} files — "
+                        "rebooting so every consumer re-reads from disk")
+                    self._send(200, {"restored": len(manifest["files"]),
+                                     "created": manifest.get("created"),
+                                     "rebooting": True})
+                    threading.Thread(
+                        target=lambda: (time.sleep(1), subprocess.run(
+                            ["systemctl", "reboot"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)),
+                        daemon=True).start()
             elif self.path == "/wifi/reconnect":
                 # on-demand 'get the net back now' (offline-Spotify popup's
                 # X). Quiesce A2DP — the NM scan shares the 2.4GHz radio —
