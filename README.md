@@ -17,6 +17,12 @@ family already has: Spotify, NRK, any podcast RSS, local files.
 - **Podcasts — any RSS/XML feed**, with first-class **NRK** support:
   episodes cache offline (newest N per show, your choice), each with
   its own episode art and exact per-episode resume.
+- **Storytel** (your own subscription): the account's audiobooks,
+  grouped into **series** so a long-running kids' series is one tile
+  rather than thirty. Books are **downloaded to the box**, so they play
+  offline and keep exact per-book positions; those positions are also
+  mirrored back to Storytel, one way, so the phone app picks up roughly
+  where the box left off. Works on Sonos too.
 - **Your own files** *(early support, less battle-tested)*: DRM-free
   audiobooks and rips — upload through the PWA or copy a folder onto
   the box. Track titles and order come from the files' embedded tags;
@@ -58,6 +64,19 @@ family already has: Spotify, NRK, any podcast RSS, local files.
   bookmarks per episode.
 - **Battery** (PiSugar 3): percent tuned to *remaining playtime*, safe
   shutdown, optional button gestures on the power button.
+- **Backup**: the box copies the things you cannot download again —
+  the library, settings, RFID cards, category logos, the Storytel and
+  Spotify logins, and every child's place in every book — to storage
+  you own. Encrypted before it leaves the box, and reachable through
+  [rclone](https://rclone.org), so any of its ~70 backends works
+  (S3, Backblaze B2, Nextcloud/WebDAV, Jottacloud, Drive, Dropbox,
+  SFTP). It runs once a day, on the way down after an idle shutdown —
+  never while anything is playing, because uploading and the music
+  share one 2.4GHz radio. Downloaded audio is left out on purpose: it
+  can be fetched again, and the whole backup stays under a megabyte.
+  Restoring onto a replacement box brings the room back as it was
+  (a new box mints its own QR code, and a Bluetooth speaker is paired
+  again). Set it up in the PWA: **Settings → Backup**.
 
 ## Status
 
