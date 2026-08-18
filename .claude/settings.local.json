@@ -226,7 +226,8 @@
       "Bash(echo \"=== exit $? ===\")",
       "WebFetch(domain:elixir.bootlin.com)",
       "Bash(awk '{printf \"%d\\\\t%s\\\\n\", $1+99, substr\\($0, index\\($0,$2\\)\\)}')",
-      "Bash(stable)"
+      "Bash(stable)",
+      "Bash(git switch *)"
     ]
   }
 }

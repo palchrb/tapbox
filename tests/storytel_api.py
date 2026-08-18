@@ -201,8 +201,15 @@ assert called["body"]["position"] == 12500, "seconds -> ms at the boundary"
 assert called["body"]["consumableId"] == "160661"
 assert called["body"]["deviceId"] == st.device_id(), "stable device id"
 # the FULL shape the server needs to actually record the bookmark — a
-# bare {consumableId, position} 200s but never appears in the app
-assert called["body"]["action"] == "player_paused", "the recording action"
+# bare {consumableId, position} 200s but never appears in the app.
+# The action is the OFFICIAL app's value, captured from its own traffic
+# 2026-08-17. We used to send `player_paused`, inherited from the
+# reference client, which appears nowhere in the app's vocabulary — and
+# an action the server does not recognise may store the position without
+# ever counting it as listening (which is what the hours meter cares
+# about). Pinned so it cannot drift back to a guessed value.
+assert called["body"]["action"] == "player_playback_paused", \
+    "the action the official app sends, not the reference client's guess"
 assert called["body"]["type"] == "abook", "the recording type"
 assert called["body"]["kidsMode"] is False
 

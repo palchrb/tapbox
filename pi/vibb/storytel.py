@@ -624,17 +624,31 @@ def push_bookmark(consumable_id, position_s):
     False on anything else, and NEVER raises — a permanently-failing
     account must be invisible to the listener.
 
-    The body must carry the FULL shape the reference client sends, not
-    just the position: the server accepts a bare {consumableId, position}
-    with a 200 but does not record a bookmark the app will read — the
-    fields that make it stick are `action: player_paused` and `type:
-    abook` (field 2026-08-15: a few hours of listening never appeared in
-    the iOS app). Position is MILLISECONDS; our local bookmark is in
-    seconds."""
+    The body must carry the FULL shape the app sends, not just the
+    position: the server accepts a bare {consumableId, position} with a
+    200 but does not record a bookmark the app will read — the fields
+    that make it stick are `action` and `type: abook` (field 2026-08-15:
+    a few hours of listening never appeared in the iOS app). Position is
+    MILLISECONDS; our local bookmark is in seconds.
+
+    `player_playback_paused` is what the OFFICIAL Android app sends,
+    captured 2026-08-17. We had `player_paused`, inherited from the
+    reference client — a value that appears nowhere in the app's own
+    vocabulary. The whole captured enum is just two events, both
+    position-recording: `audiobook_changed_or_cold_start` when a book is
+    opened or switched, and this one when playback pauses. There is no
+    periodic "still playing" report and no explicit "finished" event.
+
+    Why this may matter beyond tidiness: a bookmark written with an
+    action the server does not recognise still STORES (our positions do
+    show up in the app), but plausibly never counts as listening — which
+    would explain why hours consumed never moved for playback from the
+    box. Unverified; the test is to play an episode out and watch
+    `timeUsedSeconds` in subscriptions/limited-time/info."""
     try:
         body = json.dumps({
             "deviceId": device_id(),
-            "action": "player_paused",
+            "action": "player_playback_paused",
             "secondsSinceCreated": 0,
             "position": int(position_s * 1000),
             "type": "abook",
