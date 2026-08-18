@@ -979,6 +979,14 @@ Before=shutdown.target
 Conflicts=shutdown.target
 
 [Service]
+# Name the pin factory instead of letting gpiozero PROBE for one. It
+# tries its backends in turn, and the cost shows up in the measured
+# backlight half of display init as pure variance: 0.2s / 0.5s / 0.8s /
+# 1.1s across boots on the same box. lgpio is the one install.sh puts in
+# the venv, and it is what the box uses either way — this only removes
+# the search. (ui.py's own comment named this in 2026-08-13; it was never
+# set. Measured cold boots 2026-08-18.)
+Environment=GPIOZERO_PIN_FACTORY=lgpio
 ExecStart=/opt/vibb/venv/bin/python3 /usr/local/bin/vibb-ui
 Restart=always
 RestartSec=5

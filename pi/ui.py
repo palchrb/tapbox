@@ -711,6 +711,7 @@ class St7789Display:
     # Class-level defaults so a display built without __init__ (test
     # rigs use object.__new__) still answers these.
     _lit = False
+    _t_import = 0.0
     _bl = None
     on = True
     brightness = 100
@@ -723,6 +724,13 @@ class St7789Display:
         # unless told which to use.
         t = time.monotonic()
         import st7789  # Pimoroni library
+        # Split again: the reset sequence is NOT the cost here (we pass
+        # rst=None, so st7789.reset()'s three 0.5s sleeps never run —
+        # verified against the installed 1.0.1 on the box 2026-08-18).
+        # What is left is the import itself (which drags in gpiodevice
+        # and spidev) versus the constructor's GPIO lookup and register
+        # writes, and they need very different fixes.
+        imp = time.monotonic() - t
         # backlight=None: we drive BCM13 ourselves so we can DIM it (the
         # library only does on/off). PWMLED via the lgpio pin factory
         # gives real brightness control; only runs while the screen is on.
@@ -730,6 +738,7 @@ class St7789Display:
             height=240, width=240, rotation=90, port=0, cs=1, dc=9,
             backlight=None, spi_speed_hz=80 * 1000 * 1000)
         panel = time.monotonic() - t
+        self._t_import = imp
         self.on = True
         self.brightness = 100
         self._fast = os.environ.get("VIBB_FAST_PUSH", "1") != "0"
@@ -749,7 +758,9 @@ class St7789Display:
         except Exception as e:
             log(f"backlight PWM unavailable ({e.__class__.__name__}) — "
                 f"on/off only")
-        log(f"panel {panel:.1f}s + backlight {time.monotonic() - t:.1f}s")
+        log(f"panel {panel:.1f}s (import {self._t_import:.1f}s + init "
+            f"{panel - self._t_import:.1f}s) + backlight "
+            f"{time.monotonic() - t:.1f}s")
 
     def show(self, img):
         # Fast path: convert ourselves, push bytes through the library's
