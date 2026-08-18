@@ -446,6 +446,49 @@ setup-hotspoten selv.
 
 ## 8. Boot-tid-budsjett
 
+### 8.0 systemd-analyze — hvor de 20 sekundene faktisk ligger (felt 2026-08-18)
+
+```
+Startup finished in 3.940s (kernel) + 18.023s (userspace) = 21.964s
+
+sysinit.target @7.815s
+└─systemd-tmpfiles-setup.service @7.469s +278ms
+  └─local-fs.target @7.391s
+    └─boot-firmware.mount @7.132s +249ms
+      └─systemd-fsck@...partuuid-9773a0ea-01.service @5.836s +1.277s
+        └─dev-disk-by-partuuid-9773a0ea-01.device @5.811s
+
+7.646s NetworkManager.service      1.526s NetworkManager-wait-online
+4.385s vibb-rtc.service            1.277s systemd-fsck@boot-firmware
+2.411s dev-mmcblk0p2.device        1.210s user@1000.service
+1.750s bluealsa.service             922ms avahi-daemon.service
+1.645s bluetooth.service            694ms systemd-udev-trigger.service
+```
+
+**To antakelser i tidligere versjoner av denne spec-en var feil:**
+
+1. **`initramfs er allerede av.`** Ingen `(initrd)`-ledd i utskriften.
+   `auto_initramfs=0` er altså ikke et gjenstående tiltak — det er
+   gjort. (Bare ikke fanget i install.sh; se §5.)
+2. **Kjernen er 3,94 s, ikke 8–12 s.** Estimatet var mer enn dobbelt
+   for høyt. Kjernen er nær gulvet for en Zero 2 W, og
+   **kjernetrimming er derfor ikke den store Buildroot-gevinsten**
+   spec-en antok. Maksimalt ~1,5–2 s ligger der.
+
+**Hele ventetiden ligger i userspace — og den er dominert av lagring.**
+Kjeden over sier det presist: `sysinit.target` kan ikke fullføre før
+`local-fs.target`, som venter på at `/boot/firmware` skal monteres, som
+venter på 1,28 s fsck av FAT-partisjonen, som venter på at
+partisjons-noden i det hele tatt dukker opp (`@5.811s`;
+`dev-mmcblk0p2.device` bruker 2,41 s). Det er SD-enumerering, ikke CPU.
+
+**Og `vibb-ui` står i den køen uten å ha bruk for den.** Uniten er
+`After=local-fs.target sysinit.target` (install.sh:936–945). Rot-fs-en
+er montert av kjernen før systemd i det hele tatt starter; alt UI-en
+leser (venv, fonter, bibliotek, `/dev/spidev0.1`) er tilgjengelig lenge
+før FAT-partisjonen er funnet og sjekket. Skjermen venter altså på en
+partisjon den aldri åpner. Se §8.3 pkt. 1.
+
 ### 8.1 Målt baseline — Pi OS, kaldstart (felt 2026-08-14)
 
 Dette er **ekte tall**, ikke estimater: fra vibb-ui sin egen
@@ -517,8 +560,8 @@ over er altså etter at den boot-runden allerede er høstet.
 
 | Fase | Pi OS (målt) | Buildroot-mål | Kommentar |
 |---|---|---|---|
-| Firmware | ~2–3 s (anslag, inni 14,1) | ~1,5–2,5 s | cutdown-elf, få overlays |
-| Kjerne + sysinit | resten av 14,1 s | ~4–7 s (M) | monolittisk der trygt, trimmet systemd |
+| Kjerne | **3,94 s (målt)** | ~2–2,5 s (M) | nær gulvet allerede — liten gevinst |
+| Userspace til sysinit | **7,8 s (målt)** | ~2–3 s (M) | ingen FAT-fsck i kjeden, færre units |
 | vibb-ui til READY | 6,2 s (målt) | ~3–4 s (M) | pin factory, .pyc, squashfs-zstd |
 | **Sum boot-to-UI** | **~20 s (målt)** | **~7–12 s** | ~2–3× — ikke 3–4× som tidligere anslått |
 
