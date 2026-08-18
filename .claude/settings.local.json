@@ -227,7 +227,11 @@
       "WebFetch(domain:elixir.bootlin.com)",
       "Bash(awk '{printf \"%d\\\\t%s\\\\n\", $1+99, substr\\($0, index\\($0,$2\\)\\)}')",
       "Bash(stable)",
-      "Bash(git switch *)"
+      "Bash(git switch *)",
+      "Bash(grep -o 'imports took [0-9.]*s[^\"]\\\\{0,60\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
+      "Bash(grep -o 'Aug 1[3-9][^\"]\\\\{0,40\\\\}vibb-ui: \\\\\\(imports took\\\\|panel\\\\|display up\\\\|splash lit\\\\|inputs ready\\\\|READY\\\\\\)[^\"]\\\\{0,70\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
+      "Bash(grep -o 'Startup finished in[^\\\\\\\\\"]\\\\{0,160\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
+      "Bash(grep -o '[0-9.]*s \\(kernel\\) [^\\\\\\\\\"]\\\\{0,90\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)"
     ]
   }
 }

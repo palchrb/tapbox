@@ -140,6 +140,24 @@ assert bookmarks.episode_pos(bookmarks.load_state(key), "111",
     "a finished episode must re-tap from the start, not from its last second"
 print("8. a finished episode still starts fresh on the next tap OK")
 
+# 8b. A FINISHED BOOK MUST LAND ON STORYTEL'S OWN DURATION. The app's
+#     "N% fullført" is computed against THEIR number, so reporting mpv's
+#     measurement of the file we downloaded left books stuck at 96-98%
+#     forever — visible on the owner's progress screen (field 2026-08-18).
+#     The shelf we already persist carries the authoritative value.
+storytel.write_shelf(TARGET, "Kokosbananas", [
+    {"consumable_id": "111", "title": "En", "order": 1,
+     "duration_ms": 900_000},          # Storytel says 900s
+])
+PUSHED.clear()
+bookmarks.save_state(key, "/c/111.mp3", 695.0, "111", 700.0)  # mpv says 700s
+daemon._storytel_mirror_tick()
+assert [p["consumableId"] for p in PUSHED] == ["111"], PUSHED
+assert PUSHED[0]["position"] == 900_000, \
+    ("a finished book must be reported at Storytel's own duration, not "
+     f"mpv's view of our download: {PUSHED[0]}")
+print("8c. a finished book lands on Storytel's own duration OK")
+
 # 9. THE END OF A QUEUE MUST NOT EAT THE COMPLETION. player.py clears the
 #    state when a queue finishes by itself — precisely when the last
 #    episode's completion is freshest and the 60s mirror is least likely

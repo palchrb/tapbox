@@ -514,6 +514,23 @@ def read_shelf(target):
         return None
 
 
+def shelf_durations(target):
+    """{consumableId: seconds} from the persisted shelf — STORYTEL'S OWN
+    duration for each book, not our measurement of the downloaded file.
+
+    It matters for one thing: the percentage the app shows is computed
+    against this number, so a completion reported with mpv's duration
+    lands a hair short and the book sits at 96-98% forever. Local read,
+    never raises, {} when unknown."""
+    shelf = read_shelf(target) or {}
+    out = {}
+    for b in shelf.get("books") or []:
+        ms = b.get("duration_ms") or 0
+        if ms:
+            out[str(b.get("consumable_id"))] = ms / 1000.0
+    return out
+
+
 def book_path(target, consumable_id):
     return os.path.join(cache_dir(target), f"{consumable_id}.mp3")
 

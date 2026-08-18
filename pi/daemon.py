@@ -4410,10 +4410,23 @@ def _storytel_mirror_tick():
             if not _storytel.is_storytel(t):
                 continue
             st = _bm_load(state_key(t)) or {}
-            for cid, rec in (st.get("episodes") or {}).items():
+            eps = st.get("episodes") or {}
+            # Storytel's OWN duration per book, read once per target and
+            # only when something here is finished.
+            durs = (_storytel.shelf_durations(t)
+                    if any(r.get("done") for r in eps.values()
+                           if isinstance(r, dict)) else {})
+            for cid, rec in eps.items():
                 pos = rec.get("pos")
                 if not isinstance(pos, (int, float)) or pos <= 0:
                     continue
+                if rec.get("done"):
+                    # A finished book must land on Storytel's own duration,
+                    # not mpv's measurement of the file we downloaded: the
+                    # percentage the app shows is computed against THEIR
+                    # number, so ours left books sitting at 96-98% forever
+                    # (field 2026-08-18, the owner's progress screen).
+                    pos = durs.get(str(cid)) or pos
                 ms = int(pos * 1000)
                 if _STORYTEL_MIRRORED.get(cid) != ms:
                     _storytel.outbox_note(cid, pos)
