@@ -247,6 +247,44 @@ position survives (bookmark + resume).
 | Pirate Audio HAT (when mounted) | `sudo vibb-power hat-audio-on` + reboot + enable `vibb-ui` | hardware-gated |
 | Spotify login | pick the box under Devices in the Spotify app (same wifi) | zeroconf by design; install.sh waits for it in step 8/8 |
 | BT speaker pairing | PWA settings -> Bluetooth (or screen) | per-home config |
+| Boot-time shave (~1.5s) | edit `/etc/fstab`, see below | a bad fstab edit can make the box unbootable — too risky to automate on a fresh card |
+
+**Optional boot-time tuning.** install.sh already masks five boot
+services this box has no use for (binfmt, e2scrub, keyboard-setup,
+sshswitch) — measured on a cold Zero 2 W, they sat on or dragged into the
+critical path to the screen. One further shave is left manual because it
+edits `/etc/fstab`, where a mistake bricks the boot: taking `/boot/firmware`
+off `local-fs.target` so its fsck no longer runs in the busiest phase of
+startup. It moved `sysinit.target` from ~7.8s to ~6.2s across three boots.
+`/boot/firmware` is a FAT partition the box only touches on a kernel or
+config change, and the firmware reads it directly before Linux exists — so
+an automount is safe. Back up fstab first, and **verify the line before
+rebooting**:
+
+```bash
+# 1. back up
+sudo cp /etc/fstab /etc/fstab.bak-$(date +%F)
+
+# 2. add automount flags to the /boot/firmware line
+sudo sed -i '\|/boot/firmware|s|\(vfat[[:space:]]\+\)\([^[:space:]]\+\)|\1\2,noauto,x-systemd.automount,x-systemd.idle-timeout=2min|' /etc/fstab
+
+# 3. VERIFY the line looks right — one line, fields intact:
+grep firmware /etc/fstab
+#   PARTUUID=...  /boot/firmware  vfat  defaults,noauto,x-systemd.automount,x-systemd.idle-timeout=2min  0  2
+
+# 4. confirm fstab is still valid, then reboot
+findmnt --verify --fstab && sudo reboot
+```
+
+If step 3 or 4 looks wrong, restore and stop:
+`sudo cp /etc/fstab.bak-* /etc/fstab`. The box boots fine either way — the
+firmware doesn't need Linux to mount that partition.
+
+Diminishing returns past that: cold boot to READY is ~19s, of which ~3.9s
+is the kernel, ~5.8s the SD card's partitions merely appearing, and ~4s the
+UI process (mostly cold SD reads of Python imports). All three want a faster
+A2 card or Buildroot, not another config tweak — a quick A2 card is the
+lowest-effort win and touches every one of those blocks at once.
 
 ## Why this exists
 
