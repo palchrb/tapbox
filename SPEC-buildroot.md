@@ -482,6 +482,28 @@ venter på 1,28 s fsck av FAT-partisjonen, som venter på at
 partisjons-noden i det hele tatt dukker opp (`@5.811s`;
 `dev-mmcblk0p2.device` bruker 2,41 s). Det er SD-enumerering, ikke CPU.
 
+**Fork-tidspunktet er målt** (`systemctl show vibb-ui -p
+ExecMainStartTimestampMonotonic` = 11845869 µs = uptime 11,85 s). Det
+fester to ting: `@`-tidene i critical-chain er userspace-relative
+(sysinit fullfører på uptime 3,94 + 7,82 = 11,76 s), og systemd forker
+`vibb-ui` 90 ms etter det. Gapet til første logglinje (uptime 13,8 s) er
+altså **~2,0 s Python-tolkeroppstart**, ikke systemd-venting.
+
+Fullt regnskap for kaldstarten 17:12 (19,8 s til READY):
+
+| Blokk | Tid | Andel |
+|---|---|---|
+| Kjerne | 3,94 s | 20 % |
+| **Userspace → sysinit (lagringskjeden)** | **7,82 s** | **39 %** |
+| Fork → første logglinje (Python-oppstart) | 1,95 s | 10 % |
+| Tunge importer (PIL m.m.) | 2,3 s | 12 % |
+| Panel 1,7 + backlight 0,5 | 2,2 s | 11 % |
+| Splash → READY | 1,2 s | 6 % |
+
+Boot-til-boot-varians er ~2 s (booten 18:34 ga READY 22,0 s og
+NetworkManager 9,99 s mot 7,65 s) — **A/B-testing krever minst tre
+kalde booter per variant.**
+
 **Og `vibb-ui` står i den køen uten å ha bruk for den.** Uniten er
 `After=local-fs.target sysinit.target` (install.sh:936–945). Rot-fs-en
 er montert av kjernen før systemd i det hele tatt starter; alt UI-en
