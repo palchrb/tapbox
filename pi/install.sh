@@ -931,6 +931,40 @@ if [[ ${BK_CHANGED:-0} -eq 1 ]]; then
 fi
 systemctl enable --now vibb-backup.timer >/dev/null 2>&1 || true
 
+# Backlight off at boot. The Pirate Audio's backlight is lit the moment
+# power arrives, but the ST7789 has no pixels until vibb-ui initialises
+# it ~19s later — so the whole boot showed the panel's uninitialised RAM
+# as bright snow, which reads as a BROKEN box rather than one starting
+# up (owner 2026-08-18). Dark reads as "off", which is the truth. vibb-ui
+# raises the light itself the instant it has a first frame.
+#
+# Costs nothing measurable: one pinctrl call, no SPI, no python, and it
+# is ordered before nothing — it just needs to land early.
+write_if_changed /etc/systemd/system/vibb-backlight-off.service <<'EOF' && BL_CHANGED=1
+[Unit]
+Description=Vibb: dark screen until the UI has something to show
+DefaultDependencies=no
+After=local-fs.target
+Before=vibb-ui.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# pinctrl (raspi-utils) on Pi OS; the '-' prefixes mean a box without it
+# simply keeps today's behaviour rather than failing the boot.
+ExecStart=-/usr/bin/pinctrl set 13 op dl
+ExecStart=-/usr/bin/raspi-gpio set 13 op dl
+
+[Install]
+WantedBy=sysinit.target
+EOF
+if [[ ${BL_CHANGED:-0} -eq 1 ]]; then
+  systemctl daemon-reload
+  systemctl enable vibb-backlight-off.service >/dev/null 2>&1 || true
+  echo "    backlight now stays dark until the UI draws (no more boot snow)"
+fi
+
 # Screen daemon service (Pirate Audio HAT). Installed but NOT enabled —
 # enable it when the screen is mounted:  sudo systemctl enable --now vibb-ui
 write_if_changed /etc/systemd/system/vibb-ui.service <<'EOF' || true

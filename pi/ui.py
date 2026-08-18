@@ -708,6 +708,13 @@ def _rgb565(img, rotation=90):
 
 
 class St7789Display:
+    # Class-level defaults so a display built without __init__ (test
+    # rigs use object.__new__) still answers these.
+    _lit = False
+    _bl = None
+    on = True
+    brightness = 100
+
     def __init__(self):
         # Split-timed: bringing the panel up is the biggest single item
         # inside this process (2.2s measured on the box 2026-08-13) and
@@ -726,12 +733,19 @@ class St7789Display:
         self.on = True
         self.brightness = 100
         self._fast = os.environ.get("VIBB_FAST_PUSH", "1") != "0"
+        self._lit = False   # backlight stays down until the first frame
         self._bl = None
         t = time.monotonic()
         try:
             from gpiozero import PWMLED
             self._bl = PWMLED(BACKLIGHT_PIN)
-            self._bl.value = 1.0
+            # DARK until there is something to show. vibb-backlight-off
+            # kills the panel's uninitialised RAM — which reads as snow
+            # on a lit screen — for the whole boot; raising the light
+            # here, a second before the first frame exists, would put
+            # that snow back for exactly that second. The first show()
+            # lights it (owner 2026-08-18: "snøfilm og så kommer ui").
+            self._bl.value = 0.0
         except Exception as e:
             log(f"backlight PWM unavailable ({e.__class__.__name__}) — "
                 f"on/off only")
@@ -754,12 +768,29 @@ class St7789Display:
                 # away — that was ~35ms of the frame.
                 self.disp.data(b"")
                 self.disp._spi.writebytes2(buf)
+                self._first_frame()
                 return
             except Exception as e:
                 self._fast = False
                 log(f"st7789 fast push off ({e.__class__.__name__}: {e})"
                     f" — using library display()")
         self.disp.display(img)
+        self._first_frame()
+
+    def _first_frame(self):
+        """Light the backlight the moment a real frame is on the panel —
+        once. Before this the screen is deliberately dark (see __init__).
+
+        Never raises: the light is cosmetic, the frame is not, and this
+        runs INSIDE show()'s fast path, where any exception would demote
+        the box to the slow library push for the rest of the session."""
+        if self._lit:
+            return
+        self._lit = True
+        try:
+            self._apply()
+        except Exception as e:
+            log(f"backlight raise failed ({e.__class__.__name__})")
 
     def _apply(self):
         if self._bl is not None:

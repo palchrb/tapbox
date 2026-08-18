@@ -134,3 +134,61 @@ assert d2.disp.windows == 0 and len(d2.disp.displayed) == 1
 print("5. kill switch goes straight to library display() OK")
 
 print("\nFAST PUSH OK — same bytes on the wire, no 115200-entry list.")
+
+# --- the screen stays DARK until there is a frame to show -------------------
+# The Pirate Audio backlight is lit from power-on, but the ST7789 has no
+# pixels until vibb-ui initialises it ~19s into the boot — so the whole
+# boot showed the panel's uninitialised RAM as bright snow, which reads as
+# a broken box (owner 2026-08-18). The light now comes up with the first
+# frame, not before it.
+
+
+class FakeBl:
+    def __init__(self):
+        self.value = None
+
+
+d = object.__new__(ui.St7789Display)
+d.disp = FakeDisp(FakeSpi())
+d._fast = True
+d._bl = FakeBl()
+d.on, d.brightness = True, 100
+assert d._lit is False, "a fresh display has not lit the backlight"
+assert d._bl.value is None, "nothing may touch the light before a frame"
+d.show(Image.new("RGB", (240, 240), (0, 0, 0)))
+assert d._lit is True and d._bl.value == 1.0, \
+    "the first frame must raise the backlight"
+d._bl.value = 0.4                      # a later dim must not be undone
+d.show(Image.new("RGB", (240, 240), (0, 0, 0)))
+assert d._bl.value == 0.4, "the raise happens once, not on every frame"
+print("6. the backlight comes up with the first frame, once OK")
+
+# ...and a broken backlight must never cost us the fast push: a raise that
+# throws would otherwise demote the box to the slow library display() for
+# the rest of the session.
+d = object.__new__(ui.St7789Display)
+spi2 = FakeSpi()
+d.disp = FakeDisp(spi2)
+d._fast = True
+
+
+class BoomBl:
+    @property
+    def value(self):
+        return 0
+
+    @value.setter
+    def value(self, v):
+        raise RuntimeError("gpio gone")
+
+
+d._bl = BoomBl()
+d.on, d.brightness = True, 100
+d.show(Image.new("RGB", (240, 240), (1, 2, 3)))
+assert d._fast is True, "a backlight failure must not disable the fast push"
+assert len(spi2.written) == 1 and d.disp.displayed == [], \
+    "the frame still went out over SPI"
+print("7. a failing backlight cannot demote the fast frame push OK")
+
+print("\nFAST PUSH OK — same bytes on the wire, no 115200-entry list, "
+      "and a dark screen until there is something to show.")
