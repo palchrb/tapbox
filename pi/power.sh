@@ -66,7 +66,12 @@ set_leds() {  # <trigger> <brightness>
 }
 
 pisugar_get() {  # query pisugar-server, e.g. pisugar_get battery_v
-  (echo "get $1"; sleep 0.3) | nc -q1 127.0.0.1 8423 2>/dev/null | awk '{print $2}'
+  # `timeout` wraps the whole pipe: nc -q1 bounds the wait AFTER our input
+  # hits EOF, but NOT the connect/read itself — a hung or not-yet-started
+  # pisugar-server could otherwise block nc indefinitely, which is
+  # dangerous on any path that runs early in boot (2026-08-18).
+  timeout 3 sh -c '(echo "get '"$1"'"; sleep 0.3) | nc -q1 127.0.0.1 8423' \
+    2>/dev/null | awk '{print $2}'
 }
 
 pisugar_cmd() {  # send a raw pisugar-server command, e.g. rtc_rtc2pi
@@ -107,29 +112,6 @@ status_report() {
 }
 
 case "${1:-}" in
-  wait-ui)
-    # Hold the CPU at boot clock until the screen is up. Measured
-    # 2026-08-18: the UI's startup is CPU-bound, not only I/O-bound —
-    # warm, same page cache, only the clock differing, imports run 0.4s
-    # at 900MHz against 0.6s at the 600MHz powersave park, and panel
-    # init 0.8s against 1.1s. Parking the CPU at ~6.5s into a boot (when
-    # basic.target lands) therefore slowed everything the child waits
-    # for, and the first menu presses after boot too.
-    #
-    # Bounded three ways, because this must never keep a box awake:
-    # only waits when the screen service is ENABLED (a headless box
-    # returns at once), gives up after WAIT_S regardless, and the
-    # marker lives on tmpfs so a crashed UI cannot leave a stale one
-    # behind across a reboot.
-    WAIT_S="${VIBB_UI_WAIT:-30}"
-    if systemctl is-enabled vibb-ui.service >/dev/null 2>&1; then
-      for _ in $(seq "$WAIT_S"); do
-        [[ -e /run/vibb-ui-ready ]] && break
-        sleep 1
-      done
-    fi
-    exit 0
-    ;;
   save)
     # Core parking is NOT possible at runtime here: the Pi kernel has no CPU
     # hotplug, so writing cpuN/online is a no-op (this used to call a dead
@@ -145,15 +127,16 @@ case "${1:-}" in
     # (owner 2026-08-18: "på strøm og ved boot skal vi uansett være på
     # ondemand"). Unknown reads as ondemand: no pisugar means no battery,
     # which means wall power.
-    plugged="$(pisugar_get battery_power_plugged || true)"
-    if [[ "$plugged" == false ]]; then
-      set_governor powersave
-    else
-      set_governor ondemand
-      [[ "$plugged" == true ]] \
-        && echo "on charger — governor stays ondemand" \
-        || echo "no battery reading — assuming wall power, governor ondemand"
-    fi
+    # Governor is NOT touched here. `save` runs After=basic.target, ~6.5s
+    # into a boot — long before the screen is up — so parking the CPU
+    # here made the whole UI startup and the first minute of menus run at
+    # 600MHz. charger-follow owns the governor instead, and holds its
+    # FIRST park back (see PARK_DELAY_S) so a battery boot stays at the
+    # kernel default (ondemand) through startup, then parks once the box
+    # is actually idle (owner 2026-08-18). On wall power nothing parks at
+    # all, which is already the policy. The clock is a red herring for
+    # boot TIME — that is I/O-bound, measured — but it is real for menu
+    # responsiveness right after boot, which is exactly this window.
     set_leds none 0
     # NO HDMI blanking. 'vcgencmd display_power 0' is a ONE-WAY door on
     # this box (field 2026-08-04): it blanks, but display_power 1 only
@@ -207,10 +190,6 @@ After=basic.target
 
 [Service]
 Type=oneshot
-# Hold the boot clock until the screen is up — see the wait-ui action.
-# '-' prefixed and bounded inside it, so a headless box or a UI that
-# never comes up costs at most VIBB_UI_WAIT seconds, never a hung boot.
-ExecStartPre=-$SELF wait-ui
 ExecStart=$SELF save
 
 [Install]
@@ -394,8 +373,29 @@ PY
     # vibb-extra runs — its wrapper owns the governor then. Note:
     # 'vibb-power perf' on BATTERY is re-parked within a tick by
     # design; plug in for sustained performance.
+    #
+    # First park is DELAYED: this service starts ~6.5s into a boot, and
+    # parking a battery box to 600MHz immediately would slow the UI's
+    # startup and the first menu presses (which run warm, where clock is
+    # 1.4-2.2x, measured 2026-08-18). Hold the kernel default (ondemand)
+    # for PARK_DELAY_S, then let the normal follow logic take over. On
+    # charger the first tick raises to ondemand at once — no reason to
+    # wait — so the delay only applies while on battery. A plug change
+    # during the wait short-circuits it.
+    PARK_DELAY_S="${VIBB_PARK_DELAY:-30}"
+    _park_held=1
+    _t_started="$(cut -d. -f1 /proc/uptime)"
     while true; do
       plugged="$(pisugar_get battery_power_plugged || true)"
+      if [[ $_park_held -eq 1 ]]; then
+        _now="$(cut -d. -f1 /proc/uptime)"
+        if [[ "$plugged" == true ]] \
+            || (( _now - _t_started >= PARK_DELAY_S )); then
+          _park_held=0            # charger seen, or the grace has elapsed
+        else
+          sleep 5; continue       # still early on battery — leave ondemand
+        fi
+      fi
       # The extras guard reads the wrapper's governor-snapshot marker,
       # NOT systemctl: probing a dead transient unit made systemd log
       # 'Failed to open /run/systemd/transient/...' twice per minute

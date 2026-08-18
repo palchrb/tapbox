@@ -3879,19 +3879,7 @@ class App:
             log(f"READY at boot+{_uptime():.1f}s "
                 f"({up:.1f}s in the ui, splash shown "
                 f"{up - self.splash_at:.1f}s, landed on {self.view})")
-        # Tell vibb-power the screen is up, so it can stop holding the
-        # CPU at full clock. Measured 2026-08-18: the UI's startup is
-        # CPU-bound, not only I/O-bound — at 900MHz vs the 600MHz
-        # powersave park, imports run 0.4s instead of 0.6s and panel
-        # init 0.8s instead of 1.1s (warm, same page cache, so clock is
-        # the only variable). Advisory tmpfs marker, same contract as
-        # the radio and go-restart markers: best-effort, crash-safe,
-        # and a box without a screen simply never creates it.
-        try:
-            with open(os.path.join(_paths.RUN_DIR, "vibb-ui-ready"), "w"):
-                pass
-        except OSError:
-            pass
+
         self._loop_beat = time.monotonic()
         if UI_WATCHDOG_S:
             threading.Thread(target=self._render_watchdog,
