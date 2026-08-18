@@ -111,3 +111,78 @@ assertion that boot is silent but remembered.
   wakes in the carousel, the "box forgot" regression. Rule 2 would still
   work (independent path) but rule 1's quality is lost.
 - C (leave as-is): fails rule 1.
+
+---
+
+# PART 2: carousel play on the already-playing tile hiccups on Sonos
+
+Owner (2026-08-18): pressing play/A in the carousel on the tile that is
+ALREADY playing over Sonos gives a small audible hiccup. Same root class as
+Part 1 (playback-start), same "do it with a clear head" caution — Sonos code
+is field-hardened.
+
+## Root cause (confirmed in code)
+
+`ORCH.play()` routes Sonos through an UNCONDITIONAL early return
+(`daemon.py:797`):
+```
+if _renderer.is_sonos() and not boot:
+    _radio.touch_busy()
+    return self.sonos_start_target(target, episode=episode)
+```
+`sonos_start_target` (`daemon.py:1395`) always re-expands the queue, re-reads
+the bookmark, and re-pushes the episode to the speaker. For Storytel that
+re-mints a signed URL and re-pushes the DIDL — the hiccup.
+
+The LOCAL paths already avoid this: `play()` has an "already loaded → unpause,
+don't restart" shortcut for mpv (`~832`) and Spotify (`~849`). The Sonos path
+has NO such guard. And `ui.py:handle_carousel`'s own comment states the
+intent — "A never restarts anything" — so the Sonos path is simply missing a
+guard that was always meant to be there. This is a real defect, not
+unavoidable behaviour.
+
+## Fix shape (NOT yet built)
+
+Add a same-target-already-playing guard for Sonos, mirroring the local
+shortcut. Before the `is_sonos()` early return (or at the top of
+`sonos_start_target`): if `target == self.target`, `self.source == "sonos"`,
+`episode is None` (an explicit episode pick must still seek), and the speaker
+is playing OUR live session of it — from `self.sonos_snap`: `ours` is True,
+`transport == "PLAYING"`, and the snap is fresh — then it's a no-op: return
+without touching the speaker (the UI just opens now-playing).
+
+State to read: `self.sonos_snap` (`{"ours","transport","stale_s",...}`, set
+in `_sonos_play_entry` ~1208 and refreshed by the poller). Freshness: the
+poller already treats `transport == "PLAYING"` with `age < 60` as live
+(`daemon.py:1039`); reuse that notion, don't invent a new one.
+
+## The trap — why this needs a clear head, not now
+
+- **Map drift / heal.** When `sonos_map_trusted` is False, a press is meant
+  to RE-SYNC (re-transfer). A naive "already playing → no-op" must NOT
+  swallow that heal. Only skip when the session is genuinely ours-and-live
+  AND the map is trusted (spotify) / the url session is intact.
+- **Paused vs playing.** If the same tile is PAUSED on the speaker, A should
+  resume it (like the local unpause), not restart and not no-op. Decide both
+  branches explicitly.
+- **Optimistic holds.** `sonos_pending` / `sonos_opt_tr` mean a jump was JUST
+  issued; a guard reading a stale snap mid-jump could wrongly skip a real
+  press. Check these too, or scope the guard to "no press in flight".
+
+## Tests
+
+- Add: play on Sonos, then A on the SAME target while it's playing → no
+  second `_renderer.post("/queue_play"...)` / no `_sonos_body` re-mint, and
+  no DIDL re-push. Assert the speaker is not re-commanded.
+- Add: same tile PAUSED on the speaker → A resumes (one command), does not
+  restart from the bookmark.
+- Add: `sonos_map_trusted=False` → A still re-transfers (the heal path is
+  not swallowed).
+- Check `tests/sonos_renderer.py` / `sonos_contract.py` for existing
+  press-idempotence pins before writing new ones.
+
+## Verify in field
+Play a Storytel book on Sonos, browse to carousel, press play on the same
+tile → no hiccup, lands on now-playing. Then pause on the speaker, press play
+on the tile → resumes cleanly. Then a real target-switch still starts the new
+book (guard didn't over-match).
