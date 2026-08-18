@@ -67,7 +67,6 @@ def _uptime():
     except (OSError, ValueError):
         return 0.0
 
-import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -1710,6 +1709,10 @@ class App:
                     # a third of the bytes over the shared radio and half
                     # the decode at 600MHz; the screen renders <=176px.
                     import io
+                    import urllib.request      # lazy: 0.32s warm / ~0.8s
+                    #   cold off the SD, and this box streams to Sonos or
+                    #   a BT speaker for whole sessions without ever
+                    #   fetching a cover. -X importtime, 2026-08-18.
                     small = ref.replace("ab67616d0000b273",
                                         "ab67616d00001e02")
                     try:

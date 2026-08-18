@@ -104,12 +104,16 @@ class NoNet:
 
 
 app.artwork_cache.clear()
-real_req = ui.urllib.request
-ui.urllib.request = NoNet()
+# ui imports urllib.request lazily (inside the fetch, off the boot path),
+# so patch urlopen on the module itself — the same singleton the lazy
+# import resolves to — not via a ui.urllib attribute that no longer exists.
+import urllib.request  # noqa: E402
+_real_urlopen = urllib.request.urlopen
+urllib.request.urlopen = NoNet().urlopen
 try:
     img = app.artwork_async(REF, 128, square=True)
 finally:
-    ui.urllib.request = real_req
+    urllib.request.urlopen = _real_urlopen
 assert img is not None and img.size == (128, 128)
 assert img.getpixel((64, 64))[0] > 150
 print("5. disk-warm remote cover decodes inline, zero network OK")

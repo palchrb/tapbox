@@ -21,6 +21,7 @@ os.environ["VIBB_RUN"] = tempfile.mkdtemp()
 os.environ.setdefault("VIBB_UI_PNG", "/dev/null")
 os.environ["VIBB_CACHE"] = tempfile.mkdtemp()
 
+import urllib.request
 import ui  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
@@ -142,7 +143,7 @@ def _no_net(*a, **k):  # hermetic: the fetch always fails, instantly
     raise OSError("no route")
 
 
-ui.urllib.request.urlopen = _no_net
+urllib.request.urlopen = _no_net
 
 expected = [5, 10, 20, 40, 60, 60]
 for i, want in enumerate(expected, 1):
@@ -196,13 +197,13 @@ def fresh_app():
 
 
 URL2 = "http://i.scdn.co/exists.jpg"
-ui.urllib.request.urlopen = lambda ref, timeout=10: _FakeResp()
+urllib.request.urlopen = lambda ref, timeout=10: _FakeResp()
 app = fresh_app()
 r = app.artwork(URL2)
 assert r is not None, "fetch should succeed"
 assert os.path.exists(ui._art_disk(URL2, 110)), "thumbnail not persisted"
 # a NEW app (UI restart: empty memory cache) + network DOWN -> disk serves
-ui.urllib.request.urlopen = _no_net
+urllib.request.urlopen = _no_net
 app = fresh_app()
 r = app.artwork(URL2)
 assert r is not None, "disk cache must serve the cover with no network"
