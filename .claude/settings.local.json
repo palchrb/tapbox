@@ -231,7 +231,11 @@
       "Bash(grep -o 'imports took [0-9.]*s[^\"]\\\\{0,60\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
       "Bash(grep -o 'Aug 1[3-9][^\"]\\\\{0,40\\\\}vibb-ui: \\\\\\(imports took\\\\|panel\\\\|display up\\\\|splash lit\\\\|inputs ready\\\\|READY\\\\\\)[^\"]\\\\{0,70\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
       "Bash(grep -o 'Startup finished in[^\\\\\\\\\"]\\\\{0,160\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
-      "Bash(grep -o '[0-9.]*s \\(kernel\\) [^\\\\\\\\\"]\\\\{0,90\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)"
+      "Bash(grep -o '[0-9.]*s \\(kernel\\) [^\\\\\\\\\"]\\\\{0,90\\\\}' /home/claude/.claude/projects/-workspace-tapbox/8bd5f06d-9728-4a0c-9083-50915c2f988a.jsonl)",
+      "Bash(grep -n \"^  save\\)\\\\|^  status\\)\\\\|^  *[a-z-]*\\)$\" pi/power.sh)",
+      "Bash(grep -n \"^case\\\\|^  esac\\\\|esac$\" pi/power.sh)",
+      "Bash(grep -n 'ExecStart=$SELF save' pi/install.sh)",
+      "Bash(sed -n '/Vibb power save mode at boot/,/WantedBy/p' pi/install.sh)"
     ]
   }
 }

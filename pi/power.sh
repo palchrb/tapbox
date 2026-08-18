@@ -107,6 +107,29 @@ status_report() {
 }
 
 case "${1:-}" in
+  wait-ui)
+    # Hold the CPU at boot clock until the screen is up. Measured
+    # 2026-08-18: the UI's startup is CPU-bound, not only I/O-bound —
+    # warm, same page cache, only the clock differing, imports run 0.4s
+    # at 900MHz against 0.6s at the 600MHz powersave park, and panel
+    # init 0.8s against 1.1s. Parking the CPU at ~6.5s into a boot (when
+    # basic.target lands) therefore slowed everything the child waits
+    # for, and the first menu presses after boot too.
+    #
+    # Bounded three ways, because this must never keep a box awake:
+    # only waits when the screen service is ENABLED (a headless box
+    # returns at once), gives up after WAIT_S regardless, and the
+    # marker lives on tmpfs so a crashed UI cannot leave a stale one
+    # behind across a reboot.
+    WAIT_S="${VIBB_UI_WAIT:-30}"
+    if systemctl is-enabled vibb-ui.service >/dev/null 2>&1; then
+      for _ in $(seq "$WAIT_S"); do
+        [[ -e /run/vibb-ui-ready ]] && break
+        sleep 1
+      done
+    fi
+    exit 0
+    ;;
   save)
     # Core parking is NOT possible at runtime here: the Pi kernel has no CPU
     # hotplug, so writing cpuN/online is a no-op (this used to call a dead
@@ -115,7 +138,22 @@ case "${1:-}" in
       echo "note: 4 cores stay online (no runtime hotplug); for 2-core"
       echo "      operation add maxcpus=2 to cmdline.txt and reboot"
     fi
-    set_governor powersave
+    # The 600MHz park exists FOR the battery. On wall power it is pure
+    # sluggishness, so `save` follows the plug exactly like charger-follow
+    # does at runtime — otherwise a mains box booted parked and stayed
+    # slow for up to a minute until the follower's next tick corrected it
+    # (owner 2026-08-18: "på strøm og ved boot skal vi uansett være på
+    # ondemand"). Unknown reads as ondemand: no pisugar means no battery,
+    # which means wall power.
+    plugged="$(pisugar_get battery_power_plugged || true)"
+    if [[ "$plugged" == false ]]; then
+      set_governor powersave
+    else
+      set_governor ondemand
+      [[ "$plugged" == true ]] \
+        && echo "on charger — governor stays ondemand" \
+        || echo "no battery reading — assuming wall power, governor ondemand"
+    fi
     set_leds none 0
     # NO HDMI blanking. 'vcgencmd display_power 0' is a ONE-WAY door on
     # this box (field 2026-08-04): it blanks, but display_power 1 only
@@ -169,6 +207,10 @@ After=basic.target
 
 [Service]
 Type=oneshot
+# Hold the boot clock until the screen is up — see the wait-ui action.
+# '-' prefixed and bounded inside it, so a headless box or a UI that
+# never comes up costs at most VIBB_UI_WAIT seconds, never a hung boot.
+ExecStartPre=-$SELF wait-ui
 ExecStart=$SELF save
 
 [Install]

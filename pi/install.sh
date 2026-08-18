@@ -841,6 +841,24 @@ for f in "$SCRIPT_DIR"/web/*; do
   install_if_changed 644 "$f" "/usr/share/vibb/web/$(basename "$f")" || true
 done
 
+# Boot-time services this box has no use for. Measured on a cold Zero 2 W
+# (2026-08-18), not guessed: systemd-binfmt sat ON the critical chain to
+# sysinit.target, and sshswitch's peek at /boot/firmware is what dragged
+# the boot partition's fsck into the busiest phase of startup (it read
+# 1.3s serialised, 3.0s once it ran concurrently). Together with the
+# fstab automount for /boot/firmware, sysinit went 7.8s -> 6.2s across
+# three boots, with a spread of 0.1s.
+#   binfmt_misc  runs foreign-architecture binaries (qemu). Not here.
+#   e2scrub      reaps interrupted LVM ext4 scrubs. No LVM on an SD card.
+#   keyboard-setup  console keymap on a box with no keyboard.
+#   sshswitch    enables ssh if /boot/firmware/ssh exists; ssh.service is
+#                already enabled, so it only costs the mount.
+# All reversible: systemctl unmask <name>.
+for _u in systemd-binfmt.service e2scrub_reap.service e2scrub_all.timer \
+          keyboard-setup.service sshswitch.service; do
+  systemctl mask "$_u" >/dev/null 2>&1 || true
+done
+
 mkdir -p /var/cache/vibb-restic   # restic's index cache (see RESTIC_CACHE_DIR)
 # The memory ceiling below is only real if the kernel's memory cgroup
 # controller is on, and Raspberry Pi OS ships it OFF unless cmdline.txt says
