@@ -27,7 +27,8 @@ Eierens prioriteringer, i rekkefølge, styrer alt:
    finnes (§1c), ellers merket **må måles**.
 3. **Betydelig raskere boot** — delt i to tall som ikke må blandes:
    - **boot-to-UI**: skjerm levende, kortleser klar (det barnet ser).
-     Mål: **~8–10 s** (fra ~30 s i dag).
+     Mål: **~8–10 s** (målt baseline i dag: **20,3 s** til READY,
+     felt 2026-08-14 — se §8.1).
    - **boot-to-audio**: avhenger av sti — lokal cachet lyd ~+1–3 s
      etter UI; BT-høyttaler og Spotify domineres av radio/nett og lar
      seg ikke "buildroote bort" (§8).
@@ -445,17 +446,81 @@ setup-hotspoten selv.
 
 ## 8. Boot-tid-budsjett
 
-Estimater — merket M der de MÅ måles på rigg før de loves videre.
+### 8.1 Målt baseline — Pi OS, kaldstart (felt 2026-08-14)
 
-**Boot-to-UI (kald boot, det barnet ser):**
+Dette er **ekte tall**, ikke estimater: fra vibb-ui sin egen
+instrumentering (`pi/ui.py:4177–4184` og `3837`), forankret i
+`/proc/uptime` — den ene klokka på boksen som ikke hopper når
+PiSugar-RTC-en lander midt i booten (`ui.py:57–68`).
 
-| Fase | Pi OS i dag | Buildroot-mål | Kommentar |
+| Fase | Tid | Kumulativt |
+|---|---|---|
+| Firmware + kjerne + local-fs + sysinit — **før UI-prosessen kjører** | ~14,1 s | boot+14,1 s |
+| `imports took` (PIL m.m., kald SD) | 2,7 s | boot+16,8 s |
+| `panel 1,8 s + backlight 0,5 s` | 2,3 s | — |
+| Splash tent | — | boot+19,3 s |
+| **READY (karusellen oppe)** | — | **boot+20,3 s** (6,2 s inne i UI-en) |
+
+Andre kaldstart samme dag gir samme bilde: imports 2,5 s, splash
+boot+18,0, READY boot+19,1 (6,0 s i UI-en).
+
+**Varm restart** (2026-08-15) til sammenligning: imports **0,6 s**,
+READY 3,4 s i UI-en. Importene faller 2,6 → 0,6 s med varm sidecache —
+altså er *kalde SD-lesninger* hoveddelen av UI-prosessens tid, ikke CPU.
+
+**Backlight varierer 0,2 / 0,4 / 0,5 / 1,1 s** mellom boots. Det er
+signaturen til gpiozero som prober GPIO-backends i tur — nøyaktig det
+`ui.py:712–716` beskriver. `GPIOZERO_PIN_FACTORY=lgpio` fjerner
+variansen, og i verste fall er det et helt sekund.
+
+Til historikk: `~35 s frossen skjerm` (install.sh:939–941) var
+utgangspunktet *før* `DefaultDependencies=no`-fiksen. De 20 sekundene
+over er altså etter at den boot-runden allerede er høstet.
+
+### 8.2 Hva baselinjen betyr
+
+1. **~14 av 20 sekunder er før UI-prosessen i det hele tatt starter.**
+   To tredjedeler av ventetiden. Ingen av app-tiltakene (§8.3) rører
+   dem.
+2. **Hele UI-prosessen er ~6 s.** Taket for app-siden er derfor ~5 s,
+   realistisk 2–3 s. 20 s → ~17 s er hele den historien.
+3. **Den 14,1 s-blokka er ikke oppsplittet ennå — og det er den ene
+   gjenstående målingen som flytter beslutningen.** `vibb-ui` er
+   `DefaultDependencies=no` + `After=local-fs.target sysinit.target`
+   (install.sh:936–954), så blokka er firmware + kjerne + local-fs +
+   **hele sysinit.target** — inkludert udev coldplug, modullasting og
+   eventuell fsck. En del av det er angripelig på Pi OS; resten er ekte
+   kjernetid og dermed Buildroot-eksklusivt. Splitt den før valget tas:
+
+   ```
+   systemd-analyze time                          # kernel / initrd / userspace
+   systemd-analyze critical-chain sysinit.target # hva inne i sysinit brenner
+   ```
+
+   `systemd-analyze time` svarer samtidig på om `auto_initramfs` faktisk
+   er av på boksen (et `(initrd)`-ledd betyr at den kjørte).
+
+### 8.3 Tiltak, sortert etter hvor de treffer
+
+| Tiltak | Treffer | Anslag | Krever Buildroot? |
 |---|---|---|---|
-| Firmware (ROM→bootcode→start_cd.elf) | ~2–3 s | ~1,5–2,5 s | boot_delay=0 alt satt; cutdown-elf, få overlays |
-| Kernel | ~8–12 s | ~2–3 s (M) | monolittisk der trygt, ingen initramfs, quiet, console=null |
-| Init → basic.target | ~10–20 s | ~2–4 s (M) | trimmet systemd, få units; entropi-driver mot crng-stall |
-| vibb-ui første frame | ~2,2 s panel + tunge importer (PIL/numpy/st7789) av kald SD | ~1,5–3 s (M) | GPIOZERO_PIN_FACTORY=lgpio, .pyc-precompile, squashfs-zstd |
-| **Sum** | **~25–35 s** | **~7–12 s** | 35 s frossen skjerm var utgangspunktet (install.sh:936–945) |
+| `auto_initramfs=0` i config.txt | 14,1 s-blokka | 1,5–3 s (M) | nei |
+| `quiet loglevel=3`, drop `console=serial0,115200` | 14,1 s-blokka | 1–3 s (M) | nei |
+| udev/sysinit-trimming | 14,1 s-blokka | ukjent til §8.2 pkt. 3 er målt | delvis |
+| Kjernetrimming (monolittisk, få moduler) | 14,1 s-blokka | den store posten | **ja** (eller egen kjerne på Pi OS) |
+| `GPIOZERO_PIN_FACTORY=lgpio` | backlight 0,5–1,1 s | 0,3–1 s | nei |
+| `.pyc`-prekompilering + ett python-tre | imports 2,7 s | 0,5–1 s (M) | nei |
+| Splash via `spidev` før PIL importeres | flytter splash tidligere | opplevd, ~2 s | nei |
+| Raskere A2-SD-kort | imports **og** trolig sysinit | (M) — varm/kald-gapet sier den finnes | nei |
+
+### 8.4 Buildroot-mål
+
+| Fase | Pi OS (målt) | Buildroot-mål | Kommentar |
+|---|---|---|---|
+| Firmware | ~2–3 s (anslag, inni 14,1) | ~1,5–2,5 s | cutdown-elf, få overlays |
+| Kjerne + sysinit | resten av 14,1 s | ~4–7 s (M) | monolittisk der trygt, trimmet systemd |
+| vibb-ui til READY | 6,2 s (målt) | ~3–4 s (M) | pin factory, .pyc, squashfs-zstd |
+| **Sum boot-to-UI** | **~20 s (målt)** | **~7–12 s** | ~2–3× — ikke 3–4× som tidligere anslått |
 
 **Boot-to-audio (tillegg etter UI — radio/nett dominerer, uansett OS):**
 
@@ -465,15 +530,12 @@ Estimater — merket M der de MÅ måles på rigg før de loves videre.
 | BT-høyttaler + cachet | +4–15 s (M) | bluetoothd+bluealsa ~3–5 s; page/reconnect er enhetsavhengig |
 | Spotify | +6–15 s (M) | fw-last, assoc+DHCP, DNS-gate, sesjon — uendret av Buildroot |
 
-Ærlig konklusjon: boot-til-UI kan realistisk **3–4-dobles i fart**;
-boot-til-Spotify går fra ~35–50 s til ~15–25 s. Størst opplevd gevinst:
-skjerm + kort + cachet innhold nesten umiddelbart.
-
-Bevisst IKKE brukt: U-Boot (ekstra trinn uten gevinst), initramfs,
-`loglevel=0`-total-stumhet (journald-evidens er prioritet-1-verktøy —
-kun konsollutskrift kuttes), aggressive first-frame-triks som svekker
-recovery.
-
+Ærlig konklusjon, revidert mot målingene: boksen er allerede raskere enn
+spec-ens første anslag (20 s, ikke 25–35 s), og app-tiltakene alene tar
+den til ~17 s. Den store posten ligger i 14,1 s-blokka før UI-en — og
+**hvor mye av den som er Buildroot-eksklusiv er ennå ikke målt** (§8.2
+pkt. 3). Det er det ene tallet som avgjør om dette er et
+app-optimaliseringsprosjekt eller et OS-prosjekt.
 ## 9. Migrering og risiko
 
 **Fase 0 — på Pi OS, før Buildroot bygges (kan starte nå, lav risiko):**
