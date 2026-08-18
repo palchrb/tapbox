@@ -892,17 +892,23 @@ Nice=19
 CPUWeight=20
 CPUAffinity=1
 IOSchedulingClass=idle
-# THE IMPORTANT ONES. ~430MB usable after the GPU split, no swap and no
-# zram anywhere, and restic+rclone are two Go binaries that together want
-# 100-170MB. Without a ceiling the kernel OOM killer picks by score — and
-# that can just as easily be mpv or go-librespot as restic, i.e. the music
-# dies to save the backup. MemoryMax makes the cgroup OOM local: the backup
-# is what dies, and it simply retries at the next wake (QA 2026-08-17).
-# 160M, not 100M: with MemorySwapMax=0 there is no swap, so crossing
-# MemoryHigh can only reclaim file-backed pages — i.e. the mapped text of
-# two large Go binaries — and then throttles. Set inside the real working
-# set it strangles the run off the SD card instead of protecting anything.
-# MemoryMax is the ceiling that matters.
+# THE IMPORTANT ONES. ~430MB usable after the GPU split, and restic+rclone
+# are two Go binaries that together want 100-170MB. Without a ceiling the
+# kernel OOM killer picks by score — and that can just as easily be mpv or
+# go-librespot as restic, i.e. the music dies to save the backup. MemoryMax
+# makes the cgroup OOM local: the backup is what dies, and it simply retries
+# at the next wake (QA 2026-08-17).
+# MemorySwapMax=0 keeps the backup's OWN pages off swap regardless of what
+# the OS provides. NOTE: Trixie DOES ship zram swap now (dev-zram0.swap is
+# active; vibb-ui was seen with a 31M swap peak) — the earlier "no swap
+# anywhere" note was already stale. That does not change these caps: the
+# cgroup limit is enforced whether or not the system has swap, and pinning
+# the backup to zero swap is still correct.
+# 160M, not 100M: with the backup barred from swap, crossing MemoryHigh can
+# only reclaim file-backed pages — the mapped text of two large Go binaries
+# — and then throttles. Set inside the real working set it strangles the
+# run off the SD card instead of protecting anything. MemoryMax is the
+# ceiling that matters.
 MemoryHigh=160M
 MemoryMax=200M
 MemorySwapMax=0
