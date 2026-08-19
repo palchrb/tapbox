@@ -661,7 +661,20 @@ def backup_now(keep=("--keep-daily", "7", "--keep-weekly", "4",
 # One real backup a day. The TIMER only wakes us — this wall-clock gate is
 # what sets the cadence, and unlike a monotonic timer it survives the reboots
 # a toddler causes (see main()).
-MIN_INTERVAL_S = int(os.environ.get("VIBB_BACKUP_MIN_INTERVAL", 24 * 3600))
+# One backup per CALENDAR DAY (local time), not "24h since the last one".
+# Elapsed-time gating drifted the backup later each day and skipped any day
+# whose listening session ended earlier than the day before — every-other-
+# day in practice for a child who listens each afternoon (owner 2026-08-19).
+# Calendar day also matches restic's own retention bucketing. clock_trusted()
+# is checked before this gate, so the local date is real. Set VIBB_BACKUP_DAILY=0
+# to disable the gate for a forced run (the tests use it).
+DAILY_GATE = os.environ.get("VIBB_BACKUP_DAILY", "1") != "0"
+
+
+def _backed_up_today(last_ok):
+    """True if the last successful backup falls on today's local date."""
+    a, b = time.localtime(last_ok), time.localtime()
+    return (a.tm_year, a.tm_yday) == (b.tm_year, b.tm_yday)
 # How long to keep waiting for the music to stop before giving up until the
 # next wake. Deferring is nearly free for a backup; stopping the music is not.
 BUSY_WAIT_S = int(os.environ.get("VIBB_BACKUP_BUSY_WAIT", 600))
@@ -752,17 +765,15 @@ def main(argv=None):
     if not clock_trusted():
         print("backup: clock not trusted yet (no RTC) — skipping this run")
         return 0
-    # The cadence gate, and the reason the timer fires more often than we
-    # back up. A MONOTONIC timer restarts from zero at every boot, and
-    # systemd does not carry OnUnitActiveSec across reboots — so on a box
-    # power-cycled by toddlers, OnUnitActiveSec=6h essentially never fired
-    # and OnBootSec did: one backup per boot, 15 minutes into a listening
-    # session, which is the worst possible window. (Persistent= would not
-    # have helped either — it only applies to OnCalendar= timers.) The fix
-    # is to make the timer a cheap WAKE and put the cadence here, in wall
-    # clock, where a reboot cannot reset it (QA 2026-08-17).
+    # The cadence gate. The timer only WAKES us; the cadence is here, in
+    # wall clock, so a reboot cannot reset it (a monotonic timer restarts
+    # at every boot and systemd does not carry OnUnitActiveSec across one,
+    # so putting the cadence in the timer meant one backup per boot, mid-
+    # session — QA 2026-08-17). One backup per calendar day: the first
+    # idle-shutdown of each new day backs up, whatever the hour, so an
+    # afternoon listener is covered every day and the time never drifts.
     last_ok = (status() or {}).get("last_ok")
-    if last_ok and 0 <= time.time() - last_ok < MIN_INTERVAL_S:
+    if DAILY_GATE and last_ok and _backed_up_today(last_ok):
         return 0
     if not _link_up():
         print("backup: no network (wifi is off to save battery) — skipping")

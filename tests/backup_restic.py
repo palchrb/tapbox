@@ -220,7 +220,7 @@ print("6. status() carries the last successful backup time OK")
 #     The rest of the codebase waits for clock_trusted(); so does this.
 open(RESTIC_LOG, "w").close()
 # set the other gates aside so this pins the CLOCK one alone
-backup.MIN_INTERVAL_S = 0
+backup.DAILY_GATE = False
 backup._box_busy = lambda: False
 backup.clock_trusted = lambda: False
 assert backup.main() == 0, "an untrusted clock is a clean no-op, not a failure"
@@ -238,7 +238,7 @@ print("7. the timer skips cleanly until the clock is trusted OK")
 #     firmware-crash trigger on this hardware. A backup is always the side
 #     that can wait. Crucially it must DEFER, never quiesce: stopping a
 #     child's audiobook to upload 1MB of JSON is the worst available trade.
-backup.MIN_INTERVAL_S = 0        # don't let the daily gate mask this
+backup.DAILY_GATE = False        # don't let the daily gate mask this
 backup.BUSY_WAIT_S = 0           # give up immediately rather than sleep
 open(RESTIC_LOG, "w").close()
 backup._box_busy = lambda: True
@@ -270,7 +270,7 @@ print("9. an unreachable daemon fails open OK")
 #     A monotonic systemd timer restarts at every boot; on a toddler-power-
 #     cycled box that meant one backup per boot, 15 min into a listening
 #     session. The cadence lives here instead.
-backup.MIN_INTERVAL_S = 24 * 3600
+backup.DAILY_GATE = True
 open(RESTIC_LOG, "w").close()
 assert backup.main() == 0
 assert "backup --json" not in open(RESTIC_LOG).read(), \
@@ -281,7 +281,7 @@ print("10. the daily cadence is wall-clock and survives reboots OK")
 #     TimeoutExpired is not a RuntimeError; catching only RuntimeError meant
 #     a hung run left last_error stale, so a box failing every run looked
 #     healthy — defeating the field the check exists for.
-backup.MIN_INTERVAL_S = 0
+backup.DAILY_GATE = False
 _real_backup_now = backup.backup_now
 backup.backup_now = lambda **kw: (_ for _ in ()).throw(
     __import__("subprocess").TimeoutExpired("restic", 300))
@@ -302,7 +302,7 @@ SLOW_RESTIC = FAKE_RESTIC.replace(
     'if cmd == "backup":\n    import time as _t; _t.sleep(3)')
 _install(os.environ["VIBB_RESTIC_BIN"], SLOW_RESTIC)
 backup.WATCH_POLL_S = 0.1
-backup.MIN_INTERVAL_S = 0
+backup.DAILY_GATE = False
 started = [0]
 
 
@@ -347,3 +347,25 @@ os.environ["GOMEMLIMIT"] = "40MiB"     # a unit file may still tighten them
 assert backup._restic_env()["GOMEMLIMIT"] == "40MiB"
 del os.environ["GOMEMLIMIT"]
 print("14. memory/CPU restraints travel with the call, not the unit OK")
+
+# --- 15. THE CADENCE IS A CALENDAR DAY, NOT 24 ELAPSED HOURS ---------------
+#     Elapsed-time gating drifted: back up at 16:40 Monday, and Tuesday's
+#     16:10 shutdown is only 23.5h later -> skipped, and the bookmarks wait
+#     for Wednesday. Every day that ends earlier than the day before is lost,
+#     which for a child who listens each afternoon is every-other-day in
+#     practice (owner 2026-08-19). Calendar day also matches restic's own
+#     retention bucketing.
+import time as _time  # noqa: E402
+
+_now = _time.time()
+assert backup._backed_up_today(_now), "a backup just taken IS today's"
+assert backup._backed_up_today(_now - 8 * 3600) or \
+    _time.localtime(_now).tm_hour < 8, \
+    "earlier the same day still counts as done today"
+# 23.5h ago is YESTERDAY on any wall clock — the old gate would have
+# suppressed today's backup; the calendar gate must not.
+assert not backup._backed_up_today(_now - int(23.5 * 3600)), \
+    ("23.5h ago is a different calendar day — this is the drift bug: an "
+     "elapsed-hours gate skips today's backup entirely")
+assert not backup._backed_up_today(_now - 24 * 3600), "yesterday is not today"
+print("15. the daily gate is a calendar day, so it cannot drift OK")

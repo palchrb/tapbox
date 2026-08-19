@@ -931,17 +931,20 @@ Description=Vibb: periodic backup of the box's irreplaceable state
 # playing, the radio is free, and the session's bookmarks are fresh. That is
 # the moment worth backing up at, and no timer can guess it.
 #
-# This exists only for a box that never reaches an idle shutdown — left
-# playing for days, or auto-off disabled. It cannot wake a powered-off box
-# (that would need an RTC alarm; we set none), so it costs nothing while the
-# box is off. When it does fire it is a few milliseconds: vibb.backup's 24h
-# wall-clock gate says "already done today" and exits.
+# This matters for a box that never reaches an idle shutdown (left playing
+# for days, or auto-off disabled) AND for one turned off with the button
+# before the idle timeout — neither hits the vibb-idle backup, so the timer
+# is their only chance. It cannot wake a powered-off box (that would need an
+# RTC alarm; we set none), so it costs nothing while off. When it fires it is
+# a few milliseconds: vibb.backup's calendar-day gate says "already done
+# today" and exits.
 #
-# 6h rather than something tighter because it is a backstop, and because a
-# monotonic timer restarts at every boot — a tight interval on a
-# toddler-power-cycled box just means firing on every boot, mid-session,
-# which is exactly the bug this replaced.
-OnBootSec=30min
+# OnBootSec=15min, not 30: a short button-ended session should still be
+# caught. 6h thereafter because it is only a backstop, and a monotonic timer
+# restarts at every boot — a tight interval on a toddler-power-cycled box
+# just means firing on every boot, mid-session, which is the bug this
+# replaced. The calendar-day gate keeps it to one backup a day regardless.
+OnBootSec=15min
 OnUnitActiveSec=6h
 AccuracySec=15min
 RandomizedDelaySec=15min
