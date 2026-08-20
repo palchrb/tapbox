@@ -717,6 +717,22 @@ def _hands_on_box():
         return False
 
 
+def _poweroff_imminent():
+    """True when vibb-idle stamped its marker moments ago: this run is
+    the on-the-way-down backup, and the box has ALREADY been idle for
+    its whole timeout. The marker lives in RUN_DIR (tmpfs), so it cannot
+    survive a boot and leak into the next day's timer runs; the
+    freshness window only has to cover the hook's own lifetime
+    (vibb-idle's BACKUP_MAX_S, plus slack)."""
+    from vibb.paths import RUN_DIR
+    try:
+        age = time.time() - os.path.getmtime(
+            os.path.join(RUN_DIR, "poweroff-imminent"))
+    except OSError:
+        return False
+    return 0 <= age < 600
+
+
 def _box_busy():
     """True while the box is playing OR a Bluetooth speaker is live.
 
@@ -732,6 +748,20 @@ def _box_busy():
     so its presence means a live A2DP PCM right now. Counting a PAUSED
     session as busy is deliberate — a kid mid-listen resumes any second.
 
+    EXCEPT on the way down: with poweroff imminent (vibb-idle's marker),
+    a connected-but-silent link no longer counts. The box has been idle
+    for its whole timeout — the "resumes any second" bet has already
+    lost — but a speaker someone left switched on kept this predicate
+    true, so every shutdown backup sat out its wait and was killed by
+    vibb-idle's own timeout (field journal 2026-08-20: 190s then TERM,
+    every time; the repo showed no new snapshots). The exception must
+    live HERE, not in the wait loop: backup_now(watch=True) polls this
+    same predicate mid-run, and a loop-only bypass just moved the stall
+    three seconds later. The owner's invariant survives untouched —
+    `playing` and fresh button presses still abort a running upload,
+    so nothing wifi-heavy ever overlaps ACTIVE A2DP playback; only the
+    silent link stops counting, and only while the marker is fresh.
+
     Fails OPEN: a broken check must never stall backups forever, the same
     rule library.py's own busy check follows.
     """
@@ -740,8 +770,8 @@ def _box_busy():
             st = json.loads(r.read() or b"{}")
     except Exception:
         return False
-    return bool(st.get("playing") or st.get("bt_connected")
-                or _hands_on_box())
+    return bool(st.get("playing") or _hands_on_box()
+                or (st.get("bt_connected") and not _poweroff_imminent()))
 
 
 def main(argv=None):

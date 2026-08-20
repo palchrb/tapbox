@@ -221,6 +221,7 @@ print("6. status() carries the last successful backup time OK")
 open(RESTIC_LOG, "w").close()
 # set the other gates aside so this pins the CLOCK one alone
 backup.DAILY_GATE = False
+_real_box_busy = backup._box_busy   # tests below stub it; 17 restores
 backup._box_busy = lambda: False
 backup.clock_trusted = lambda: False
 assert backup.main() == 0, "an untrusted clock is a clean no-op, not a failure"
@@ -402,3 +403,68 @@ _src = open(backup.__file__, encoding="utf-8").read()
 assert _src.rstrip().endswith("sys.exit(main())"), \
     "the __main__ guard must be the last statement in vibb/backup.py"
 print("16. python3 -m vibb.backup runs whole (the systemd path) OK")
+
+# ---- 17. on the way down, a silent BT link no longer counts as busy --------
+# At idle shutdown a connected-but-silent speaker kept _box_busy() true
+# (bt_connected = live A2DP LINK, not live audio), so the shutdown backup
+# died waiting, killed by vibb-idle's own timeout (field journal
+# 2026-08-20: 190s then TERM, every time). vibb-idle now stamps
+# RUN_DIR/poweroff-imminent first; while the marker is fresh, bt_connected
+# alone stops counting. The exception lives in _box_busy itself — NOT the
+# wait loop — because backup_now(watch=True) polls the same predicate
+# mid-run; a loop-only bypass just moved the stall three seconds later.
+# The owner's invariant holds: `playing` still aborts (test 12 pins it),
+# so nothing wifi-heavy ever overlaps ACTIVE A2DP playback.
+backup.DAILY_GATE = False
+backup.BUSY_WAIT_S = 0
+backup._box_busy = _real_box_busy      # undo test 12/13's stub
+_real_urlopen = backup.urllib.request.urlopen
+
+
+class _FakeStatus:                       # speaker on, nothing playing
+    def read(self):
+        return json.dumps({"playing": False, "bt_connected": True}).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+backup.urllib.request.urlopen = lambda url, timeout=5: _FakeStatus()
+_marker = os.path.join(RUN, "poweroff-imminent")
+
+# no marker (the TIMER path): the silent link still defers, as always
+open(RESTIC_LOG, "w").close()
+assert backup.main() == 0
+assert "backup" not in open(RESTIC_LOG).read(), \
+    "the timer path must keep deferring to a connected speaker"
+
+# fresh marker (the idle-shutdown path): the run completes
+with open(_marker, "w") as f:
+    f.write("now")
+open(RESTIC_LOG, "w").close()
+assert backup.main() == 0
+assert "backup --json" in open(RESTIC_LOG).read(), \
+    "the shutdown backup must run despite a silent connected speaker"
+
+# a STALE marker (leftover, clock weirdness) keeps the old behaviour
+_old = os.path.getmtime(_marker)
+os.utime(_marker, (_old - 3600, _old - 3600))
+open(RESTIC_LOG, "w").close()
+assert backup.main() == 0
+assert "backup" not in open(RESTIC_LOG).read(), \
+    "an old marker must not bypass the busy check"
+
+os.remove(_marker)
+backup.urllib.request.urlopen = _real_urlopen
+print("17. poweroff-imminent discounts the silent link; stale does not OK")
+
+# ...and vibb-idle actually stamps it before starting the unit
+_idle_src = open(os.path.join(REPO, "pi", "idle.py"), encoding="utf-8").read()
+_i_mark = _idle_src.index('"poweroff-imminent"')
+_i_start = _idle_src.index('"systemctl", "start"')
+assert _i_mark < _i_start, \
+    "idle.py must stamp poweroff-imminent BEFORE starting vibb-backup"
+print("17b. idle.py stamps the marker before the unit starts OK")

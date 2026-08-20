@@ -35,7 +35,7 @@ for _p in (_HERE, "/usr/local/lib/vibb-py"):
             sys.path.insert(0, _p)
         break
 from vibb import boxapi, mpv, renderer, spotify  # noqa: E402
-from vibb.paths import last_activity, read_settings  # noqa: E402
+from vibb.paths import RUN_DIR, last_activity, read_settings  # noqa: E402
 
 IDLE_MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 CHECK_S = 60
@@ -193,6 +193,14 @@ def _backup_before_off():
     powers off regardless, and the next shutdown tries again.
     """
     try:
+        # Tell the backup this is the on-the-way-down run: the box has
+        # been idle for its whole timeout, so its busy-wait must stand
+        # down — a silent-but-connected BT speaker otherwise reads as
+        # busy and the run dies waiting, killed by our own timeout below
+        # (field journal 2026-08-20: 190s then TERM, every shutdown).
+        # tmpfs: gone at boot, so the timer path never sees it.
+        with open(os.path.join(RUN_DIR, "poweroff-imminent"), "w") as f:
+            f.write(str(time.time()))
         # Start the UNIT, don't spawn the module. A child of vibb-idle
         # inherits vibb-idle's cgroup, which has no limits — so the memory
         # ceiling, CPU pinning and cache dir that vibb-backup.service
