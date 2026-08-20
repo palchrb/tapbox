@@ -834,11 +834,6 @@ def _release_lock(fd):
         pass
 
 
-if __name__ == "__main__":
-    import sys
-    sys.exit(main())
-
-
 def snapshots():
     """List repo snapshots (newest first): [{id, time, hostname}]. Raises
     RuntimeError if the repo cannot be read."""
@@ -901,3 +896,16 @@ def _parse_backup_snapshot(stdout):
         if msg.get("message_type") == "summary" and msg.get("snapshot_id"):
             snap = msg["snapshot_id"]
     return snap
+
+
+if __name__ == "__main__":
+    # LAST statement on purpose. `python3 -m vibb.backup` (the systemd
+    # unit — i.e. the timer AND the idle-shutdown hook, the only paths
+    # that run in the field) executes this file top to bottom; a guard
+    # sitting mid-file calls main() before the defs below it exist.
+    # That was live from 17ae067 to 2026-08-20: every unit run that got
+    # past the gates died with "name '_mkstaging' is not defined", while
+    # the PWA's Back-up-now (daemon import, whole file loaded) worked —
+    # which is why the field test passed and the nightly runs did not.
+    import sys
+    sys.exit(main())

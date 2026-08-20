@@ -375,3 +375,30 @@ assert not backup._backed_up_today(_now - int(23.5 * 3600)) \
      "elapsed-hours gate skips today's backup entirely")
 assert not backup._backed_up_today(_now - 24 * 3600), "yesterday is not today"
 print("15. the daily gate is a calendar day, so it cannot drift OK")
+
+# ---- 16. `python3 -m vibb.backup` — the path systemd actually runs ---------
+# The timer and the idle-shutdown hook both execute the MODULE, top to
+# bottom. From 17ae067 to 2026-08-20 the __main__ guard sat mid-file, so
+# main() ran before the defs below it existed and every unit run that got
+# past the gates died with NameError: '_mkstaging' — while imports (the
+# daemon, the PWA's Back-up-now, every test in this file) loaded the whole
+# file and worked. Field journal 2026-08-20. Only a real -m subprocess can
+# pin this class of bug.
+import subprocess  # noqa: E402
+
+_env = dict(os.environ)
+_blank = tempfile.mkdtemp()                    # unconfigured backend: the
+_env["VIBB_ETC"] = _blank                      # conf var must move too, or
+_env["VIBB_BACKUP_CONF"] = os.path.join(_blank, "backup.json")  # the setup
+_env["PYTHONPATH"] = os.path.join(REPO, "pi")  # from test 1 leaks in
+_r = subprocess.run([sys.executable, "-m", "vibb.backup"],
+                    capture_output=True, text=True, env=_env, timeout=30)
+assert "no backend configured" in _r.stdout, (_r.stdout, _r.stderr)
+assert "NameError" not in _r.stderr, _r.stderr
+assert _r.returncode == 0, (_r.returncode, _r.stderr)
+# and the guard itself must stay LAST, or the -m path silently loses
+# whatever gets appended below it next time
+_src = open(backup.__file__, encoding="utf-8").read()
+assert _src.rstrip().endswith("sys.exit(main())"), \
+    "the __main__ guard must be the last statement in vibb/backup.py"
+print("16. python3 -m vibb.backup runs whole (the systemd path) OK")
