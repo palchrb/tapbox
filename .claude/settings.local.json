@@ -235,7 +235,8 @@
       "Bash(grep -n \"^  save\\)\\\\|^  status\\)\\\\|^  *[a-z-]*\\)$\" pi/power.sh)",
       "Bash(grep -n \"^case\\\\|^  esac\\\\|esac$\" pi/power.sh)",
       "Bash(grep -n 'ExecStart=$SELF save' pi/install.sh)",
-      "Bash(sed -n '/Vibb power save mode at boot/,/WantedBy/p' pi/install.sh)"
+      "Bash(sed -n '/Vibb power save mode at boot/,/WantedBy/p' pi/install.sh)",
+      "Bash(awk 'NR>=3120 && NR<=3300 && \\(/def render_now/||/return/\\)' pi/ui.py)"
     ]
   }
 }
