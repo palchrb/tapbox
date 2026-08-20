@@ -802,17 +802,35 @@ class St7789Display:
         except Exception as e:
             log(f"backlight raise failed ({e.__class__.__name__})")
 
+    def _pinctrl(self, on):
+        """Drive BCM13 without gpiozero — the same tool and pin
+        vibb-backlight-off.service uses to pull it LOW at boot.
+
+        This is the only way a box whose PWMLED never constructed gets
+        its screen back. vibb-ui.service pins GPIOZERO_PIN_FACTORY=lgpio,
+        so on a box where the lgpio build failed (install.sh warns and
+        continues) gpiozero cannot fall back and _bl stays None — and
+        with the pin already low, nothing else would ever raise it. The
+        screen stayed dark forever; before the boot-shave it was merely
+        unregulated-bright. Best-effort: pinctrl ships with raspi-utils
+        and may be absent, exactly as the unit's '-' prefix allows."""
+        try:
+            subprocess.run(["pinctrl", "set", str(BACKLIGHT_PIN), "op",
+                            "dh" if on else "dl"],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=2)
+        except Exception as e:
+            log(f"pinctrl backlight failed ({e.__class__.__name__})")
+
     def _apply(self):
         if self._bl is not None:
             self._bl.value = (self.brightness / 100.0) if self.on else 0.0
+        else:
+            self._pinctrl(self.on)   # no PWM: on/off only, but ON
 
     def set_backlight(self, on):
         self.on = on
-        if self._bl is not None:
-            self._apply()
-        else:
-            # no PWM: fall back to the library's on/off
-            self.disp.set_backlight(1 if on else 0)
+        self._apply()
 
     def set_brightness(self, pct):
         self.brightness = max(10, min(100, int(pct)))
