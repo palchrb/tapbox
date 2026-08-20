@@ -362,9 +362,15 @@ assert backup._backed_up_today(_now), "a backup just taken IS today's"
 assert backup._backed_up_today(_now - 8 * 3600) or \
     _time.localtime(_now).tm_hour < 8, \
     "earlier the same day still counts as done today"
-# 23.5h ago is YESTERDAY on any wall clock — the old gate would have
-# suppressed today's backup; the calendar gate must not.
-assert not backup._backed_up_today(_now - int(23.5 * 3600)), \
+# 23.5h ago is yesterday — UNLESS the clock is past 23:30, when it lands
+# back on today. The mirror of the tm_hour < 8 guard above: without it this
+# pin fails on healthy code for 30 minutes every night (cloud review
+# 2026-08-20). A fixed timestamp can't replace the guard — _backed_up_today
+# compares against time.localtime() itself, so "today" always moves.
+_lt = _time.localtime(_now)
+_sod = _lt.tm_hour * 3600 + _lt.tm_min * 60 + _lt.tm_sec
+assert not backup._backed_up_today(_now - int(23.5 * 3600)) \
+    or _sod >= int(23.5 * 3600), \
     ("23.5h ago is a different calendar day — this is the drift bug: an "
      "elapsed-hours gate skips today's backup entirely")
 assert not backup._backed_up_today(_now - 24 * 3600), "yesterday is not today"
