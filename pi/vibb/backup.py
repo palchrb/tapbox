@@ -774,6 +774,12 @@ def main(argv=None):
     # afternoon listener is covered every day and the time never drifts.
     last_ok = (status() or {}).get("last_ok")
     if DAILY_GATE and last_ok and _backed_up_today(last_ok):
+        # Say so. Every other gate prints its reason; a silent skip here
+        # made "already covered" and "hook never ran" identical in the
+        # journal (field question 2026-08-20).
+        print("backup: already done today "
+              f"({time.strftime('%H:%M', time.localtime(last_ok))}) "
+              "— nothing to do")
         return 0
     if not _link_up():
         print("backup: no network (wifi is off to save battery) — skipping")
