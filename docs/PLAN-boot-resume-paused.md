@@ -149,6 +149,16 @@ assertion that boot is silent but remembered.
 
 # PART 2: carousel play on the already-playing tile hiccups on Sonos
 
+> **IMPLEMENTED 2026-08-20.** The guard lives in play(), before the
+> is_sonos early return — NOT in sonos_start_target, which lacks `fresh`
+> in its signature (the condition the plan below forgot; both local
+> shortcuts gate on it). All three traps below are covered and pinned by
+> tests/sonos_same_tile.py: playing -> no-op, paused -> one /resume with
+> the optimistic flip, untrusted map / broken queue mapping / press in
+> flight (8s pending+opt_tr settle window) / stale snap / fresh /
+> explicit episode all fall through to the full transfer. Suite green,
+> 149 files. AWAITS the field verify below.
+
 Owner (2026-08-18): pressing play/A in the carousel on the tile that is
 ALREADY playing over Sonos gives a small audible hiccup. Same root class as
 Part 1 (playback-start), same "do it with a clear head" caution — Sonos code

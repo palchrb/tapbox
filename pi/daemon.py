@@ -793,6 +793,65 @@ class Orchestrator:
         # resume is the exception: reconciliation adopts a live remote
         # session instead of replaying it (never start audio in a room
         # nobody asked for at boot).
+        # Same tile, already OUR live session on the speaker: pressing A
+        # in the carousel must not re-transfer the queue — re-expand,
+        # re-mint the signed url, re-push the DIDL — which is the audible
+        # hiccup (owner 2026-08-18). This mirrors the mpv/spotify
+        # "already loaded -> unpause" shortcuts below; the Sonos path
+        # simply never had one, though handle_carousel's own comment
+        # states the intent ("A never restarts anything"). Deliberately
+        # NARROW — anything not provably a steady live session of ours
+        # falls through to sonos_start_target, whose full transfer IS the
+        # heal for a drifted map, a foreign takeover or a stale session:
+        #  - not fresh / not episode: "from the start" and an explicit
+        #    episode pick must still respawn (the local shortcuts' rule)
+        #  - _sonos_fresh + ours: the same 15s notion the playpause
+        #    branch trusts; stale reads as not-ours, and a foreign
+        #    session must keep healing via the full transfer
+        #  - no press in flight: within the poller's own 8s settle
+        #    window (sonos_pending / sonos_opt_tr) the speaker may still
+        #    report the OLD track, so "already playing this" could be
+        #    yesterday's truth — fall through, exactly today's behaviour
+        #  - map/queue intact: a sharelink press with sonos_map_trusted
+        #    False is the RE-SYNC and must not be swallowed; the url
+        #    kind needs its queue mapping (sonos_idx) for the same reason
+        if (_renderer.is_sonos() and not boot and not fresh
+                and episode is None and target == self.target
+                and self.source == "sonos"):
+            snap = self._sonos_fresh() or {}
+            now = time.monotonic()
+            settling = ((self.sonos_pending is not None
+                         and now - self.sonos_pending[1] < 8)
+                        or (self.sonos_opt_tr is not None
+                            and now - self.sonos_opt_tr[1] < 8))
+            intact = (self.sonos_map_trusted
+                      if self.sonos_kind == "spotify_sharelink"
+                      else self.sonos_idx is not None)
+            if snap.get("ours") and intact and not settling:
+                if snap.get("transport") == "PLAYING":
+                    log(f"play (already on sonos) -> no-op: {target}")
+                    return {"source": "sonos", "target": target,
+                            "resumed": True}
+                if snap.get("transport") == "PAUSED_PLAYBACK":
+                    # resume in place — one verb, not a re-transfer (the
+                    # playpause branch's resume side, minus its pause
+                    # half). A refusal (uid moved, speaker gone) falls
+                    # through: the full start IS the heal.
+                    try:
+                        code, _r = _renderer.post(
+                            "/resume", {"if_uid": _renderer.read().get("uid")})
+                    except _renderer.SidecarDown:
+                        code = None
+                    if code == 200:
+                        if self.sonos_snap:
+                            self.sonos_snap = dict(self.sonos_snap,
+                                                   transport="PLAYING")
+                            self.sonos_snap_at = time.monotonic()
+                        self.sonos_opt_tr = ("PLAYING", time.monotonic())
+                        _sonos_wake.set()
+                        log(f"play (already on sonos) -> resume: {target}")
+                        return {"source": "sonos", "target": target,
+                                "resumed": True}
         if _renderer.is_sonos() and not boot:
             _radio.touch_busy()
             return self.sonos_start_target(target, episode=episode)
