@@ -98,15 +98,18 @@ assert "if not live and not no_resume:" not in src, \
 assert "                if not live:" in src
 print("5. resume:false: writes a position, still taps to track 1 OK")
 
-# 6. boot resume asks for the session, not the entry's flag — otherwise
-#    player.py would clear the very bookmark it is meant to continue
-import re  # noqa: E402
+# 6. boot starts NOTHING, and the first press asks for the SESSION, not
+#    the entry's flag — otherwise player.py would clear the very bookmark
+#    it is meant to continue. Boot used to spawn this itself; since
+#    2026-08 it lands paused and the tap does it (owner: a reboot must
+#    never start audio on its own, whatever the output).
 d_src = open(daemon.__file__).read()
-call = re.search(r"ORCH\.play\(target, reverse=bool\(last\.get\(\"reverse\"\)\),"
-                 r"\s*\n\s*resume=(\w+), boot=True\)", d_src)
-assert call and call.group(1) == "True", \
-    f"boot resume must spawn with resume=True, got {call and call.group(1)}"
-print("6. boot resume spawns session-driven (resume=True) OK")
+assert "boot=True" not in d_src, \
+    "nothing may start playback at boot — the box lands PAUSED"
+assert "resume=self.resume or session_resume()" in d_src, \
+    ("the first press after a power-on must continue the SESSION, or the "
+     "one tap lands at track 1 instead of the right second")
+print("6. boot spawns nothing; the first press is session-driven OK")
 
 print("\nSESSION STAMP OK — an honest clock or none at all, and a music "
       "entry that continues without forgetting how to start over.")

@@ -264,8 +264,7 @@ BM_REGRESS_MIN_S = float(os.environ.get("VIBB_BM_REGRESS_MIN", "300"))
 BM_USER_GRACE_S = float(os.environ.get("VIBB_BM_USER_GRACE", "180"))
 POSITION_SETTLE_MAX_S = float(os.environ.get("VIBB_SETTLE_MAX", "20"))
 POSITION_SETTLE_TOL_S = float(os.environ.get("VIBB_SETTLE_TOL", "3"))
-# boot resume: silent grace before the speaker popup, and the wait tick
-BOOT_GRACE_S = float(os.environ.get("VIBB_BOOT_GRACE", "25"))
+# how often the boot-time session verdict re-checks the clock
 BOOT_TICK_S = float(os.environ.get("VIBB_BOOT_TICK", "2"))
 # a spotify session that reads 'empty' right after a timed-out control is
 # very likely a SLOW TRACK LOAD, not a finished album — hold skips off the
@@ -809,14 +808,20 @@ class Orchestrator:
             _SESSION["live"] = False   # a tap ends the power-on session
         with self.lock:
             if boot:
-                # The boot-resume thread is the LAST of three possible
-                # starters: the A-press replay (command rule 4) and the
-                # transport-up blip resume both spawn under this same
-                # lock and stamp child_started. If anyone beat us here,
-                # our job is done — proceeding would hit play()'s
-                # stop-and-respawn shortcuts against a child whose IPC/
-                # session isn't up yet and audibly restart it (triple-
-                # start race, architect review 2026-07-18).
+                # NO CALLER TODAY. Boot no longer starts audio at all
+                # (owner 2026-08-18: a reboot lands PAUSED on the
+                # now-playing screen, one tap continues), so _boot_resume
+                # and the sonos reconcile's box-resume are both gone. The
+                # guard is kept because it costs nothing and is the
+                # documented contract for any future boot starter: it is
+                # the LAST of the possible starters, behind the A-press
+                # replay (command rule 4) and the transport-up blip
+                # resume, which both spawn under this same lock and stamp
+                # child_started. If anyone beat us here, our job is done —
+                # proceeding would hit play()'s stop-and-respawn shortcuts
+                # against a child whose IPC/session isn't up yet and
+                # audibly restart it (triple-start race, architect review
+                # 2026-07-18).
                 if self.child_started > 0:
                     log("boot resume: playback already started — standing "
                         "down")
@@ -4188,8 +4193,11 @@ def _sonos_poller():
                 # No live remote session at boot -> the renderer reverts
                 # to the BOX (owner 2026-08-09): a reboot must never
                 # start audio on a speaker in a room nobody asked in.
-                # The ordinary boot resume then plays locally; its
-                # existing guards make a duplicate attempt stand down.
+                # It does NOT then play locally either (owner 2026-08-18):
+                # the box lands on the now-playing screen for whatever was
+                # in progress, PAUSED, and one tap continues it. Moving a
+                # prior sonos session onto the built-in speaker at boot was
+                # the specific complaint.
                 _renderer.write("box")
                 content.PREFER_REMOTE = False
                 _library._EXPAND_CACHE.clear()
@@ -4198,22 +4206,6 @@ def _sonos_poller():
                         ORCH.source = ("spotify" if ORCH.target
                                        and is_spotify(ORCH.target)
                                        else "mpv")
-                if load_settings().get("resume_window_h") != 0 \
-                        and ORCH.target:
-                    try:
-                        with open(LAST_FILE) as f:
-                            was = json.load(f).get("was_playing")
-                    except (OSError, ValueError):
-                        was = False
-                    if was and session_verdict(block_s=CLOCK_WAIT_S) \
-                            != "expired":
-                        # the SECOND boot gate (the sonos reconcile owns
-                        # this case, _boot_resume returns early for it) —
-                        # it must judge the session too, or a sonos box
-                        # would resume a three-day-old one
-                        log("renderer was sonos at boot — resuming on "
-                            "the BOX instead")
-                        ORCH.play(ORCH.target, resume=True, boot=True)
         except _renderer.SidecarDown:
             log("sonos: sidecar not up yet — reconcile on next tick")
     ends_near = 0
@@ -5099,9 +5091,15 @@ def _spotify_supervisor():
 
 
 def _flag_was_playing():
-    """At shutdown (SIGTERM from systemd), record whether something was
-    audibly playing — boot resume only continues in that case, so a box
-    that was OFF/paused never surprises anyone by blasting on power-on."""
+    """At shutdown (SIGTERM from systemd), stamp LAST_FILE.
+
+    `stopped_at` is the load-bearing field: ORCH reads it at import
+    (boot_stopped_at) and session_verdict judges the resume window off
+    it. `was_playing` no longer gates anything — boot stopped starting
+    audio in 2026-08 (it lands PAUSED on now-playing instead), so nothing
+    reads it. It is still written: it costs one bool, it is the honest
+    record of how the box went down, and tests/spot_boot_flag.py pins the
+    TERM-race contract that produced it."""
     try:
         playing = False
         if ORCH.child is not None and ORCH.child.poll() is None:
@@ -5260,101 +5258,12 @@ def session_verdict(block_s=0.0):
 
 
 def session_resume():
-    """This power-on still owns playback: boot resume AND the play
-    button continue it, whatever the entry's per-TAP resume flag says.
-    Ends at the first tap (Orchestrator.play with boot=False)."""
+    """This power-on still owns playback: the first play press continues
+    the interrupted session, whatever the entry's per-TAP resume flag
+    says. Boot itself no longer starts anything, so this is what makes
+    the one tap after a reboot land at the right second instead of at
+    track 1. Ends at that tap (Orchestrator.play with boot=False)."""
     return _SESSION["live"] and session_verdict() == "fresh"
-
-
-def _boot_resume():
-    """Power on -> the story continues where it stopped (setting-gated).
-    Both mpv content and Spotify resume at the exact second via their
-    bookmarks (player.py replays the Spotify context with skip_to_uri
-    + seek from the per-context bookmark)."""
-    if _renderer.is_sonos():
-        return  # the sonos poller's startup reconcile owns this case:
-        #         adopt a live session, or resume ON THE SPEAKER —
-        #         starting local audio here is the double-play trap
-    if load_settings().get("resume_window_h") == 0:
-        return   # "never continue" — no clock, no waiting, no session
-    try:
-        with open(LAST_FILE) as f:
-            last = json.load(f)
-    except (OSError, ValueError):
-        return
-    if not last.get("was_playing") or not last.get("target"):
-        return
-    last["was_playing"] = False  # one attempt per shutdown
-    try:
-        with open(LAST_FILE + ".tmp", "w") as f:
-            json.dump(last, f)
-        os.replace(LAST_FILE + ".tmp", LAST_FILE)
-    except OSError:
-        return
-    target = last["target"]
-    # The verdict may need the RTC/NTP correction, which lands after us
-    # by design — so block for it here, before anything is spawned. The
-    # was_playing flag above is already consumed either way, so an
-    # expired boot can't leave a live flag for the next one.
-    if session_verdict(block_s=CLOCK_WAIT_S) == "expired":
-        return
-    log(f"boot resume at boot+{_uptime():.1f}s: waiting for the audio "
-        f"path, then continuing {target}")
-    # Silent grace first (the speaker usually reconnects in 10-20s), then
-    # — if the output is bt and the speaker is still away — raise the
-    # bt_waiting popup via _kick_bt_connect and KEEP the resume armed for
-    # its lifetime: transport-up auto-resumes (the blip machinery), A on
-    # the popup plays on the built-in speaker. The old behavior died
-    # SILENTLY at 90s — the kid saw a box that 'forgot' to continue
-    # (field 2026-07-18 18:01, box came up mute).
-    grace_at = time.monotonic() + BOOT_GRACE_S
-    deadline = grace_at + BT_WAIT_S
-    asked = False
-    while time.monotonic() < deadline:
-        if _audio_ready():
-            break
-        if not asked and time.monotonic() >= grace_at \
-                and current_output()["output"] == "bt":
-            _kick_bt_connect()  # arms the popup + pages the speaker once
-            asked = True
-            log("boot resume: speaker still away — asking on the screen "
-                "(X: connect / A: box speaker)")
-        time.sleep(BOOT_TICK_S)
-    else:
-        log("boot resume: audio path never came up — press play to resume")
-        return
-    if is_spotify(target):
-        # go-librespot must be up AND logged in, or the play call dies
-        for _ in range(30):
-            if go_status().get("username"):
-                break
-            time.sleep(2)
-        else:
-            log("boot resume: go-librespot never became ready — skipping")
-            return
-    else:
-        # Give wifi a moment: without it the player's offline filter drops
-        # stream URLs and playback starts at the wrong (cached-only) place.
-        # A genuinely offline box proceeds after the wait — cached content
-        # is then the RIGHT thing to play.
-        for _ in range(15):  # up to ~30s
-            if _internet_up():  # through the test seam, unlike the old
-                break           # inline socket copy (review M3)
-            time.sleep(2)
-    # Claim the transport-up event before playing: if the blip machinery
-    # (armed by the popup's 'since') already consumed it and resumed,
-    # play(boot=True) below stands down; clearing here makes sure it
-    # can't ALSO fire after we start (one starter per event).
-    with _BT_WAIT_LOCK:
-        _BT_WAIT.update(lost=0.0, since=0.0, ready_until=0.0)
-        _BT_WAIT.pop("lost_spotify", None)
-    # resume=True unconditionally: a power-on inside the window continues
-    # the SESSION, whatever the entry's per-tap flag says. That flag still
-    # rules taps — player.py enforces it on the READ side (it clears and
-    # ignores the bookmark for a --no-resume spawn), so "music starts at
-    # track 1 when you tap it" is untouched.
-    ORCH.play(target, reverse=bool(last.get("reverse")),
-              resume=True, boot=True)
 
 
 class PortalHandler(BaseHTTPRequestHandler):
@@ -5680,16 +5589,17 @@ def main():
         pass  # not the main thread (tests run main() in a thread)
     _library.BUSY_CHECK = _audible_now  # the sweep yields to live audio
     threading.Thread(target=_wifi_ps_governor, daemon=True).start()
-    # Settle the session verdict in its own thread, NOT as a side effect
-    # of _boot_resume: that function returns early on the common boots
-    # (nothing was playing, sonos, resume off), so the verdict stayed
+    # Settle the session verdict in its own thread. It used to hang off
+    # the boot-resume thread, which returned early on the common boots
+    # (nothing was playing, sonos, resume off) — so the verdict stayed
     # unset, /status answered "pending" forever, and the screen sat on
-    # the splash for its full patience every single time. With the
-    # default window it resolves instantly; only an hours window ever
-    # waits, and it waits here instead of in front of the child.
+    # the splash for its full patience every single time (field
+    # 2026-08-13). That thread is gone entirely now; this one is the only
+    # thing that stamps the verdict, and the screen's boot landing reads
+    # it to choose now-playing vs the carousel. With the default window
+    # it resolves instantly; only an hours window ever waits.
     threading.Thread(target=session_verdict, args=(CLOCK_WAIT_S,),
                      daemon=True).start()
-    threading.Thread(target=_boot_resume, daemon=True).start()
     threading.Thread(target=_prewarm_mpv, daemon=True).start()
     threading.Thread(target=_bt_wait_watcher, daemon=True).start()
     threading.Thread(target=_cache_sweeper, daemon=True).start()

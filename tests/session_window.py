@@ -123,14 +123,19 @@ except ValueError:
 print("6. resume_on_boot -> resume_window_h migration OK")
 
 # ---- 7. the verdict is settled by its OWN boot thread ----
-# _boot_resume returns early on the COMMON boots (nothing was playing,
-# sonos, resume off), so hanging the verdict off it left /status saying
-# "pending" forever and the screen waiting out its full patience on
-# every start (field 2026-08-13).
+# It used to hang off _boot_resume, which returned early on the COMMON
+# boots (nothing was playing, sonos, resume off) — so /status said
+# "pending" forever and the screen waited out its full patience on every
+# start (field 2026-08-13). That thread is gone entirely now, which is
+# the strongest form of the same guarantee: the verdict cannot be a side
+# effect of a starter that no longer exists. The screen's boot landing
+# reads this verdict to choose now-playing vs the carousel, so it has to
+# be stamped by someone.
 src = open(daemon.__file__, encoding="utf-8").read()
-i = src.index("threading.Thread(target=_boot_resume")
-assert "target=session_verdict" in src[i - 600:i], \
-    "the verdict needs its own boot thread, not _boot_resume's leftovers"
+assert "threading.Thread(target=session_verdict" in src, \
+    "the verdict needs its own boot thread, or /status hangs on 'pending'"
+assert "def _boot_resume" not in src, \
+    "boot resume is gone — nothing starts audio at power-on"
 print("7. the verdict settles in its own thread, not as a side effect OK")
 
 print("\nSESSION WINDOW OK — continue what was interrupted, forget what "

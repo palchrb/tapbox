@@ -104,9 +104,11 @@ w = spawn_window("speaker back within the blip window — resuming spotify")
 assert "exact=True" in w
 print("6. exact=True on the three spotify fault-resume paths OK")
 
-# 7. and NOT on the boot-resume call, which two tests pin verbatim
-i = DSRC.index("ORCH.play(target, reverse=bool(last.get(\"reverse\")),")
-assert "exact" not in DSRC[i:i + 200]
-print("7. boot resume left byte-identical (pinned elsewhere) OK")
+# 7. there is no boot-resume call left to carry a rewind: boot lands
+#    PAUSED (2026-08), so the overlap only ever applies to a fault
+#    resume or a real press — never to a power-on.
+assert "def _boot_resume" not in DSRC, \
+    "boot resume is gone — the box lands paused and one tap continues"
+print("7. no boot starter, so no boot rewind to get wrong OK")
 
 print("\nRESUME OVERLAP OK — a clause repeated, never a sentence lost.")
