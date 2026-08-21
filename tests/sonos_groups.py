@@ -136,5 +136,14 @@ assert len(rows) == 3 and all(len(r[2]) == 1 for r in rows), \
     f"unknown member -> no group row: {rows}"
 print("4. ui rows: group=one row -> coordinator uid, no drift OK")
 
+# 5. the cabin case: rows persist (mid-menu row removal moves targets
+#    under a kid's finger, and the cache never deletes), but the hint
+#    stops promising "play here" when the fresh probe found nobody
+_src = open(ui.__file__, encoding="utf-8").read()
+_i = _src.index('draw_list(d, "Sonos"')
+assert 'sonos.get("stale")' in _src[_i - 400:_i + 400], \
+    "the sonos submenu must surface the stale marker in its hint"
+print("5. stale household -> the hint says so, rows stay put OK")
+
 print("\nSONOS GROUPS OK — the box is group-aware; the Sonos app "
       "stays the group manager.")

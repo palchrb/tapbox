@@ -542,9 +542,17 @@ cold-start fallback.
 Answers to the owner's two questions, as built: (1) yes — the list
 refreshes when the output picker opens, but async behind the instant
 cache read, so hold-X never waits on the network; (2) the Sonos row
-still appears off-LAN while the cache holds home's speakers — hiding
-it would need a blocking probe in hold-X — but the submenu becomes
-truthful within ~200ms and "Look again" re-scans.
+does NOT disappear off-LAN, before or after the probe, ON PURPOSE:
+hiding it up front would need a blocking probe in hold-X, and removing
+a row from an OPEN menu moves the remaining rows under the finger that
+was about to press one — the classic mid-menu trap. The cache's merge
+semantics also never delete a speaker (a scan that misses one over
+multicast drops must not delete the row the kid was aiming at). What
+the stale marker does instead: the speaker submenu's hint line flips
+from "A: play here" to "No speakers answered here" (owner follow-up
+2026-08-21), and a press on a ghost fails cleanly as before. The row
+heals itself the moment the box is back on a network where someone
+answers.
 
 ## Stage B — NOT BUILT: follow the coordinator mid-session, group volume
 

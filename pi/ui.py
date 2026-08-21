@@ -3089,9 +3089,16 @@ class App:
                               hint="A: choose   B: back",
                               t0=self._marquee_t0("output", self.sel))
         elif self.view == "sonos":
+            # stale = the fresh probe found NOBODY (cabin: home's
+            # speakers still cached). The rows stay — removing rows
+            # under a finger mid-menu is the trap, and the cache's
+            # merge semantics never delete — but the hint says the
+            # truth instead of promising "play here".
             rolls = draw_list(d, "Sonos", self.current_items(),
                               self.sel, self.system,
-                              hint="A: play here   B: back",
+                              hint=("No speakers answered here"
+                                    if self.sonos.get("stale")
+                                    else "A: play here   B: back"),
                               t0=self._marquee_t0("sonos", self.sel))
         elif self.view == "extras":
             # same list chrome as every other menu — the field bug that
