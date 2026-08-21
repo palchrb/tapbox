@@ -145,5 +145,35 @@ assert 'sonos.get("stale")' in _src[_i - 400:_i + 400], \
     "the sonos submenu must surface the stale marker in its hint"
 print("5. stale household -> the hint says so, rows stay put OK")
 
+# 6. the ghost grey (owner picked grey-only, mockup 2026-08-21): with
+#    the stale marker set, the output menu's Sonos row and every
+#    speaker row carry the ghost flag — but "Look again" never does,
+#    because it is the action that fixes the situation
+app.sonos = {"players": [{"uid": "RINCON_A", "name": "Stua"}],
+             "groups": [], "stale": True}
+app.status = {"renderer": None, "output": "local"}
+app.view = "output"
+rows = app.current_items()
+assert rows[2][0] == "Sonos" and rows[2][2] is True, \
+    f"a stale household must ghost the Sonos row: {rows[2]}"
+assert len(rows[0]) == 2 and len(rows[1]) == 2, \
+    "box/bt rows are never ghosted"
+app.view = "sonos"
+rows = app.current_items()
+assert rows[0] == ("Look again", ""), "the fix action is never ghosted"
+assert rows[1][2] is True, f"speaker rows ghost when stale: {rows[1]}"
+app.sonos.pop("stale")
+app.view = "output"
+assert app.current_items()[2][2] is False, "no stale -> no ghost"
+# and draw_list actually honours the flag: the ghosted SELECTED label
+# renders in GHOST, never FG
+from PIL import Image
+img = Image.new("RGB", (ui.W, ui.H), ui.BG)
+ui.draw_list(ui._draw(img), "T", [("Row", "", True)], 0, {})
+cols = {c for _n, c in img.getcolors(65536)}
+assert ui.GHOST in cols and ui.FG not in cols, \
+    "a ghosted selected row must draw GHOST, not FG"
+print("6. stale ghosts the rows, spares Look again, draws GHOST OK")
+
 print("\nSONOS GROUPS OK — the box is group-aware; the Sonos app "
       "stays the group manager.")

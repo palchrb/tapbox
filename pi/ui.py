@@ -611,6 +611,11 @@ NOW_RETURN_S = 10     # idle this long in a browse menu while music plays ->
 BG = (12, 12, 20)
 FG = (235, 235, 235)
 DIM = (140, 140, 150)
+GHOST = (80, 80, 92)   # a row that IS there but currently can't deliver
+#                        (sonos speakers cached from another network);
+#                        darker than DIM so it reads as off even when
+#                        the selection rect is under it (owner picked
+#                        grey-only over an ✗ marker, mockup 2026-08-21)
 HILITE = (255, 170, 30)
 GOOD = (80, 200, 120)
 WARN = (230, 80, 80)
@@ -1304,14 +1309,20 @@ def draw_list(draw, title, items, sel, system, hint=None, maxlen=24,
         if idx == sel:
             draw.rounded_rectangle([4, y - 2, W - 4, y + row_h - 6],
                                    radius=6, fill=(40, 40, 60))
-        label, right = item if isinstance(item, tuple) else (item, None)
+        if isinstance(item, tuple):
+            # (label, right[, ghost]) — ghost greys the label in BOTH
+            # states: a row that exists but can't deliver right now
+            label, right = item[0], item[1]
+            ghost = len(item) > 2 and bool(item[2])
+        else:
+            label, right, ghost = item, None, False
         if idx == sel:
             label, rolls = marquee(label, maxlen, t0=t0)
             scrolling = scrolling or rolls
         else:
             label = label[:maxlen]
         draw.text((14, y), label, font=F_MED,
-                  fill=FG if idx == sel else DIM)
+                  fill=GHOST if ghost else FG if idx == sel else DIM)
         if right:
             draw.text((W - 14, y), right, font=F_MED,
                       fill=HILITE if idx == sel else DIM, anchor="ra")
@@ -2639,17 +2650,22 @@ class App:
             st = self.status or {}
             renderer = st.get("renderer")
             out = st.get("output")
+            stale = bool((self.sonos or {}).get("stale"))
             return [("Box speaker",
                      "●" if renderer != "sonos" and out == "local" else ""),
                     ("Bluetooth",
                      "●" if renderer != "sonos" and out == "bt" else ""),
-                    ("Sonos", "●" if renderer == "sonos" else "")]
+                    # ghost-grey when the fresh probe found nobody (the
+                    # cabin: home's speakers still cached) — the row
+                    # stays selectable, the submenu's hint explains
+                    ("Sonos", "●" if renderer == "sonos" else "", stale)]
         if self.view == "sonos":
             cur = (self.status or {}).get("renderer_name")
-            rows = [("Look again", "")]
+            stale = bool((self.sonos or {}).get("stale"))
+            rows = [("Look again", "")]   # never ghosted — it IS the fix
             for label, _uid, names in self._sonos_choices():
                 rows.append((label, "●" if cur == label or cur in names
-                             else ""))
+                             else "", stale))
             return rows
         if self.view == "home":
             return [s["name"] for s in (self.library or {}).get("sections", [])] \
