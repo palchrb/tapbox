@@ -3077,13 +3077,17 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/sonos":
             # speaker list via the sidecar (uid+name only — GET is token-
             # free by the SAFE rule, and speaker IPs are LAN topology).
-            # ?rescan=1 runs SSDP; plain GET serves the cache instantly.
+            # ?rescan=1 runs SSDP (3s+); ?fresh=1 is ONE topology call
+            # against a cached ip (~200ms) that also carries the group
+            # map; plain GET serves the cache instantly.
             q = urllib.parse.parse_qs(url.query)
             try:
                 rescan = (q.get("rescan") or ["0"])[0] == "1"
+                fresh = (q.get("fresh") or ["0"])[0] == "1"
+                path = "/players" + ("?rescan=1" if rescan
+                                     else "?fresh=1" if fresh else "")
                 self._send(200, _renderer.get(
-                    "/players" + ("?rescan=1" if rescan else ""),
-                    timeout=20 if rescan else 3))
+                    path, timeout=20 if rescan else 6 if fresh else 3))
             except _renderer.SidecarDown:
                 self._send(503, {"error": "sonos-sidecar-down",
                                  "players": []})

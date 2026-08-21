@@ -154,9 +154,86 @@ def rescan():
         return cache
 
 
+def refresh_topology():
+    """The whole household in ONE call: GetZoneGroupState against any
+    cached speaker returns every zone (uid, name, ip) and every group
+    with its coordinator — the cheap primitive the RF audit already
+    identified (it is ~90% of a poll's bytes, which is why the POLLER
+    rides it on a slow sub-cadence; here it runs only when the picker
+    opens, where 100-200ms against a LAN IP is instant).
+
+    Contrast rescan(): SSDP multicast costs 3s+ and learns nothing
+    about groups. This self-heals DHCP moves and renames for free (the
+    topology carries fresh ips/names), so SSDP degrades to the cold-
+    start fallback: empty cache, or nobody answering.
+
+    Merges zones like rescan() does (never delete the row the kid was
+    aiming at); GROUPS replace wholesale — a group list is only
+    meaningful as a snapshot of one instant. Raises when no cached
+    speaker answers; the caller serves the cache and says so."""
+    soco = _soco()
+    with _cache_lock:
+        recs = sorted(_load_cache()["players"].items())
+    last_err = None
+    groups = None
+    for _uid, rec in recs:
+        try:
+            groups = soco.SoCo(rec["ip"]).all_groups
+            break
+        except Exception as e:
+            last_err = e
+    if groups is None:
+        raise last_err or RuntimeError("no cached speaker to ask")
+    with _cache_lock:
+        cache = _load_cache()
+        gout = []
+        for g in groups:
+            members = []
+            try:
+                coord = g.coordinator.uid
+            except Exception:
+                continue  # a group we cannot address is not offerable
+            for z in g.members:
+                try:
+                    if not z.is_visible:
+                        continue  # bonded surrounds/subs — not rooms
+                    cache["players"][z.uid] = {
+                        "ip": z.ip_address, "name": z.player_name,
+                        "seen_at": time.time()}
+                    members.append(z.uid)
+                except Exception as e:
+                    log(f"topology: skipping a zone "
+                        f"({e.__class__.__name__})")
+            if members:
+                # coordinator first: the picker labels the row by it,
+                # and selecting the row selects it
+                members.sort(key=lambda u: u != coord)
+                gout.append({"coordinator": coord, "members": members})
+        cache["groups"] = gout
+        cache["topology_at"] = time.time()
+        _save_cache(cache)
+        return cache
+
+
 def players():
     with _cache_lock:
         return _load_cache()
+
+
+def players_payload(cache, stale=False):
+    """The GET /players wire shape. uid + name only — speaker IPs are
+    LAN topology and every GET is token-free by the box's SAFE rule.
+    groups ride along so the picker can offer 'Stua + Kjøkken' as ONE
+    row; only multi-member groups are worth the wire."""
+    out = {"players": [
+        {"uid": uid, "name": rec.get("name")}
+        for uid, rec in sorted(cache["players"].items(),
+                               key=lambda kv: kv[1].get("name") or "")
+    ], "groups": [g for g in cache.get("groups") or []
+                  if len(g.get("members") or []) > 1]}
+    if stale:
+        out["stale"] = True  # nobody answered — this is the old cache
+    return out
 
 
 def _speaker(uid):
@@ -805,20 +882,28 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, SESSION.state())
         elif u.path == "/players":
             q = urllib.parse.parse_qs(u.query)
+            stale = False
             try:
-                cache = (rescan() if q.get("rescan", ["0"])[0] == "1"
-                         else players())
+                if q.get("rescan", ["0"])[0] == "1":
+                    cache = rescan()
+                elif q.get("fresh", ["0"])[0] == "1":
+                    # one topology call (~200ms) instead of a 3s SSDP
+                    # scan; a household nobody answers for serves the
+                    # cache marked stale — the picker stays usable and
+                    # honest (cabin case: home speakers cached, none
+                    # on this LAN)
+                    try:
+                        cache = refresh_topology()
+                    except Exception:
+                        cache = players()
+                        stale = True
+                else:
+                    cache = players()
             except Exception as e:
                 self._send(502, {"error": "scan-failed",
                                  "detail": e.__class__.__name__})
                 return
-            # uid + name only over GET: the speaker IPs are LAN topology
-            # and every GET is token-free by the box's SAFE rule
-            self._send(200, {"players": [
-                {"uid": uid, "name": rec.get("name")}
-                for uid, rec in sorted(cache["players"].items(),
-                                       key=lambda kv: kv[1].get("name") or "")
-            ]})
+            self._send(200, players_payload(cache, stale=stale))
         else:
             self._send(404, {"error": "not-found"})
 

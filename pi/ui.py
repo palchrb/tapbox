@@ -2470,12 +2470,23 @@ class App:
         """Hold X. No Sonos known -> today's two-way toggle, unchanged.
         Sonos rooms known -> a three-way menu instead (owner 2026-08-09:
         the row only exists when speakers actually do). The list read is
-        the sidecar's CACHE via vibbd — instant, never a scan."""
+        the sidecar's CACHE via vibbd — instant, never a scan. A fresh
+        topology fetch (one ~200ms call, groups included) rides behind
+        it so the speaker submenu is current by the time a finger gets
+        there (owner 2026-08-21) — change-only repaint updates the rows
+        if they are already on screen."""
         try:
             self.sonos = api_get("/sonos")
         except OSError:
             self.sonos = {"players": []}  # sidecar down = no sonos row
         if self.sonos.get("players"):
+            def freshen():
+                try:
+                    self.sonos = api_get("/sonos?fresh=1", timeout=8)
+                    self.dirty = True
+                except OSError:
+                    pass  # cache stays on screen; Look again exists
+            threading.Thread(target=freshen, daemon=True).start()
             self.push("output")
             self.dirty = True
         else:
@@ -2484,12 +2495,18 @@ class App:
     def select_output(self):
         label = self.current_items()[self.sel][0]
         if label == "Sonos":
-            # background rescan refreshes the list while the cached one
-            # is already on screen (change-only repaint updates rows)
+            # background refresh while the cached list is already on
+            # screen (change-only repaint updates rows). Topology first
+            # (~200ms, brings the group map); only when NOBODY answered
+            # it — the stale marker — is the 3s+ SSDP scan worth its
+            # cost, and only as this thread's own fallback.
             def scan():
                 try:
-                    self.sonos = api_get("/sonos?rescan=1", timeout=25)
+                    self.sonos = api_get("/sonos?fresh=1", timeout=8)
                     self.dirty = True
+                    if self.sonos.get("stale"):
+                        self.sonos = api_get("/sonos?rescan=1", timeout=25)
+                        self.dirty = True
                 except OSError:
                     pass
             threading.Thread(target=scan, daemon=True).start()
@@ -2508,6 +2525,34 @@ class App:
         self.stack, self.view = [], "now"
         self.dirty = True
 
+    def _sonos_choices(self):
+        """The speaker rows — ONE source for display (current_items)
+        and selection (select_sonos), so the indexes can never drift:
+        [(label, uid, member_names)]. A multi-member group as the
+        Sonos app made it is one row — "Stua + Kjøkken", coordinator
+        first — and selecting it targets the COORDINATOR: transport
+        verbs on a coordinator drive the whole group, so everything
+        downstream is unchanged. Zones absorbed into a shown group
+        don't repeat as solo rows; solo zones look exactly as before.
+        Group CONTROL stays in the Sonos app on purpose (owner
+        2026-08-21): the box is group-aware, not a group manager."""
+        players = self.sonos.get("players") or []
+        names = {p["uid"]: p.get("name") or "?" for p in players}
+        rows, absorbed = [], set()
+        for g in self.sonos.get("groups") or []:
+            members = [u for u in g.get("members") or [] if u in names]
+            if len(members) < 2 or g.get("coordinator") not in names:
+                continue  # a group we cannot label or address in full
+            rows.append((" + ".join(names[u] for u in members),
+                         g["coordinator"],
+                         [names[u] for u in members]))
+            absorbed.update(members)
+        for p in players:
+            if p["uid"] not in absorbed:
+                rows.append((p.get("name") or "?", p["uid"],
+                             [p.get("name") or "?"]))
+        return rows
+
     def select_sonos(self):
         rows = self.current_items()
         label = rows[self.sel][0] if self.sel < len(rows) else ""
@@ -2520,21 +2565,21 @@ class App:
                 time.sleep(2)
             self.dirty = True
             return
-        players = self.sonos.get("players") or []
+        choices = self._sonos_choices()
         idx = self.sel - 1  # one action row on top
-        if not (0 <= idx < len(players)):
+        if not (0 <= idx < len(choices)):
             return
-        p = players[idx]
-        self.draw_message(f"Sending sound to {p['name']} ...")
+        label, uid, _names = choices[idx]
+        self.draw_message(f"Sending sound to {label} ...")
         try:
-            r = api_post("/output", {"device": "sonos", "uid": p["uid"],
-                                     "name": p["name"]}, timeout=30)
+            r = api_post("/output", {"device": "sonos", "uid": uid,
+                                     "name": label}, timeout=30)
         except OSError as e:
             self.draw_message(f"Failed: {e}")
             time.sleep(2)
             return
         # land on now-playing: the confirmation popup only paints there
-        self.output_shown = f"Sonos: {p['name']}"
+        self.output_shown = f"Sonos: {label}"
         self.output_warning = bool(r.get("warning"))
         self.output_flash = time.monotonic() + 1.5
         self.stack, self.view = [], "now"
@@ -2602,8 +2647,9 @@ class App:
         if self.view == "sonos":
             cur = (self.status or {}).get("renderer_name")
             rows = [("Look again", "")]
-            for p in self.sonos.get("players") or []:
-                rows.append((p["name"], "●" if p["name"] == cur else ""))
+            for label, _uid, names in self._sonos_choices():
+                rows.append((label, "●" if cur == label or cur in names
+                             else ""))
             return rows
         if self.view == "home":
             return [s["name"] for s in (self.library or {}).get("sections", [])] \

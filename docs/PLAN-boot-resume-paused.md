@@ -503,3 +503,70 @@ Repeat with nothing playing to separate 1 from 3 definitively.
 
 One 30-second hands-off trial separates every remaining candidate. Until
 that reading exists there is nothing to implement here.
+
+---
+
+# PART 4: Sonos group-awareness
+
+Owner (2026-08-21): the picker should show and select speaker GROUPS,
+refresh the list when the output picker opens, and the box should not
+have to manage grouping — the Sonos app already does that well.
+
+## Stage A — IMPLEMENTED 2026-08-21 (display + selection + fresh list)
+
+The cheap primitive, already named by the RF audit at `sonosd.py`
+(2026-08-10 #2): **GetZoneGroupState against any one cached ip returns
+the whole household in one ~200ms call** — every zone (uid, name, ip),
+every group, each group's coordinator. SSDP (3s+ multicast) degrades to
+cold-start fallback.
+
+- `sonosd.refresh_topology()`: merges zones (heals DHCP moves and
+  renames for free), REPLACES the group map wholesale (a snapshot),
+  filters bonded invisibles (stereo pairs / subs are not rooms),
+  coordinator first in each member list. Raises when nobody answers;
+  `/players?fresh=1` then serves the cache with `stale: true` — the
+  cabin case shows the truth, not home's ghosts.
+- daemon `/sonos?fresh=1` passes it through (timeout 6).
+- ui: hold-X still gates the Sonos row on the CACHE (instant, per owner
+  2026-08-09) and kicks the fresh fetch in the background, so the
+  speaker submenu is current by the time a finger gets there. The
+  submenu's old background SSDP became topology-first, SSDP only on
+  the stale marker. `_sonos_choices()` is the ONE source for both
+  display and selection: a multi-member group is one row
+  ("Kjøkken + Stua", coordinator first), selecting it stores the
+  COORDINATOR's uid — transport verbs on a coordinator drive the whole
+  group, so everything downstream is unchanged. Absorbed members do
+  not repeat; a group naming an unknown uid is skipped whole.
+- Pinned by tests/sonos_groups.py.
+
+Answers to the owner's two questions, as built: (1) yes — the list
+refreshes when the output picker opens, but async behind the instant
+cache read, so hold-X never waits on the network; (2) the Sonos row
+still appears off-LAN while the cache holds home's speakers — hiding
+it would need a blocking probe in hold-X — but the submenu becomes
+truthful within ~200ms and "Look again" re-scans.
+
+## Stage B — NOT BUILT: follow the coordinator mid-session, group volume
+
+What stage A deliberately leaves: if someone REGROUPS in the Sonos app
+while our session plays, our chosen uid can become a group MEMBER. The
+sidecar already detects it (`grouped_away` + `coordinator` in the aux,
+`sonosd.py` ~590; daemon surfaces `renderer_state: "grouped-away"`) but
+nothing acts on it.
+
+- **Follow, don't fight:** when grouped_away, the sidecar should target
+  the COORDINATOR for transport verbs, /play pushes and the poll's
+  track/position reads — one seam (an "effective speaker" resolve).
+  Trap: a member's AVTransport reports `x-rincon:<coordinator>` as its
+  uri, not the track — the `ours` check must read the coordinator or it
+  logs not-ours forever. Trap: pushing DIDL to a member RIPS it out of
+  the group. This is field-hardened poller/verb code — architect + QA
+  round before building, same rule as Part 2.
+- **Group volume:** when grouped, the volume card should drive
+  GroupRenderingControl (SetGroupVolume) on the coordinator, or the kid
+  turns one room only.
+- Group create/dissolve stays OUT (owner): the two verbs are trivial
+  (join = SetAVTransportURI x-rincon:<coord>; leave =
+  BecomeCoordinatorOfStandaloneGroup) and belong in the PWA settings
+  page if field use ever asks for them — never in the kid-mode button
+  language.
